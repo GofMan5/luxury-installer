@@ -41,8 +41,8 @@ use self::transaction::{
     roots_are_separate, same_file, scope as transaction_scope, set_installed_file,
     set_private_file, state_error, sync_movable_regular_snapshot, sync_parent,
     sync_regular_snapshot, transaction_paths, uninstall_receipt_hash, upgrade_receipt_hashes,
-    validate_directory, validate_directory_chain, validate_private_directory,
-    validate_private_file,
+    validate_directory, validate_directory_chain, validate_existing_private_state,
+    validate_private_directory, validate_private_file,
 };
 #[cfg(test)]
 use self::transaction::{begin_transaction, begin_uninstall_transaction, load_recovery};
@@ -914,6 +914,7 @@ fn check_install_plan(
     validate_install_directory_namespace(plan.directory())?;
     validate_directory_chain(install_base)?;
     validate_directory_chain(state_root)?;
+    validate_existing_private_state(state_root, plan.scope())?;
     check_directory_write_access(install_base)?;
     check_directory_write_access(state_root)?;
     let install_root = install_base.join(plan.directory().as_str());

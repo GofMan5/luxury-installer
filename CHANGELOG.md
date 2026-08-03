@@ -16,5 +16,6 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 - Strict portable-path, archive, JSONL, Tauri invoke/event, receipt, journal, and privileged-helper boundaries.
 - Read-only destination permission and capacity preflight before installation starts.
+- Versioned private user state rejects legacy broad ACL/modes without rewriting or trusting old receipts and journals.
 
 > No production release has been published yet. See the blockers in [README.md](README.md#security-model).
