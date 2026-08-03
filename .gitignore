@@ -24,3 +24,5 @@ Thumbs.db
 *.pfx
 *.profraw
 /coverage/
+/AGENTS.md
+/MEMORY.md

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u64 = 2;
+pub(crate) const PROTOCOL_VERSION: u64 = 3;
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Deserialize)]
@@ -233,6 +233,7 @@ pub(crate) struct ProjectResult {
     pub(crate) target: Target,
     pub(crate) install: InstallPolicy,
     pub(crate) payload: Payload,
+    pub(crate) authoring: ProjectAuthoring,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -244,7 +245,14 @@ pub(crate) struct ProjectBuildResult {
     pub(crate) target: Target,
     pub(crate) install: InstallPolicy,
     pub(crate) payload: Payload,
+    pub(crate) authoring: ProjectAuthoring,
     pub(crate) output_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResolvedPayloadPath {
+    pub(crate) path: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -349,6 +357,8 @@ pub(crate) struct PackageIdentity {
     pub(crate) publisher: String,
     pub(crate) version: String,
     #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(default)]
     pub(crate) license: Option<String>,
 }
 
@@ -387,6 +397,14 @@ pub(crate) struct Payload {
     pub(crate) install_log: Option<InstallLog>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ProjectAuthoring {
+    pub(crate) allow_downgrade: bool,
+    pub(crate) entrypoint: Option<String>,
+    pub(crate) executable_files: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct InstallLog {
@@ -421,7 +439,7 @@ mod tests {
 
     #[test]
     fn backend_line_rejects_unknown_fields() {
-        let line = br#"{"protocolVersion":2,"type":"result","id":"one","result":{},"extra":true}"#;
+        let line = br#"{"protocolVersion":3,"type":"result","id":"one","result":{},"extra":true}"#;
         assert!(serde_json::from_slice::<BackendLine>(line).is_err());
     }
 

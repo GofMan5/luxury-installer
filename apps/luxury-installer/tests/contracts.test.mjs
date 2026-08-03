@@ -224,12 +224,19 @@ test('Studio paths stay display-only and absolute', () => {
     name: 'Luxury Demo',
     publisher: 'Luxury Software',
     version: '1.0.0',
+    description: null,
+    license: null,
     hasLicense: false,
     targetOs: 'windows',
     targetArch: 'x86_64',
     installDirectory: 'Luxury Demo',
     scope: 'user',
+    allowDowngrade: false,
+    entrypoint: null,
     hasEntrypoint: false,
+    showInstallLog: false,
+    finishLinks: [],
+    executableFiles: 0,
     files: 1,
     bytes: 29,
   }
@@ -248,7 +255,12 @@ test('Studio paths stay display-only and absolute', () => {
     false,
   )
   assert.equal(
-    studioProjectSchema.safeParse({ ...project, schemaVersion: 3, hasLicense: true }).success,
+    studioProjectSchema.safeParse({
+      ...project,
+      schemaVersion: 3,
+      license: 'Terms',
+      hasLicense: true,
+    }).success,
     true,
   )
 })
@@ -278,6 +290,14 @@ test('renderer invokes only consent and pathless intents', async () => {
     assert.equal(bridge.includes(forbidden), false)
   }
   assert.match(bridge, /reloadProject: \(\) => parsedInvoke\('reload_project', studioProjectSchema\)/)
+  assert.match(
+    bridge,
+    /importProjectFiles: \(\) => parsedInvoke\('import_project_files', studioProjectSchema\.nullable\(\)\)/,
+  )
+  assert.match(
+    bridge,
+    /parsedInvoke\('choose_project_entrypoint', portablePath\.nullable\(\)\)/,
+  )
   assert.match(bridge, /revealProject: \(\) => invokeCommand\('reveal_project'\)/)
   assert.match(bridge, /openFinishLink: \(index\) => invokeCommand\('open_finish_link', \{ index \}\)/)
   assert.equal(bridge.includes('{ url'), false)
@@ -299,6 +319,41 @@ test('production renderer needs no inline script or style capability', async () 
     /const installPhaseOrder:[\s\S]*?'validating',\s*'verifying',\s*'recovering'/,
   )
   assert.match(progress, /key: 'recovering',[\s\S]*?label: 'Проверка состояния'/)
+})
+
+test('desktop window is DPI-fitted, fixed, and has no maximize authority', async () => {
+  const [configText, shell, chrome, bridge, types, capabilities, build] = await Promise.all([
+    readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/components/WindowChrome.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/tauri-bridge.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/types.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/capabilities/main.json', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/build.rs', import.meta.url), 'utf8'),
+  ])
+  const window = JSON.parse(configText).app.windows[0]
+  assert.equal(window.resizable, false)
+  assert.equal(window.maximizable, false)
+  assert.equal('minWidth' in window, false)
+  assert.equal('minHeight' in window, false)
+  assert.match(shell, /fixed_window_size/)
+  assert.match(shell, /work_area\(\)/)
+  for (const source of [chrome, bridge, types, capabilities, build]) {
+    assert.equal(source.includes('toggleMaximize'), false)
+    assert.equal(source.includes('toggle_maximize'), false)
+    assert.equal(source.includes('toggle-maximize'), false)
+  }
+})
+
+test('completion screen separates optional links from primary completion actions', async () => {
+  const [result, styles] = await Promise.all([
+    readFile(new URL('../src/renderer/src/features/installer/ResultView.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8'),
+  ])
+  assert.match(result, /className="result-links"/)
+  assert.match(result, /className="result-actions result-actions--complete"/)
+  assert.match(result, /className="primary-button"[\s\S]*?'Закрываем…' : 'Готово'/)
+  assert.match(styles, /\.result-links\s*\{[\s\S]*?grid-template-columns:/)
 })
 
 test('renderer keeps flat square Codex geometry', async () => {

@@ -904,7 +904,7 @@ fn finish_install(
                 )
             })
         })
-        .and_then(|result| validate_install_result(context, result))
+        .and_then(|result| validate_install_result(context, selection, result))
     {
         Ok(result) => {
             if context.package.summary.scope == InstallScope::User {
@@ -1464,9 +1464,23 @@ fn validate_preparation(preparation: &PrepareInstallResult) -> Result<(), Public
 
 fn validate_install_result(
     context: &SetupContext,
+    selection: &SetupSelection,
     result: InstallResult,
 ) -> Result<InstallResult, PublicError> {
-    if result.package_id == context.package.id
+    let action_matches = match &selection.preparation {
+        PrepareInstallResult::Ready { action, .. }
+        | PrepareInstallResult::InsufficientSpace { action, .. } => {
+            result.action
+                == match action {
+                    PreparedAction::Install => InstallResultAction::Install,
+                    PreparedAction::Update => InstallResultAction::Update,
+                    PreparedAction::Repair => InstallResultAction::Repair,
+                }
+        }
+        PrepareInstallResult::RecoveryRequired => true,
+    };
+    if action_matches
+        && result.package_id == context.package.id
         && result.install_directory == context.package.summary.install_directory
         && result.installed_files == context.package.summary.files
         && result.installed_bytes == context.package.summary.bytes
@@ -1634,6 +1648,7 @@ mod tests {
                 name: "Luxury Demo".into(),
                 publisher: "Luxury Software".into(),
                 version: "1.0.0".into(),
+                description: None,
                 license: None,
             },
             target: Target {
@@ -1729,14 +1744,43 @@ mod tests {
             installed_bytes: context.package.summary.bytes,
             install_directory: context.package.summary.install_directory.clone(),
         };
+        let selection = SetupSelection {
+            install_base: PathBuf::from(r"C:\Programs"),
+            state_root: PathBuf::from(r"C:\State"),
+            preparation: PrepareInstallResult::Ready {
+                action: PreparedAction::Install,
+                installed_version: None,
+                publisher_migration_required: false,
+            },
+        };
 
-        assert!(validate_install_result(&context, result.clone()).is_ok());
+        assert!(validate_install_result(&context, &selection, result.clone()).is_ok());
         let mut wrong_files = result.clone();
         wrong_files.installed_files += 1;
-        assert!(validate_install_result(&context, wrong_files).is_err());
-        let mut wrong_bytes = result;
+        assert!(validate_install_result(&context, &selection, wrong_files).is_err());
+        let mut wrong_bytes = result.clone();
         wrong_bytes.installed_bytes += 1;
-        assert!(validate_install_result(&context, wrong_bytes).is_err());
+        assert!(validate_install_result(&context, &selection, wrong_bytes).is_err());
+        let mut wrong_action = result;
+        wrong_action.action = InstallResultAction::Update;
+        assert!(validate_install_result(&context, &selection, wrong_action).is_err());
+
+        let update = SetupSelection {
+            preparation: PrepareInstallResult::Ready {
+                action: PreparedAction::Update,
+                installed_version: Some("0.9.0".into()),
+                publisher_migration_required: false,
+            },
+            ..selection
+        };
+        let update_result = InstallResult {
+            action: InstallResultAction::Update,
+            package_id: context.package.id.clone(),
+            installed_files: context.package.summary.files,
+            installed_bytes: context.package.summary.bytes,
+            install_directory: context.package.summary.install_directory.clone(),
+        };
+        assert!(validate_install_result(&context, &update, update_result).is_ok());
     }
 
     #[test]

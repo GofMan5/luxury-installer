@@ -5,6 +5,10 @@ fn main() {
         "create_project",
         "open_project",
         "reload_project",
+        "update_project",
+        "import_project_files",
+        "import_project_directory",
+        "choose_project_entrypoint",
         "reveal_project",
         "build_project",
         "choose_directory",
@@ -15,7 +19,6 @@ fn main() {
         "reveal_installed",
         "open_finish_link",
         "minimize_window",
-        "toggle_maximize_window",
         "close_window",
     ];
     tauri_build::try_build(

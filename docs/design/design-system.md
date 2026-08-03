@@ -14,7 +14,7 @@ The interface follows the flat dark language of Codex and ChatGPT:
 - no status badges, oversized icon containers, dashboard tiles, or nested cards; status is plain icon + text and content is arranged as open rows;
 - no internal package/runtime terminology in Setup end-user copy; Studio uses only terms needed for authoring.
 
-Setup makes four facts obvious: which application is being installed, where it will be installed, whether its publisher is trusted, and what the installation is doing. Studio keeps project actions in the rail and the validated manifest/payload summary in one flat workspace.
+Setup makes four facts obvious: which application is being installed, where it will be installed, whether its publisher is trusted, and what the installation is doing. Studio keeps project actions in the rail and one flat form for validated identity, target, install policy, license, finish links, payload import, and build.
 
 ## Implementation stack
 
@@ -122,7 +122,7 @@ No font download is required at runtime.
 ## Navigation and accessibility
 
 - Setup rail middle step follows the prepared action (`Установка`, `Обновление`, or `Восстановление`); the current step uses `aria-current="step"`.
-- Studio rail exposes `Новый проект`, `Открыть проект`, and—only with an active project—`Папка проекта` and `Перепроверить`, plus the current validated project identity.
+- Studio rail exposes `Новый проект`, `Открыть проект`, and—only with an active project—`Папка проекта` and `Перепроверить`, plus the current validated project identity. Payload actions stay beside the payload summary; entrypoint selection stays beside its field. Native-dialog actions disable while settings are unsaved so a returned summary cannot discard the draft.
 - Tab order follows visual order; native buttons and checkbox keep keyboard behavior.
 - Every screen has a labelled heading; errors use `role="alert"`; progress exposes numeric ARIA values.
 - Icons that repeat visible text are hidden from assistive technology.
@@ -130,4 +130,4 @@ No font download is required at runtime.
 
 ## Boundary rule
 
-Renderer state may format already-validated data. Studio create/open/reveal/reload/build actions carry no filesystem paths: the Rust Tauri shell owns native dialog results and the authoritative active project, while display-only summaries may include project/output paths. System Setup review keeps `destination=null`, renders a fixed-system-location row, and never exposes a chooser or an invented system path. System install/uninstall use the same pathless buttons and aggregate progress. System completion exposes launch only when the Rust review reports a receipt-owned entrypoint; Windows uses the authenticated unelevated token, Linux drops the authenticated groups/GID/UID, and macOS drops credentials before fixed `launchctl asuser`. System reveal stays hidden because it is not implemented. Inspection, path policy, trust, transaction state, rollback, ownership receipt, and terminal results come from Rust through typed Tauri commands/events backed by `luxury stdio` or the one-shot privileged Rust helper. Presentation must not become a second policy implementation.
+Renderer state may format already-validated data. Studio create/open/import/entrypoint/reveal/reload/build actions carry no filesystem paths: the Rust Tauri shell owns native dialog results and the authoritative active project. The renderer may submit only strict portable settings and receive display-only project/output paths or a validated relative entrypoint. System Setup review keeps `destination=null`, renders a fixed-system-location row, and never exposes a chooser or an invented system path. System install/uninstall use the same pathless buttons and aggregate progress. System completion exposes launch only when the Rust review reports a receipt-owned entrypoint; Windows uses the authenticated unelevated token, Linux drops the authenticated groups/GID/UID, and macOS drops credentials before fixed `launchctl asuser`. System reveal stays hidden because it is not implemented. Inspection, path policy, trust, transaction state, rollback, ownership receipt, and terminal results come from Rust through typed Tauri commands/events backed by `luxury stdio` or the one-shot privileged Rust helper. Presentation must not become a second policy implementation.

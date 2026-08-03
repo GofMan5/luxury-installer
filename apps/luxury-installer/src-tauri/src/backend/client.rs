@@ -952,7 +952,7 @@ mod tests {
             .insert("one".into(), Pending::Request(sender));
         read_stdout(
             Cursor::new(
-                br#"{"protocolVersion":2,"type":"result","id":"one","result":{"ok":true}}
+                br#"{"protocolVersion":3,"type":"result","id":"one","result":{"ok":true}}
 "#,
             ),
             Arc::clone(&process),
@@ -976,7 +976,7 @@ mod tests {
         let process = process();
         read_stdout(
             Cursor::new(
-                br#"{"protocolVersion":2,"type":"result","id":"unknown","result":{}}
+                br#"{"protocolVersion":3,"type":"result","id":"unknown","result":{}}
 "#,
             ),
             Arc::clone(&process),

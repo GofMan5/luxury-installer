@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
 
-use tauri::{Manager, State, WebviewWindow};
+use tauri::{LogicalSize, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
@@ -23,6 +23,61 @@ mod studio;
 use app::{AppMode, AppState, PublicError};
 
 const NO_REQUESTED_EXIT: i32 = i32::MIN;
+const DEFAULT_WINDOW_WIDTH: f64 = 1080.0;
+const DEFAULT_WINDOW_HEIGHT: f64 = 720.0;
+const WINDOW_WORK_AREA_MARGIN: f64 = 32.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FixedWindowSize {
+    width: f64,
+    height: f64,
+}
+
+fn fixed_window_size(work_width: u32, work_height: u32, scale_factor: f64) -> FixedWindowSize {
+    if work_width == 0 || work_height == 0 || !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return FixedWindowSize {
+            width: DEFAULT_WINDOW_WIDTH,
+            height: DEFAULT_WINDOW_HEIGHT,
+        };
+    }
+    let available_width = (f64::from(work_width) / scale_factor - WINDOW_WORK_AREA_MARGIN).max(1.0);
+    let available_height =
+        (f64::from(work_height) / scale_factor - WINDOW_WORK_AREA_MARGIN).max(1.0);
+    let fit = (available_width / DEFAULT_WINDOW_WIDTH)
+        .min(available_height / DEFAULT_WINDOW_HEIGHT)
+        .min(1.0);
+    FixedWindowSize {
+        width: (DEFAULT_WINDOW_WIDTH * fit).floor().max(1.0),
+        height: (DEFAULT_WINDOW_HEIGHT * fit).floor().max(1.0),
+    }
+}
+
+fn configure_main_window(window: &WebviewWindow) -> tauri::Result<()> {
+    let size = window
+        .current_monitor()?
+        .or(window.primary_monitor()?)
+        .map(|monitor| {
+            let work_area = monitor.work_area();
+            fixed_window_size(
+                work_area.size.width,
+                work_area.size.height,
+                monitor.scale_factor(),
+            )
+        })
+        .unwrap_or(FixedWindowSize {
+            width: DEFAULT_WINDOW_WIDTH,
+            height: DEFAULT_WINDOW_HEIGHT,
+        });
+    let logical = LogicalSize::new(size.width, size.height);
+    window.set_min_size(None::<LogicalSize<f64>>)?;
+    window.set_max_size(None::<LogicalSize<f64>>)?;
+    window.set_size(logical)?;
+    window.set_min_size(Some(logical))?;
+    window.set_max_size(Some(logical))?;
+    window.set_resizable(false)?;
+    window.set_maximizable(false)?;
+    window.center()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CloseRequestDisposition {
@@ -63,19 +118,6 @@ fn minimize_window(window: WebviewWindow) -> Result<(), PublicError> {
     window
         .minimize()
         .map_err(|_| PublicError::new("internal_error", "Не удалось свернуть окно."))
-}
-
-#[tauri::command]
-fn toggle_maximize_window(window: WebviewWindow) -> Result<(), PublicError> {
-    let maximized = window
-        .is_maximized()
-        .map_err(|_| PublicError::new("internal_error", "Не удалось определить размер окна."))?;
-    let result = if maximized {
-        window.unmaximize()
-    } else {
-        window.maximize()
-    };
-    result.map_err(|_| PublicError::new("internal_error", "Не удалось изменить размер окна."))
 }
 
 #[tauri::command]
@@ -202,6 +244,9 @@ pub fn run() {
                 app.handle().exit(1);
                 return Ok(());
             }
+            if let Some(window) = app.get_webview_window("main") {
+                configure_main_window(&window)?;
+            }
             let state = AppState::new(app.handle());
             app.manage(state.clone());
             if verify_requested {
@@ -278,6 +323,10 @@ pub fn run() {
             studio::create_project,
             studio::open_project,
             studio::reload_project,
+            studio::update_project,
+            studio::import_project_files,
+            studio::import_project_directory,
+            studio::choose_project_entrypoint,
             studio::reveal_project,
             studio::build_project,
             setup::get_bootstrap,
@@ -289,7 +338,6 @@ pub fn run() {
             setup::reveal_installed,
             setup::open_finish_link,
             minimize_window,
-            toggle_maximize_window,
             close_window,
         ])
         .build(context)
@@ -334,9 +382,26 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        CloseRequestDisposition, NO_REQUESTED_EXIT, close_request_disposition,
-        container_parent_mode_valid, final_exit_code,
+        CloseRequestDisposition, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, NO_REQUESTED_EXIT,
+        close_request_disposition, container_parent_mode_valid, final_exit_code, fixed_window_size,
     };
+
+    #[test]
+    fn fixed_window_fits_the_monitor_work_area_at_any_scale() {
+        let large = fixed_window_size(3840, 2080, 2.0);
+        assert_eq!(large.width, DEFAULT_WINDOW_WIDTH);
+        assert_eq!(large.height, DEFAULT_WINDOW_HEIGHT);
+
+        let compact = fixed_window_size(1366, 728, 1.25);
+        assert!(compact.width <= 1366.0 / 1.25);
+        assert!(compact.height <= 728.0 / 1.25);
+        assert!(compact.width < DEFAULT_WINDOW_WIDTH);
+        assert_eq!((compact.width / compact.height * 100.0).round(), 150.0);
+
+        let fallback = fixed_window_size(0, 0, f64::NAN);
+        assert_eq!(fallback.width, DEFAULT_WINDOW_WIDTH);
+        assert_eq!(fallback.height, DEFAULT_WINDOW_HEIGHT);
+    }
 
     #[test]
     fn explicit_headless_exit_code_wins_over_runtime_default() {

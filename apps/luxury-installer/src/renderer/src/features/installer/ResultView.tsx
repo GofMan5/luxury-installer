@@ -1,4 +1,4 @@
-import { Check, ExternalLink, Play, RotateCcw, SquareDashed, SquareX } from 'lucide-react'
+import { Check, ExternalLink, FolderOpen, Play, RotateCcw, SquareDashed, SquareX } from 'lucide-react'
 
 import type { FinishLink, InstallResultAction } from '../../types'
 
@@ -29,22 +29,28 @@ export function CompleteView({
   onOpenLink(index: number): void
   onClose(): void
 }) {
+  const hasLinks = canReveal || finishLinks.length > 0
   return (
-    <section className="screen result-screen" aria-labelledby="complete-title">
-      <div className="result-mark result-mark--success" aria-hidden="true">
-        <Check size={38} strokeWidth={2.2} />
+    <section className="screen result-screen result-screen--complete" aria-labelledby="complete-title">
+      <div className="result-complete__summary">
+        <div className="result-mark result-mark--success" aria-hidden="true">
+          <Check size={34} strokeWidth={2.2} />
+        </div>
+        <div>
+          <h1 id="complete-title" data-view-heading tabIndex={-1}>
+            {completeTitle(action, name)}
+          </h1>
+          <p>{completeDescription(action)}</p>
+        </div>
       </div>
-      <h1 id="complete-title" data-view-heading tabIndex={-1}>
-        {completeTitle(action, name)}
-      </h1>
-      <p>{completeDescription(action)}</p>
 
       {actionError ? <div className="error-message result-action-error" role="alert">{actionError}</div> : null}
-      <div className="result-actions">
+
+      {hasLinks ? <div className="result-links" aria-label="Дополнительные действия">
         {canReveal ? (
           <button className="secondary-button" type="button" disabled={launchPending || actionPending !== null} onClick={onReveal}>
-            {actionPending === 'reveal' ? <SquareDashed className="spin" size={16} /> : <ExternalLink size={16} />}
-            {actionPending === 'reveal' ? 'Открываем…' : 'Показать в папке'}
+            {actionPending === 'reveal' ? <SquareDashed className="spin" size={16} /> : <FolderOpen size={16} />}
+            <span>{actionPending === 'reveal' ? 'Открываем…' : 'Показать в папке'}</span>
           </button>
         ) : null}
         {finishLinks.map((link, index) => (
@@ -56,22 +62,26 @@ export function CompleteView({
             onClick={() => onOpenLink(index)}
           >
             {actionPending === index ? <SquareDashed className="spin" size={16} /> : <ExternalLink size={16} />}
-            {actionPending === index ? 'Открываем…' : link.label}
+            <span>{actionPending === index ? 'Открываем…' : link.label}</span>
           </button>
         ))}
+      </div> : null}
+
+      <div className="result-actions result-actions--complete">
         {canLaunch ? (
-          <button className="primary-button" type="button" disabled={launchPending || actionPending !== null} onClick={onLaunch}>
+          <button className="secondary-button" type="button" disabled={launchPending || actionPending !== null} onClick={onLaunch}>
             {launchPending ? <SquareDashed className="spin" size={16} /> : <Play size={16} />}
             {launchPending ? 'Запускаем…' : 'Запустить'}
           </button>
         ) : null}
         <button
-          className={canLaunch || canReveal || finishLinks.length > 0 ? 'secondary-button' : 'primary-button'}
+          className="primary-button"
           type="button"
           disabled={launchPending || actionPending !== null}
           onClick={onClose}
         >
-          Готово
+          {actionPending === 'close' ? <SquareDashed className="spin" size={16} /> : null}
+          {actionPending === 'close' ? 'Закрываем…' : 'Готово'}
         </button>
       </div>
     </section>

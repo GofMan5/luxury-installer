@@ -7,8 +7,9 @@ mod publisher;
 
 pub use error::SpecError;
 pub use manifest::{
-    Architecture, FileEntry, FinishLink, InstallPolicy, InstallScope, Manifest, OperatingSystem,
-    Package, PackageId, Sha256Digest, Target, validate_entrypoint,
+    Architecture, FileEntry, FinishLink, InstallPolicy, InstallScope, MAX_PAYLOAD_BYTES,
+    MAX_PAYLOAD_FILE_BYTES, MAX_PAYLOAD_FILES, Manifest, OperatingSystem, Package, PackageId,
+    Sha256Digest, Target, validate_entrypoint,
 };
 pub use path::{InstallDirectory, PackagePath};
 pub use publisher::{

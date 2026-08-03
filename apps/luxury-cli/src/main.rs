@@ -50,8 +50,16 @@ fn run() -> Result<(), Box<dyn Error>> {
     };
     let rest = args.collect::<Vec<_>>();
     privilege::guard_command(&command)?;
+    let command_name = command.to_string_lossy();
+    if is_help_request(&rest) {
+        if print_command_usage(&program, &command_name) {
+            return Ok(());
+        }
+        print_usage(&program);
+        return Err(format!("help is not available for command '{command_name}'").into());
+    }
 
-    match command.to_string_lossy().as_ref() {
+    match command_name.as_ref() {
         "stdio" => stdio::run(&rest),
         "privilege-probe" => privilege::run_probe(&rest)?,
         "privilege-probe-elevated" => privilege::run_elevated_probe(&rest)?,
@@ -215,7 +223,16 @@ fn run() -> Result<(), Box<dyn Error>> {
             launch(LaunchCommand::new(package_id.clone()), &mut port)?;
             println!("launched {package_id}");
         }
-        "help" | "--help" | "-h" => print_usage(&program),
+        "help" => match rest.as_slice() {
+            [] => print_usage(&program),
+            [command] if print_command_usage(&program, &command.to_string_lossy()) => {}
+            [command] => {
+                print_usage(&program);
+                return Err(format!("unknown command '{}'", command.to_string_lossy()).into());
+            }
+            _ => return Err("help accepts at most one command".into()),
+        },
+        "--help" | "-h" => print_usage(&program),
         other => {
             print_usage(&program);
             return Err(format!("unknown command '{other}'").into());
@@ -555,6 +572,7 @@ Usage:
   {program} install <package.luxpkg> <install-base> <state-root> [--trusted-publisher-key <public.pem>] [--allow-unsigned] [--accept-license] [--allow-downgrade] [--allow-publisher-migration]
   {program} uninstall <package-id> <install-base> <state-root>
   {program} launch <package-id> <install-base> <state-root>
+  {program} help [command]
 
 Notes:
   Signed builds require a v2/v3 project and read a bounded PKCS#8 PEM only from stdin.
@@ -566,6 +584,52 @@ Notes:
   Migrating legacy ownership identity or binding unsigned state to a publisher requires explicit --allow-publisher-migration consent.
   <state-root> must live outside the removable install tree."
     ));
+}
+
+fn is_help_request(args: &[OsString]) -> bool {
+    matches!(args, [flag] if matches!(flag.to_str(), Some("--help" | "-h")))
+}
+
+fn print_command_usage(program: &OsString, command: &str) -> bool {
+    let program = Path::new(program).display();
+    let help = match command {
+        "stdio" => format!(
+            "Usage:\n  {program} stdio [--trusted-publisher-key <absolute-public.pem>]\n\nRuns strict JSONL protocol v3 on stdin/stdout. Stdout is protocol-only; diagnostics never share it."
+        ),
+        "init" => format!(
+            "Usage:\n  {program} init <project-dir>\n\nCreates an unsigned project without overwriting different existing files."
+        ),
+        "build" => format!(
+            "Usage:\n  {program} build <project-dir> <out.luxpkg> [--signing-key-stdin]\n\nBuilds unsigned v1 by default. Signed v2/v3 reads one bounded PKCS#8 PEM only from stdin."
+        ),
+        "publisher-key-id" => format!(
+            "Usage:\n  {program} publisher-key-id <public.pem>\n\nPrints the stable ID of an SPKI publisher public key."
+        ),
+        "prepare-rotation" => format!(
+            "Usage:\n  {program} prepare-rotation <package-id> <version> <A-key-id> --next-signing-key-stdin\n\nReads the next private key only from stdin and prints a public rotation TOML section."
+        ),
+        "inspect" => format!(
+            "Usage:\n  {program} inspect <package.luxpkg> [--trusted-publisher-key <public.pem>]\n\nVerifies the package and prints its manifest. Signed packages require the matching public key."
+        ),
+        "prepare-install" => format!(
+            "Usage:\n  {program} prepare-install <package.luxpkg> <install-base> <state-root> [--trusted-publisher-key <public.pem>]\n\nPerforms read-only verification, transition assessment, destination checks, and capacity checks."
+        ),
+        "install" => format!(
+            "Usage:\n  {program} install <package.luxpkg> <install-base> <state-root> [--trusted-publisher-key <public.pem>] [--allow-unsigned] [--accept-license] [--allow-downgrade] [--allow-publisher-migration]\n\nInstalls, updates, repairs, or explicitly approved downgrades transactionally. Consent flags are never inferred."
+        ),
+        "uninstall" => format!(
+            "Usage:\n  {program} uninstall <package-id> <install-base> <state-root>\n\nRemoves receipt-owned unchanged files and preserves unknown or modified files."
+        ),
+        "launch" => format!(
+            "Usage:\n  {program} launch <package-id> <install-base> <state-root>\n\nLaunches only the validated receipt-owned entrypoint without caller arguments."
+        ),
+        "help" => format!(
+            "Usage:\n  {program} help [command]\n\nShows global help or the exact non-mutating help for one public command."
+        ),
+        _ => return false,
+    };
+    print_diagnostic(help);
+    true
 }
 
 fn print_diagnostic(message: impl fmt::Display) {

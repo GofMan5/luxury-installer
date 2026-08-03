@@ -9,9 +9,9 @@ use crate::{
     SIGNED_FORMAT_VERSION, SpecError,
 };
 
-const MAX_FILES: usize = 100_000;
-const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
-const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
+pub const MAX_PAYLOAD_FILES: usize = 100_000;
+pub const MAX_PAYLOAD_FILE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+pub const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
 const MAX_LICENSE_CHARS: usize = 16_384;
 const MAX_FINISH_LINKS: usize = 4;
 const MAX_FINISH_LINK_LABEL_CHARS: usize = 48;
@@ -78,6 +78,9 @@ impl Manifest {
         }
         validate_text("package.name", &self.package.name, 128)?;
         validate_text("package.publisher", &self.package.publisher, 128)?;
+        if let Some(description) = &self.package.description {
+            validate_text("package.description", description, 1024)?;
+        }
         if self.schema_version < ENTRYPOINT_SCHEMA_VERSION && self.install.entrypoint.is_some() {
             return Err(SpecError::EntrypointRequiresSchema {
                 found: self.schema_version,
@@ -111,14 +114,14 @@ impl Manifest {
         if self.files.is_empty() {
             return Err(SpecError::EmptyPayload);
         }
-        if self.files.len() > MAX_FILES {
+        if self.files.len() > MAX_PAYLOAD_FILES {
             return Err(SpecError::TooManyFiles(self.files.len()));
         }
 
         let mut paths = HashSet::with_capacity(self.files.len());
         let mut total_size = 0_u64;
         for file in &self.files {
-            if file.size > MAX_FILE_BYTES {
+            if file.size > MAX_PAYLOAD_FILE_BYTES {
                 return Err(SpecError::FileTooLarge {
                     path: file.path.to_string(),
                     size: file.size,
@@ -647,6 +650,32 @@ mod tests {
             Err(SpecError::InvalidText {
                 field: "package.license",
                 max: MAX_LICENSE_CHARS
+            })
+        ));
+    }
+
+    #[test]
+    fn package_description_is_bounded_plain_text() {
+        let mut manifest = valid_manifest();
+        manifest.package.description = Some("Human-facing summary".into());
+        manifest.validate().unwrap();
+
+        for invalid in ["", "bad\0description"] {
+            manifest.package.description = Some(invalid.into());
+            assert!(matches!(
+                manifest.validate(),
+                Err(SpecError::InvalidText {
+                    field: "package.description",
+                    max: 1024,
+                })
+            ));
+        }
+        manifest.package.description = Some("x".repeat(1025));
+        assert!(matches!(
+            manifest.validate(),
+            Err(SpecError::InvalidText {
+                field: "package.description",
+                max: 1024,
             })
         ));
     }

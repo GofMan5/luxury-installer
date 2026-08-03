@@ -5,17 +5,25 @@ import {
   Folder,
   FolderOpen,
   Hammer,
+  Plus,
   RefreshCw,
+  Save,
   SquareDashed,
   Terminal,
+  Trash2,
   TriangleAlert,
 } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { BrandMark } from './components/BrandMark'
 import { WindowChrome } from './components/WindowChrome'
 import { formatBytes, formatFileCount } from './features/installer/format'
-import type { LuxuryBridge, StudioBuildResult, StudioProject } from './types'
+import type {
+  LuxuryBridge,
+  StudioBuildResult,
+  StudioProject,
+  StudioProjectUpdate,
+} from './types'
 import { projectFrom, useStudio, type StudioView as StudioState } from './use-studio'
 
 export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
@@ -28,6 +36,10 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
       onOpen={() => void studio.openProject()}
       onReload={() => void studio.reloadProject()}
       onReveal={() => void studio.revealProject()}
+      onSave={(input) => void studio.updateProject(input)}
+      onImportFiles={() => void studio.importProject('files')}
+      onImportDirectory={() => void studio.importProject('directory')}
+      onChooseEntrypoint={studio.chooseProjectEntrypoint}
       onBuild={() => void studio.buildProject()}
       folderPending={studio.folderPending}
       onDismissError={studio.dismissError}
@@ -42,6 +54,10 @@ interface StudioViewProps {
   onOpen(): void
   onReload(): void
   onReveal(): void
+  onSave(input: StudioProjectUpdate): void
+  onImportFiles(): void
+  onImportDirectory(): void
+  onChooseEntrypoint(): Promise<string | null>
   onBuild(): void
   folderPending: boolean
   onDismissError(): void
@@ -54,6 +70,10 @@ export function StudioView({
   onOpen,
   onReload,
   onReveal,
+  onSave,
+  onImportFiles,
+  onImportDirectory,
+  onChooseEntrypoint,
   onBuild,
   folderPending,
   onDismissError,
@@ -62,6 +82,9 @@ export function StudioView({
   const busy =
     state.kind === 'loading' ||
     state.kind === 'refreshing' ||
+    state.kind === 'saving' ||
+    state.kind === 'importing' ||
+    state.kind === 'choosingEntrypoint' ||
     state.kind === 'building' ||
     folderPending
   const workspace = useRef<HTMLElement>(null)
@@ -129,6 +152,10 @@ export function StudioView({
             project={project}
             state={state}
             busy={busy}
+            onSave={onSave}
+            onImportFiles={onImportFiles}
+            onImportDirectory={onImportDirectory}
+            onChooseEntrypoint={onChooseEntrypoint}
             onBuild={onBuild}
             onDismissError={onDismissError}
           />
@@ -181,42 +208,101 @@ function EmptyErrorView({ message, onDismiss }: { message: string; onDismiss(): 
   )
 }
 
+function projectUpdateFrom(project: StudioProject): StudioProjectUpdate {
+  return {
+    packageId: project.packageId,
+    name: project.name,
+    publisher: project.publisher,
+    version: project.version,
+    description: project.description,
+    license: project.license,
+    targetOs: project.targetOs,
+    targetArch: project.targetArch,
+    installDirectory: project.installDirectory,
+    scope: project.scope,
+    allowDowngrade: project.allowDowngrade,
+    entrypoint: project.entrypoint,
+    showInstallLog: project.showInstallLog,
+    finishLinks: project.finishLinks.map((link) => ({ ...link })),
+  }
+}
+
 function ProjectView({
   project,
   state,
   busy,
+  onSave,
+  onImportFiles,
+  onImportDirectory,
+  onChooseEntrypoint,
   onBuild,
   onDismissError,
 }: {
   project: StudioProject
   state: StudioState
   busy: boolean
+  onSave(input: StudioProjectUpdate): void
+  onImportFiles(): void
+  onImportDirectory(): void
+  onChooseEntrypoint(): Promise<string | null>
   onBuild(): void
   onDismissError(): void
 }) {
   const building = state.kind === 'building'
+  const saving = state.kind === 'saving'
+  const importing = state.kind === 'importing'
+  const choosingEntrypoint = state.kind === 'choosingEntrypoint'
   const buildable = project.formatVersion === 1
   const result = state.kind === 'built' ? state.result : null
   const error = state.kind === 'error' ? state.message : null
+  const baseline = useMemo(() => projectUpdateFrom(project), [project])
+  const [draft, setDraft] = useState(baseline)
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseline)
+
+  useEffect(() => setDraft(baseline), [baseline])
+
+  const updateLink = (index: number, field: 'label' | 'url', value: string) => {
+    setDraft((current) => ({
+      ...current,
+      finishLinks: current.finishLinks.map((link, linkIndex) =>
+        linkIndex === index ? { ...link, [field]: value } : link,
+      ),
+    }))
+  }
 
   return (
-    <section className="studio-project" aria-labelledby="studio-project-title">
+    <form
+      className="studio-project"
+      aria-labelledby="studio-project-title"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (buildable && dirty && !busy) onSave(draft)
+      }}
+    >
       <header className="studio-project__header">
         <div>
           <h1 id="studio-project-title" data-view-heading tabIndex={-1}>{project.name}</h1>
           <p>{project.publisher} · {project.version}</p>
           <code tabIndex={0} title={project.projectPath}>{project.projectPath}</code>
         </div>
-        <button
-          className="primary-button"
-          type="button"
-          disabled={busy || !buildable}
-          aria-describedby={buildable ? undefined : 'studio-signed-build-note'}
-          onClick={onBuild}
-        >
-          {building ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Hammer size={17} aria-hidden="true" />}
-          {building ? 'Собираем…' : 'Собрать'}
-        </button>
+        <div className="studio-project__header-actions">
+          {buildable ? (
+            <button className="secondary-button" type="submit" disabled={busy || !dirty}>
+              {saving ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Save size={17} aria-hidden="true" />}
+              {saving ? 'Сохраняем…' : 'Сохранить'}
+            </button>
+          ) : null}
+          <button
+            className="primary-button"
+            type="button"
+            disabled={busy || !buildable || dirty}
+            aria-describedby={buildable ? undefined : 'studio-signed-build-note'}
+            onClick={onBuild}
+          >
+            {building ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Hammer size={17} aria-hidden="true" />}
+            {building ? 'Собираем…' : 'Собрать'}
+          </button>
+        </div>
       </header>
 
       {error ? (
@@ -253,38 +339,179 @@ function ProjectView({
         </div>
       ) : null}
 
+      {importing ? (
+        <div className="studio-build-progress" role="status" aria-live="polite">
+          <SquareDashed className="spin" size={19} aria-hidden="true" />
+          Rust проверяет и добавляет выбранные файлы…
+        </div>
+      ) : null}
+
       {result ? <BuildResult result={result} /> : null}
 
-      <div className="studio-sections">
-        <section aria-labelledby="manifest-title">
-          <h2 id="manifest-title">Манифест</h2>
-          <dl className="studio-facts">
-            <Fact label="ID пакета" value={project.packageId} mono />
-            <Fact label="Формат пакета" value={`luxpkg v${project.formatVersion}`} />
-            <Fact label="Лицензия" value={project.hasLicense ? 'Требует принятия' : 'Не задана'} />
-            {project.formatVersion === 3 ? (
-              <Fact
-                label="Ротация ключа"
-                value="Секция настроена; PoP проверяется при CLI build текущим ключом"
-              />
-            ) : null}
-            <Fact label="Папка установки" value={project.installDirectory} mono />
-            <Fact label="Область" value={project.scope === 'user' ? 'Текущий пользователь' : 'Вся система'} />
-            <Fact label="Запуск после установки" value={project.hasEntrypoint ? 'Настроен' : 'Не настроен'} />
-          </dl>
-        </section>
+      {buildable ? (
+        <div className="studio-editor">
+          <fieldset>
+            <legend>Приложение</legend>
+            <div className="studio-form-grid">
+              <StudioField label="Название">
+                <input required maxLength={128} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+              </StudioField>
+              <StudioField label="Версия">
+                <input required maxLength={1024} value={draft.version} onChange={(event) => setDraft({ ...draft, version: event.target.value })} placeholder="1.0.0" />
+              </StudioField>
+              <StudioField label="ID пакета" wide>
+                <input required maxLength={128} value={draft.packageId} onChange={(event) => setDraft({ ...draft, packageId: event.target.value })} placeholder="com.company.app" />
+              </StudioField>
+              <StudioField label="Издатель" wide>
+                <input required maxLength={128} value={draft.publisher} onChange={(event) => setDraft({ ...draft, publisher: event.target.value })} />
+              </StudioField>
+              <StudioField label="Описание" wide>
+                <input maxLength={1024} value={draft.description ?? ''} onChange={(event) => setDraft({ ...draft, description: event.target.value || null })} placeholder="Короткое описание приложения" />
+              </StudioField>
+            </div>
+          </fieldset>
 
-        <section aria-labelledby="payload-title">
-          <h2 id="payload-title">Файлы</h2>
-          <dl className="studio-facts">
-            <Fact label="Файлы" value={formatFileCount(project.files)} />
-            <Fact label="Размер" value={formatBytes(project.bytes)} />
-            <Fact label="Система" value={targetLabel(project)} />
-            <Fact label="Архитектура" value={project.targetArch} mono />
-          </dl>
-        </section>
-      </div>
-    </section>
+          <fieldset>
+            <legend>Установка</legend>
+            <div className="studio-form-grid">
+              <StudioField label="Система">
+                <select value={draft.targetOs} onChange={(event) => setDraft({ ...draft, targetOs: event.target.value as StudioProjectUpdate['targetOs'] })}>
+                  <option value="windows">Windows</option>
+                  <option value="linux">Linux</option>
+                  <option value="macos">macOS</option>
+                </select>
+              </StudioField>
+              <StudioField label="Архитектура">
+                <select value={draft.targetArch} onChange={(event) => setDraft({ ...draft, targetArch: event.target.value as StudioProjectUpdate['targetArch'] })}>
+                  <option value="x86_64">x86_64</option>
+                  <option value="aarch64">aarch64</option>
+                </select>
+              </StudioField>
+              <StudioField label="Папка приложения">
+                <input required maxLength={255} value={draft.installDirectory} onChange={(event) => setDraft({ ...draft, installDirectory: event.target.value })} />
+              </StudioField>
+              <StudioField label="Область установки">
+                <select value={draft.scope} onChange={(event) => setDraft({ ...draft, scope: event.target.value as StudioProjectUpdate['scope'] })}>
+                  <option value="user">Текущий пользователь</option>
+                  <option value="system">Вся система</option>
+                </select>
+              </StudioField>
+              <div className="studio-field studio-field--wide">
+                <label htmlFor="studio-entrypoint">Точка запуска</label>
+                <div className="studio-entrypoint">
+                  <input id="studio-entrypoint" aria-describedby="studio-entrypoint-hint" maxLength={4096} value={draft.entrypoint ?? ''} onChange={(event) => setDraft({ ...draft, entrypoint: event.target.value || null })} placeholder="bin/app.exe" />
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      void onChooseEntrypoint().then((path) => {
+                        if (path) setDraft((current) => ({ ...current, entrypoint: path }))
+                      })
+                    }}
+                  >
+                    {choosingEntrypoint ? <SquareDashed className="spin" size={15} aria-hidden="true" /> : <FolderOpen size={15} aria-hidden="true" />}
+                    {choosingEntrypoint ? 'Выбираем…' : 'Выбрать'}
+                  </button>
+                </div>
+                <small id="studio-entrypoint-hint">Путь внутри payload, например bin/app.exe</small>
+              </div>
+            </div>
+            <div className="studio-toggles">
+              <label><input type="checkbox" checked={draft.showInstallLog} onChange={(event) => setDraft({ ...draft, showInstallLog: event.target.checked })} />Показывать пользователю детали установки</label>
+              <label><input type="checkbox" checked={draft.allowDowngrade} onChange={(event) => setDraft({ ...draft, allowDowngrade: event.target.checked })} />Разрешить установку более старой версии</label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Лицензия</legend>
+            <StudioField label="Текст соглашения" hint="Оставьте пустым, если соглашение не требуется">
+              <textarea rows={6} maxLength={16384} value={draft.license ?? ''} onChange={(event) => setDraft({ ...draft, license: event.target.value || null })} />
+            </StudioField>
+          </fieldset>
+
+          <fieldset>
+            <legend>Ссылки после установки</legend>
+            <div className="studio-fieldset-heading">
+              <p>До четырёх безопасных HTTPS-ссылок на финальном экране.</p>
+              <button className="secondary-button" type="button" disabled={draft.finishLinks.length >= 4} onClick={() => setDraft({ ...draft, finishLinks: [...draft.finishLinks, { label: '', url: 'https://' }] })}>
+                <Plus size={15} aria-hidden="true" />Добавить
+              </button>
+            </div>
+            {draft.finishLinks.length ? (
+              <div className="studio-link-list">
+                {draft.finishLinks.map((link, index) => (
+                  <div className="studio-link-row" key={index}>
+                    <input aria-label={`Название ссылки ${index + 1}`} required maxLength={48} value={link.label} onChange={(event) => updateLink(index, 'label', event.target.value)} placeholder="Документация" />
+                    <input aria-label={`HTTPS адрес ${index + 1}`} required type="url" pattern="https://.*" maxLength={2048} value={link.url} onChange={(event) => updateLink(index, 'url', event.target.value)} placeholder="https://example.com" />
+                    <button type="button" aria-label={`Удалить ссылку ${index + 1}`} onClick={() => setDraft({ ...draft, finishLinks: draft.finishLinks.filter((_, linkIndex) => linkIndex !== index) })}>
+                      <Trash2 size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="studio-empty-copy">Ссылки не добавлены.</p>}
+          </fieldset>
+
+          <section className="studio-payload-summary" aria-labelledby="payload-title">
+            <div>
+              <h2 id="payload-title">Файлы пакета</h2>
+              <p>{formatFileCount(project.files)} · {formatBytes(project.bytes)}</p>
+            </div>
+            <div>
+              <span>{targetLabel(project)}</span>
+              <span>{project.executableFiles ? `Исполняемых: ${project.executableFiles}` : 'Исполняемые файлы не отмечены'}</span>
+            </div>
+            <div className="studio-payload-actions">
+              <button className="secondary-button" type="button" disabled={busy || dirty} onClick={onImportFiles}>
+                <FilePlus2 size={15} aria-hidden="true" />Файлы
+              </button>
+              <button className="secondary-button" type="button" disabled={busy || dirty} onClick={onImportDirectory}>
+                <Folder size={15} aria-hidden="true" />Папка
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : <ReadOnlyProject project={project} />}
+    </form>
+  )
+}
+
+function ReadOnlyProject({ project }: { project: StudioProject }) {
+  return (
+    <div className="studio-sections">
+      <section aria-labelledby="manifest-title">
+        <h2 id="manifest-title">Манифест</h2>
+        <dl className="studio-facts">
+          <Fact label="ID пакета" value={project.packageId} mono />
+          <Fact label="Формат пакета" value={`luxpkg v${project.formatVersion}`} />
+          <Fact label="Лицензия" value={project.hasLicense ? 'Требует принятия' : 'Не задана'} />
+          {project.formatVersion === 3 ? <Fact label="Ротация ключа" value="Проверяется при CLI build текущим ключом" /> : null}
+          <Fact label="Папка установки" value={project.installDirectory} mono />
+          <Fact label="Область" value={project.scope === 'user' ? 'Текущий пользователь' : 'Вся система'} />
+          <Fact label="Запуск" value={project.hasEntrypoint ? project.entrypoint ?? 'Настроен' : 'Не настроен'} />
+        </dl>
+      </section>
+      <section aria-labelledby="payload-title">
+        <h2 id="payload-title">Файлы</h2>
+        <dl className="studio-facts">
+          <Fact label="Файлы" value={formatFileCount(project.files)} />
+          <Fact label="Размер" value={formatBytes(project.bytes)} />
+          <Fact label="Система" value={targetLabel(project)} />
+          <Fact label="Архитектура" value={project.targetArch} mono />
+        </dl>
+      </section>
+    </div>
+  )
+}
+
+function StudioField({ label, hint, wide = false, children }: { label: string; hint?: string; wide?: boolean; children: React.ReactNode }) {
+  return (
+    <label className={wide ? 'studio-field studio-field--wide' : 'studio-field'}>
+      <span>{label}</span>
+      {children}
+      {hint ? <small>{hint}</small> : null}
+    </label>
   )
 }
 

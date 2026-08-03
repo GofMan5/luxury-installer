@@ -6,7 +6,7 @@ Luxury Installer is currently a **functional development preview**, not a produc
 
 ## Before you edit
 
-1. Read [`AGENTS.md`](AGENTS.md), [`MEMORY.md`](MEMORY.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/ai-build.md`](docs/ai-build.md).
+1. Read [`docs/architecture.md`](docs/architecture.md), [`docs/ai-build.md`](docs/ai-build.md), and [`llms.txt`](llms.txt). Use any local workspace contract supplied by your agent environment.
 2. Inspect `git status --short` and preserve unrelated user or agent work.
 3. Trace the existing callers, protocol types, and trust boundaries for the behavior.
 4. Choose one vertical slice and the smallest gate that can disprove it.
@@ -89,7 +89,7 @@ Before opening a pull request:
 - list exact verification commands and results;
 - call out security, rollback, cancellation, privilege, process, and cross-platform implications;
 - update one focused regression check for changed behavior;
-- update root `MEMORY.md` only when architecture, `.luxpkg`, protocol, or build contract changed;
+- synchronize README, guides, `llms.txt`, and the public CLI skill when CLI/JSONL/package/authoring behavior changes;
 - avoid “production-ready” claims until signed native installer formats, platform signing, and native release evidence exist.
 
 Contributions are licensed under either [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.

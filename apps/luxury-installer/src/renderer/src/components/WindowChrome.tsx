@@ -1,4 +1,4 @@
-import { Minus, Square, X } from 'lucide-react'
+import { Minus, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 
 import type { LuxuryBridge } from '../types'
@@ -37,9 +37,6 @@ export function WindowChrome({ bridge }: { bridge: LuxuryBridge }) {
       <div className="window-controls" role="group" aria-label="Управление окном">
         <button type="button" title="Свернуть" aria-label="Свернуть" onClick={() => void run(bridge.minimizeWindow)}>
           <Minus size={16} aria-hidden="true" />
-        </button>
-        <button type="button" title="Изменить размер окна" aria-label="Изменить размер окна" onClick={() => void run(bridge.toggleMaximizeWindow)}>
-          <Square size={13} aria-hidden="true" />
         </button>
         <button className="window-controls__close" type="button" title="Закрыть" aria-label="Закрыть" disabled={closing} onClick={() => void close()}>
           <X size={16} aria-hidden="true" />
