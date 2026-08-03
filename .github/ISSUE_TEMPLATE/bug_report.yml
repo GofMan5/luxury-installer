@@ -1,0 +1,62 @@
+name: Bug report
+description: Report one reproducible Luxury Installer defect.
+title: "bug: "
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for a focused report. Never attach signing keys, tokens, personal data, or a proprietary payload.
+  - type: input
+    id: revision
+    attributes:
+      label: Version or revision
+      description: Release tag, commit SHA, or branch name.
+      placeholder: main at abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows 10/11, Linux, macOS 13+, Other]
+    validations:
+      required: true
+  - type: input
+    id: architecture
+    attributes:
+      label: Architecture
+      placeholder: x86_64 or aarch64
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Smallest exact sequence, command, and synthetic package/config needed to reproduce.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include bounded redacted stderr or UI text; do not paste secrets.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: This report contains no private key, token, certificate secret, or personal payload.
+          required: true
+        - label: This is not a vulnerability report; security issues use private reporting.
+          required: true

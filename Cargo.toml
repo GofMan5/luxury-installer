@@ -1,0 +1,75 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/luxury-spec",
+    "crates/luxury-bundle",
+    "crates/luxury-engine",
+    "crates/luxury-platform",
+    "crates/luxury-compiler",
+    "crates/luxury-macos-trust",
+    "crates/luxury-windows-trust",
+    "apps/luxury-cli",
+    "xtask",
+]
+default-members = [
+    "crates/luxury-spec",
+    "crates/luxury-bundle",
+    "crates/luxury-engine",
+    "crates/luxury-platform",
+    "crates/luxury-compiler",
+    "apps/luxury-cli",
+]
+exclude = ["apps/luxury-installer/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+luxury-spec = { path = "crates/luxury-spec" }
+luxury-bundle = { path = "crates/luxury-bundle" }
+luxury-engine = { path = "crates/luxury-engine" }
+luxury-platform = { path = "crates/luxury-platform" }
+luxury-compiler = { path = "crates/luxury-compiler" }
+luxury-macos-trust = { path = "crates/luxury-macos-trust" }
+luxury-windows-trust = { path = "crates/luxury-windows-trust" }
+
+ed25519-dalek = { version = "3.0", default-features = false, features = ["pem", "zeroize"] }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+hex = "0.4"
+libc = "0.2.189"
+semver = { version = "1.0", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11"
+rustix = { version = "1.1.4", default-features = false, features = ["fs", "process", "std", "thread"] }
+tar = "0.4"
+tempfile = "3.27"
+thiserror = "2.0"
+toml = "1.1"
+unicode-normalization = "0.1"
+windows-sys = { version = "0.61.2", features = ["Wdk_System_Threading", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_Security_WinTrust", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Environment", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell"] }
+zeroize = "1.9"
+core-foundation = "0.10.1"
+security-framework = "3.7.0"
+
+[profile.dev]
+debug = "line-tables-only"
+incremental = true
+
+[profile.test]
+debug = "line-tables-only"
+incremental = true
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = "debuginfo"
+
+[profile.dist]
+inherits = "release"
+codegen-units = 1
+strip = "symbols"

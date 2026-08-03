@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: cargo fmt --all -- --check
+      - run: cargo fmt --manifest-path apps/luxury-installer/src-tauri/Cargo.toml -- --check
+
+  core:
+    name: Rust / quick
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+      - run: cargo quick --locked
+
+  windows-boundary:
+    name: Windows / trust + filesystem boundary
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+      - run: cargo test --locked -p luxury-windows-trust -p luxury-platform
+
+  gui:
+    name: Tauri / React / TypeScript
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.26.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.12.0
+          cache: pnpm
+          cache-dependency-path: apps/luxury-installer/pnpm-lock.yaml
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: |
+            . -> target
+            apps/luxury-installer/src-tauri -> target
+      - run: pnpm --dir apps/luxury-installer install --frozen-lockfile
+      - run: cargo gui-check
+
+  cross-platform:
+    name: Full / ${{ matrix.label }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux-X64
+            evidence: linux-x86_64.json
+            studio_path: dist/luxury-installer-studio-*-linux-x86_64.tar.gz
+          - os: windows-latest
+            label: Windows-X64
+            evidence: windows-x86_64.json
+            studio_path: dist/luxury-installer-studio-*-windows-x86_64
+          - os: macos-latest
+            label: macOS-X64
+            evidence: macos-x86_64.json
+            studio_path: dist/luxury-installer-studio-*-macos-x86_64.tar.gz
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: runner.os == 'Linux'
+        name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev xvfb xauth rpm cpio
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.26.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.12.0
+          cache: pnpm
+          cache-dependency-path: apps/luxury-installer/pnpm-lock.yaml
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: |
+            . -> target
+            apps/luxury-installer/src-tauri -> target
+      - run: pnpm --dir apps/luxury-installer install --frozen-lockfile
+      - run: cargo full-test --locked
+      - run: cargo tauri-test
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a cargo studio-assemble
+      - if: runner.os != 'Linux'
+        run: cargo studio-assemble
+      - name: Upload verified Studio artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: studio-${{ matrix.label }}
+          path: ${{ matrix.studio_path }}
+          if-no-files-found: error
+          retention-days: 14
+      - if: runner.os == 'Linux'
+        name: Build and inspect native Linux development packages
+        run: |
+          ./target/x86_64-unknown-linux-gnu/dist/luxury init target/linux-package-project
+          ./target/x86_64-unknown-linux-gnu/dist/luxury build target/linux-package-project target/linux-package-smoke.luxpkg
+          xvfb-run -a cargo linux-packages -- target/linux-package-smoke.luxpkg
+      - if: runner.os == 'Linux'
+        name: Upload inspected Linux development packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-native-packages-development-${{ matrix.label }}
+          path: target/linux-packages/**
+          if-no-files-found: error
+          retention-days: 14
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a cargo runner-smoke
+      - if: runner.os != 'Linux'
+        run: cargo runner-smoke
+      - name: Upload lifecycle evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runner-lifecycle-${{ matrix.label }}
+          path: target/runner-evidence/${{ matrix.evidence }}
+          if-no-files-found: error
+          retention-days: 14
+
+  evidence-set:
+    name: Verify lifecycle evidence set
+    if: github.event_name == 'workflow_dispatch'
+    needs: cross-platform
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: runner-lifecycle-*
+          path: runner-evidence
+          merge-multiple: true
+      - run: cargo run --locked -p xtask -- verify-evidence-set runner-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-runner-lifecycle-evidence-v2
+          path: runner-evidence
+          if-no-files-found: error
+          retention-days: 14

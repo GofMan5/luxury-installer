@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">Luxury Installer</title>
+  <desc id="description">Social preview for the secure cross-platform installer toolchain with a Rust core and Tauri TypeScript desktop shell.</desc>
+
+  <rect width="1200" height="630" fill="#0D0D0D"/>
+  <rect x="1" y="1" width="1198" height="628" fill="none" stroke="#2B2B2B" stroke-width="2"/>
+  <path d="M1 1h312" stroke="#10A37F" stroke-width="3"/>
+
+  <g transform="translate(72 72)">
+    <rect width="116" height="116" fill="#171717" stroke="#2B2B2B" stroke-width="2"/>
+    <path d="m31 45 27-16 27 16v33L58 94 31 78Z" fill="#111111" stroke="#10A37F" stroke-width="3"/>
+    <path d="m31 45 27 16 27-16M58 61v33" fill="none" stroke="#10A37F" stroke-width="3"/>
+    <path d="M58 34v15m-7-6 7 7 7-7" fill="none" stroke="#F3F3F3" stroke-width="3"/>
+    <rect x="88" y="16" width="12" height="12" fill="#10A37F" stroke="#0D0D0D" stroke-width="3"/>
+  </g>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="222" y="107" fill="#9A9A9A" font-size="17" font-weight="600" letter-spacing="4">OPEN INSTALLER TOOLCHAIN</text>
+    <text x="218" y="169" fill="#F3F3F3" font-size="54" font-weight="700" letter-spacing="-2">Luxury<tspan fill="#10A37F"> Installer</tspan></text>
+
+    <text x="72" y="297" fill="#F3F3F3" font-size="58" font-weight="650" letter-spacing="-2">Package once.</text>
+    <text x="72" y="365" fill="#F3F3F3" font-size="58" font-weight="650" letter-spacing="-2">Install <tspan fill="#10A37F">safely</tspan> everywhere.</text>
+    <text x="76" y="416" fill="#9A9A9A" font-size="21">Manifest-first installers: Rust security core, Tauri 2 + TypeScript desktop shell.</text>
+
+    <path d="M76 474h1048" stroke="#2B2B2B" stroke-width="2"/>
+
+    <g font-size="14" font-weight="700" letter-spacing="3" fill="#7D7D7D">
+      <text x="76" y="518">PACKAGE</text>
+      <text x="415" y="518">RUNTIME</text>
+      <text x="754" y="518">BUILD LOOP</text>
+    </g>
+    <g font-size="22" font-weight="600" fill="#F3F3F3">
+      <text x="76" y="558">Deterministic .luxpkg</text>
+      <text x="415" y="558">Native per target</text>
+      <text x="754" y="558">cargo quick</text>
+    </g>
+    <g font-size="16" fill="#9A9A9A">
+      <text x="76" y="587">SHA-256 content objects</text>
+      <text x="415" y="587">Transactional + rollback</text>
+      <text x="754" y="587">GUI stays out of core builds</text>
+    </g>
+  </g>
+
+  <g transform="translate(978 78)">
+    <path d="M0 0h146v146H0Z" fill="#111111" stroke="#2B2B2B" stroke-width="2"/>
+    <path d="M28 39h55m-55 22h89M28 83h70" stroke="#7D7D7D" stroke-width="4"/>
+    <path d="m80 119 13 13 28-31" fill="none" stroke="#10A37F" stroke-width="5"/>
+    <rect x="115" y="17" width="14" height="14" fill="#10A37F"/>
+  </g>
+</svg>

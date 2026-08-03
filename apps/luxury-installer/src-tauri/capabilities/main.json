@@ -1,0 +1,29 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Narrow capability set for the single local Luxury Installer window.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "allow-get-app-mode",
+    "allow-get-bootstrap",
+    "allow-create-project",
+    "allow-open-project",
+    "allow-reload-project",
+    "allow-reveal-project",
+    "allow-build-project",
+    "allow-choose-directory",
+    "allow-start-install",
+    "allow-start-uninstall",
+    "allow-cancel-operation",
+    "allow-launch-installed",
+    "allow-reveal-installed",
+    "allow-open-finish-link",
+    "allow-minimize-window",
+    "allow-toggle-maximize-window",
+    "allow-close-window"
+  ]
+}

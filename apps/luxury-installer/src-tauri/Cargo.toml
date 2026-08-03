@@ -1,0 +1,60 @@
+[package]
+name = "luxury-installer-shell"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+publish = false
+autobins = false
+
+[features]
+default = ["studio"]
+studio = []
+setup = []
+
+[lib]
+name = "luxury_installer_shell"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "luxury-installer"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "=2.11.5", default-features = false, features = ["wry", "compression", "common-controls-v6", "x11", "dbus"] }
+tauri-plugin-dialog = "=2.7.2"
+tauri-plugin-opener = "=2.5.4"
+tauri-plugin-single-instance = "=2.4.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "=0.10.1"
+luxury-macos-trust = { path = "../../../crates/luxury-macos-trust" }
+rustix = { version = "=1.1.4", default-features = false, features = ["event", "fs", "net", "process", "std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "=1.1.4", default-features = false, features = ["fs", "net", "process", "std"] }
+
+[target.'cfg(windows)'.dependencies]
+luxury-windows-trust = { path = "../../../crates/luxury-windows-trust" }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[workspace]
+resolver = "3"
+
+[profile.dev]
+debug = "line-tables-only"
+incremental = true
+
+[profile.test]
+debug = "line-tables-only"
+incremental = true
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = "debuginfo"

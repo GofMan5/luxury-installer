@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and authoring help
+    url: https://github.com/GofMan5/luxury-installer/discussions
+    about: Use Discussions for support and design questions.
+  - name: Security vulnerability
+    url: https://github.com/GofMan5/luxury-installer/security/policy
+    about: Read the private reporting policy; do not open a public issue.

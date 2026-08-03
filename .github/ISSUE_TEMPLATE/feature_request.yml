@@ -1,0 +1,47 @@
+name: Feature request
+description: Propose one concrete installer or authoring improvement.
+title: "feature: "
+labels: [enhancement, triage]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What real package-author or installer-user problem is not solved today?
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful end-to-end behavior, not an implementation framework.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Primary surface
+      options: [Package manifest, Runtime/rollback, CLI/stdio, Studio, Setup UI, Native packaging/signing, Build/CI, Documentation]
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Trust and platform impact
+      description: Note untrusted input, privilege, filesystem, rollback, cancellation, or OS-specific implications.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Existing alternatives
+      description: How do Inno Setup, NSIS, platform tools, or the current Luxury workflow handle this today?
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I checked the roadmap/status and existing issues.
+          required: true
+        - label: The request does not require arbitrary post-install shell commands or renderer filesystem authority.
+          required: true

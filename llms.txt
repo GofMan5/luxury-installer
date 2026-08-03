@@ -1,0 +1,166 @@
+# Luxury Installer
+
+> Open-source cross-platform installer tooling with a Rust security/runtime core and a Tauri 2 + React + TypeScript presentation shell.
+
+Status: functional development preview, version 0.1.x. User-scope lifecycle, Studio, bound-payload Setup, unsigned host-native runner assembly, and source-level authenticated system install/uninstall/launch flows exist. Signed-final native lifecycle evidence, platform signing/notarization, release-grade filesystem closure, and a downloaded verified release matrix are incomplete. Never call this production-ready.
+
+Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying glib 0.18.5 / RUSTSEC-2024-0429; do not add an audit ignore or claim Linux release readiness until the final graph removes it and is audited again.
+
+## Read first
+
+- /AGENTS.md: mandatory working contract
+- /MEMORY.md: durable architecture, protocol, package, and build decisions
+- /docs/ai-build.md: exact agent workflow and gate selection
+- /docs/architecture.md: dependency, process, transaction, trust, runner, and evidence boundaries
+- /docs/design/design-system.md: Tauri renderer visual/accessibility contract
+- /docs/privileged-helper.md: required system-scope elevation and peer-authentication boundary
+- /CONTRIBUTING.md: contribution and handoff checklist
+- /SECURITY.md: security scope and known ceilings
+- /README.md: public product overview
+
+## Toolchains and workspaces
+
+- Rust 1.96.0, edition 2024, Cargo resolver 3
+- Node.js 22.12.0, pnpm 10.26.2
+- Tauri 2.11.5, React 19, strict TypeScript 5, Vite 7, Zod 4
+- Root Cargo workspace: product crates, CLI, xtask; lockfile /Cargo.lock
+- Standalone desktop Cargo workspace: /apps/luxury-installer/src-tauri; own Cargo.lock; excluded from root workspace
+- Frontend lockfile: /apps/luxury-installer/pnpm-lock.yaml
+- Bootstrap once: pnpm --dir apps/luxury-installer install --frozen-lockfile
+- Use pnpm; do not create npm/yarn lockfiles
+
+## Fast commands
+
+- cargo test -p <crate>: narrow core behavior
+- cargo quick --locked: default root-workspace tests; no Tauri graph
+- cargo core-check: root-workspace type check
+- cargo gui-check: renderer contracts + strict TypeScript + Vite build + locked standalone Tauri check
+- cargo tauri-test: standalone Tauri Rust tests
+- cargo tauri-clippy: standalone Tauri all-target Clippy with -D warnings
+- cargo ci: root fmt + locked quick + isolated desktop check
+- cargo full-test --locked: broad root workspace/all-target gate
+- cargo dist: full core tests + host backend + checked frontend; no runner/signing claim
+- cargo studio-assemble: verified payload-free authoring Studio for current host only; Linux/macOS also publish a deterministic mode-preserving tar.gz, which is the CI upload unit
+- cargo runner-smoke: native packaged recovery/cancel/launch/lifecycle + Tauri entrypoint + cleanup + local evidence schema v2
+- cargo assemble -- <absolute-package.luxpkg>: verified unsigned-v1 runner for current host only
+- cargo windows-setup -- <absolute-package.luxpkg> <absolute-nsis-3.12.zip>: unsigned Windows development container
+- Do not repeat broad gates without new code or evidence
+
+## Process topology
+
+- React renderer -> exact Tauri invoke/events -> Rust Tauri shell -> bounded JSONL v2 over child stdin/stdout -> luxury stdio -> Rust use cases
+- Renderer owns presentation/accessibility only
+- Rust Tauri shell owns native dialogs, bound project/package/path authority, backend lifecycle, transport validation, event correlation, and public error mapping
+- luxury stdio owns machine-facing composition
+- luxury-engine owns use cases/ports; luxury-platform owns mutations; luxury-bundle owns archive trust; luxury-compiler owns project/package assembly; luxury-spec owns portable values
+- Compiler output uses same-directory `tempfile` atomic replacement and rejects link/reparse/non-file targets; do not reintroduce deterministic backup names or `exists -> rename` publication.
+- No business policy in renderer or shell composition
+- No common/utils dump, one-implementation factory, or speculative feature flag
+
+## Tauri boundary
+
+- Debug without --package starts Studio
+- Debug with one absolute --package starts Setup
+- Default release feature studio uses a fixed backend resource and no payload
+- Release feature setup is mutually exclusive and uses fixed native backend/payload resources
+- --trusted-publisher-key and LUXURY_BACKEND_PATH are debug-only absolute paths
+- Setup is not a .luxpkg browser: no picker, drag-and-drop, file input, or renderer-supplied package/root path
+- Studio renderer sends pathless create/open/reveal/reload/build intent; Rust shell owns dialog results and active project/output path
+- Studio authoring loop is create/open -> native folder editor -> reload -> build; do not add an embedded editor, file importer, or renderer path argument
+- Setup renderer receives display review + hasEntrypoint and sends pathless destination/install/uninstall/cancel/reveal/launch intent
+- Exact capability grants event listen/unlisten, window dragging, and named app commands only
+- Renderer has no generic shell/fs/dialog/opener/process permission
+- Production CSP is local-only; loopback Vite/WebSocket origins exist only in devCsp
+- Missing Tauri bridge/backend/payload/trust fails closed; never add fake preview data
+- Normal desktop bootstrap must reject an elevated process before creating a webview; only windowless --verify-* may run elevated
+- Windows --verify-* must complete the strict one-shot packaged-backend named-pipe probe with mutual kernel PID binding; this is transport proof, not UAC/token/Authenticode/system authority
+- Before authenticated Windows runas, pin the exact helper without write/delete sharing, match its embedded signer to the process-image-bound running Tauri signer, and retain the guard through ShellExecuteExW
+- Routine CI keeps format, quick, GUI, and focused Windows luxury-windows-trust + luxury-platform jobs separate
+- Routine CI jobs are explicitly time-boxed; the manual native matrix is capped per host. Do not combine them into one long serial gate.
+
+## CLI surface
+
+- luxury stdio [--trusted-publisher-key <absolute-public.pem>]
+- luxury init <project-dir>
+- luxury build <project-dir> <out.luxpkg> [--signing-key-stdin]
+- luxury publisher-key-id <public.pem>
+- luxury prepare-rotation <package-id> <version> <current-key-id> --next-signing-key-stdin
+- luxury inspect <package.luxpkg> [--trusted-publisher-key <public.pem>]
+- luxury prepare-install <package.luxpkg> <install-base> <state-root> [--trusted-publisher-key <public.pem>]
+- luxury install <package.luxpkg> <install-base> <state-root> [--trusted-publisher-key <public.pem>] [--allow-unsigned] [--accept-license] [--allow-downgrade] [--allow-publisher-migration]
+- luxury uninstall <package-id> <install-base> <state-root>
+- luxury launch <package-id> <install-base> <state-root>
+- Development prefix: cargo run -p luxury -- <command>
+- Keep state-root outside the removable install tree
+
+## Package trust
+
+- format_version 1: unsigned; SHA-256 integrity only; explicit unsigned consent required
+- format_version 2: Ed25519 exact-manifest signature; matching external SPKI trust anchor required; no unsigned fallback
+- format_version 3: A signs completed manifest/payload; B signs domain-separated package/version/A/B rotation proof
+- schema_version is independent; schema 2 adds exact-file install.entrypoint; schema 3 adds bounded authenticated plain-text package.license
+- Windows entrypoint requires .exe; Linux/macOS requires executable=true
+- No entrypoint args, package environment, auto-run, scripts, or generic actions framework
+- luxury.toml is untrusted and capped at 1 MiB before parsing
+- Signing keys are bounded PKCS#8 PEM through stdin only; never path/argument/JSONL/log/fixture
+- A and B private keys never enter one process
+- Ownership receipt v4 stores payload signer, authorized publisher, and optional entrypoint
+- Trusted rotation requires installed A and strictly higher SemVer; fresh/legacy/unsigned/replay/equal/downgrade/self rotation fails
+
+## JSONL protocol v2
+
+- One bounded JSON object per line on inherited stdin/stdout; stdout is protocol-only
+- Methods: defaults, initProject, validateProject, buildProject, inspect, prepareInstall, install, uninstall, launch, cancel
+- Validate protocol version, request ID, method params, absolute paths, results, errors, events, tags, bounds, and cross-field relations on both sides
+- Tauri client bounds line size and pending requests; ordinary requests and shutdown have finite deadlines
+- EOF/malformed output/exit/shutdown fails or drains pending work and reaps the child
+- Setup close owns one bounded cancellation/cleanup budget. Repeated native close or Alt+F4 remains prevented until Rust marks the final programmatic close ready after terminal cleanup; never let a second close event bypass rollback.
+- prepareInstall is read-only/advisory; real install independently reopens/authenticates/recovers/reassesses/rechecks
+- allowUnsigned and acceptLicense are separate explicit consents; allowPublisherMigration is legacy/unsigned adoption authority only and never identity
+- Setup package/root/entrypoint authority stays in Rust shell
+- Uninstall is pathless from renderer and aggregate-only publicly
+- Launch is zero-argument, receipt-owned, direct, no shell/env/auto-run/forwarded streams; successful spawn is not cancellable
+- Backend progress keeps one latest pending frame and flushes before non-progress/terminal output; shell validates counters and correlates events
+- Private signing keys never enter JSONL
+
+## Transaction and safety invariants
+
+- Change shape: spec -> use case -> adapter -> CLI/GUI
+- Treat manifest/archive/path/hash/JSONL/Tauri input/receipt/journal as untrusted
+- Reject absolute/parent/UNC/device/ADS paths, ambiguous aliases, links/reparse points, and special files
+- prepare/authenticate/preflight before mutation; lock then journal destructive work; rollback/recover every mutation
+- Ownership receipt lives outside removable install tree
+- Preserve unknown/content-modified/mode-modified files on uninstall
+- Install root cannot overlap state_root/receipts, state_root/transactions, or state_root/locks
+- All production no-clobber renames require a must-use durability token; no check-then-rename fallback
+- Linux/macOS use descriptor-relative no-follow parents and parent sync; source-leaf/pre-open ABA remains
+- Windows uses write-through rename and handle-bound checks where implemented; parent/reparse binding and general directory durability remain incomplete
+- Capacity preflight is a caller-visible snapshot with bounded headroom, not space reservation
+- Human CLI and ordinary JSONL composition remain user-scope. System mutation is reachable only through the Tauri shell's authenticated, action-separated Windows/Linux/macOS helper composition roots; portable or unsigned native containers fail closed where their platform trust prerequisite is absent.
+- Never claim power-loss safety, hostile-same-user isolation, or cross-platform race closure
+
+## Native runner and evidence v2
+
+- Assembly is host-native, no-clobber, unsigned-v1 only
+- Builds dist backend, checks frontend/Tauri, builds standalone locked Tauri release shell, stages fixed backend/payload resources, rejects trust resource, verifies hashes/identity, runs --verify-runner, publishes under ignored dist/
+- Windows layout: launcher + backend/ + payload/
+- Linux layout: usr/bin launcher + usr/lib/Luxury Installer resources
+- macOS layout: exact-bound Luxury Installer.app/Contents/Info.plist + Contents/MacOS + Contents/Resources
+- Signed v2/v3 assembly stays disabled until native container trust is independently verifiable
+- runner-smoke cleans its full QA tree before evidence publication
+- Evidence schemaVersion=2 records target, shell kind/version, package identity/fingerprint, backend/payload/frontendTree/launcher hashes, lifecycle counts, and explicit normal lifecycle/cleanup/Tauri checks
+- Evidence has no timestamp/path/signature and is not attestation
+- Recovery/cancellation/receipt-owned launch gate the command but are not separate evidence fields
+- Exact combined x86_64 set: linux-x86_64.json, windows-x86_64.json, macos-x86_64.json
+- CI configuration is not runtime proof; use downloaded evidence artifacts
+
+## Local desktop QA
+
+- Studio: cargo build -p luxury && pnpm --dir apps/luxury-installer run dev:app
+- Setup: pnpm --dir apps/luxury-installer exec tauri dev -- -- --package="<absolute-package.luxpkg>"
+- Signed Setup may append --trusted-publisher-key="<absolute-public.pem>"
+- No screenshots are required by the repository contract; report only checks actually run
+
+## Agent handoff
+
+Inspect status before editing, preserve concurrent/unrelated work, run the smallest relevant gate, and report exact results plus unverified OS/security/release coverage. Update /MEMORY.md only when architecture, package, protocol, or build contract changes. Never commit keys, tokens, payload builds, target/, node_modules/, frontend out/, runner output, evidence fixtures, or temporary QA files.

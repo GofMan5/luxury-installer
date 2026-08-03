@@ -1,0 +1,26 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+luxury-windows-trust.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+flate2.workspace = true
+rustix.workspace = true
+tar.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+luxury-macos-trust.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
