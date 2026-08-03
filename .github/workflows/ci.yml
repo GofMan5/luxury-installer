@@ -122,7 +122,7 @@ jobs:
       - if: runner.os != 'Linux'
         run: cargo studio-assemble
       - name: Upload verified Studio artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: studio-${{ matrix.label }}
           path: ${{ matrix.studio_path }}
@@ -136,7 +136,7 @@ jobs:
           xvfb-run -a cargo linux-packages -- target/linux-package-smoke.luxpkg
       - if: runner.os == 'Linux'
         name: Upload inspected Linux development packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-native-packages-development-${{ matrix.label }}
           path: target/linux-packages/**
@@ -147,7 +147,7 @@ jobs:
       - if: runner.os != 'Linux'
         run: cargo runner-smoke
       - name: Upload lifecycle evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runner-lifecycle-${{ matrix.label }}
           path: target/runner-evidence/${{ matrix.evidence }}
@@ -169,7 +169,7 @@ jobs:
           path: runner-evidence
           merge-multiple: true
       - run: cargo run --locked -p xtask -- verify-evidence-set runner-evidence
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: verified-runner-lifecycle-evidence-v2
           path: runner-evidence
