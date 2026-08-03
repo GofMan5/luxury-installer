@@ -1,5 +1,10 @@
 # Project memory
 
+## 2026-08-03 — fixed adaptive window and completion hierarchy
+
+- Desktop startup derives a fixed 3:2 logical size from the current monitor work area and scale factor, caps it at `1080x720`, then locks min/max and disables resize/maximize. Compact CSS switches at 840 px; renderer, invoke list, build manifest and exact ACL contain no maximize authority.
+- Install completion uses a left-aligned summary, a separate bounded grid for reveal/finish links, and an unambiguous footer where `Готово` is always primary and optional launch is secondary. No screenshots are generated because visual verification is manual by explicit user request.
+
 ## 2026-08-03 — versioned private user state
 
 - User state now starts at a fresh versioned root (`State-v1` on Windows/macOS, `luxury-installer-v1` under XDG state on Linux). The install root remains unchanged; pre-policy preview state is preserved in place and is never silently hardened or trusted.

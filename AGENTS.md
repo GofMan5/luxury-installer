@@ -1,5 +1,7 @@
 # Luxury Installer working contract
 
+- Любое изменение CLI, JSONL protocol, package schema, build/release contract или GUI authoring flow в том же вертикальном срезе обновляет все публичные источники истины: release-oriented `README.md`, нужный guide в `docs/`, `llms.txt` и `skills/luxury-installer-cli/`. Если изменились архитектурные границы или формат состояния, обновляй также локальный игнорируемый `MEMORY.md`. Устаревшие команды, флаги, примеры и возможности удаляй сразу; противоречащие друг другу документы запрещены.
+
 - Windows peer Authenticode проверяет объект реально запущенного image: pathname открывается без write/delete sharing, затем связывается с process section через `ProcessImageFileMapping`. Path-only WinTrust/recheck запрещён.
 - System Setup получает initial/retry maintenance state только через privileged read-only `prepare_system_install`; нельзя фабриковать `Install`. Setup-действие атомарно захватывает startup gate до проверки close-state; закрытие ждёт переход `starting -> active`, отменяет активную установку/удаление и ждёт terminal rollback/cleanup в одном bounded budget. Повторный native close/Alt+F4 остаётся заблокирован до отдельного `close_ready`, который Rust выставляет только после shutdown; cancel-request использует остаток того же budget.
 - Windows release подписывается в две фазы: одинаково подписанные inner Tauri/backend -> `cargo windows-release-setup` -> внешняя подпись outer NSIS -> `cargo verify-windows-release`. Ни один Rust command не принимает signing credentials.
