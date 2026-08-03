@@ -105,7 +105,19 @@ fn journal_scope_mismatch_fails_before_recovery_mutation() {
         Err(error) => error,
         Ok(_) => panic!("user authority recovered a system journal"),
     };
-    assert!(error.to_string().contains("scope System"), "{error}");
+    match error.kind() {
+        PortErrorKind::State => {
+            assert!(error.to_string().contains("scope System"), "{error}");
+        }
+        #[cfg(windows)]
+        PortErrorKind::Permission => {
+            assert!(
+                error.to_string().contains("private directory ACL"),
+                "{error}"
+            );
+        }
+        kind => panic!("unexpected journal scope mismatch error {kind:?}: {error}"),
+    }
     assert_eq!(tree_snapshot(&install_base), install_before);
     assert_eq!(tree_snapshot(&state_root), state_before);
 }
@@ -232,7 +244,8 @@ fn recovery_rejects_a_dangling_state_directory_link() {
     let state_root = temp.path().join("state");
     let package_id = PackageId::parse("dev.luxury.demo").unwrap();
     let paths = transaction_paths(&install_base, &state_root, &package_id);
-    fs::create_dir_all(paths.state_dir.parent().unwrap()).unwrap();
+    ensure_directory(&state_root, Some(InstallScope::User)).unwrap();
+    ensure_directory(paths.state_dir.parent().unwrap(), Some(InstallScope::User)).unwrap();
     let missing_target = temp.path().join("missing-target");
     if let Err(error) = create_directory_link(&paths.state_dir, &missing_target) {
         #[cfg(windows)]
