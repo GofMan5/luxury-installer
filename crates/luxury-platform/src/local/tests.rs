@@ -449,6 +449,35 @@ fn prepare_rejects_a_non_writable_destination_without_mutating_it() {
     assert!(!state_root.exists());
 }
 
+#[cfg(any(unix, windows))]
+#[test]
+fn prepare_rejects_non_private_existing_state_without_mutating_it() {
+    let temp = tempdir().unwrap();
+    let install_base = temp.path().join("install");
+    let state_root = temp.path().join("state");
+    fs::create_dir(&state_root).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&state_root, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let before = tree_snapshot(&state_root);
+    let (bundle, manifest) = bundle(&[("app.bin", b"owned")]);
+
+    let error = prepare_install(
+        manifest,
+        &mut LocalInstallAdapter::new(bundle, &install_base, &state_root),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        InstallError::Port { source, .. } if source.kind() == PortErrorKind::Permission
+    ));
+    assert_eq!(tree_snapshot(&state_root), before);
+    assert!(!install_base.exists());
+}
+
 #[cfg(windows)]
 #[test]
 fn prepare_rejects_program_files_for_a_non_elevated_user_without_mutating_it() {

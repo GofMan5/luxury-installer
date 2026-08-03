@@ -1,5 +1,11 @@
 # Project memory
 
+## 2026-08-03 — versioned private user state
+
+- User state now starts at a fresh versioned root (`State-v1` on Windows/macOS, `luxury-installer-v1` under XDG state on Linux). The install root remains unchanged; pre-policy preview state is preserved in place and is never silently hardened or trusted.
+- Read-only install preflight validates every existing fixed private-state directory before reporting `Ready`, so an unsafe ACL/mode cannot pass preparation and then fail only after the user starts installation.
+- Regression evidence: the legacy Windows root fails read-only preflight with `Permission`, the fresh root returns `Ready` without being created, `cargo quick --locked` passes 323 tests, `luxury-platform` passes 117/117, and affected Clippy passes with warnings denied.
+
 ## 2026-08-03 — explicit completion, bounded details, and safe finish links
 
 - Setup no longer jumps from the terminal install event to the finish screen. It keeps the completed progress surface, enables `Далее`, and only then exposes reveal, receipt-owned launch, configured links, and close.

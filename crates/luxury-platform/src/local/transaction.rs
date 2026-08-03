@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 const LEGACY_JOURNAL_VERSION: u32 = 2;
 const RECEIPT_BOUND_JOURNAL_VERSION: u32 = 3;
 const JOURNAL_VERSION: u32 = 4;
+const PRIVATE_STATE_DIRECTORIES: [&str; 3] = ["locks", "transactions", "receipts"];
 pub(super) const MAX_JOURNAL_BYTES: u64 = 128 * 1024 * 1024;
 // The byte cap normally binds first; this separately bounds tiny-record amplification.
 pub(super) const MAX_JOURNAL_RECORDS: usize = 1_000_010;
@@ -261,10 +262,29 @@ pub(super) fn lock_package(
     scope: InstallScope,
 ) -> Result<File, PortError> {
     ensure_directory(state_root, Some(scope))?;
-    ensure_directory(&state_root.join("locks"), Some(scope))?;
-    ensure_directory(&state_root.join("transactions"), Some(scope))?;
-    ensure_directory(&state_root.join("receipts"), Some(scope))?;
+    for directory in PRIVATE_STATE_DIRECTORIES {
+        ensure_directory(&state_root.join(directory), Some(scope))?;
+    }
     acquire_package_lock(state_root, package_id, scope)
+}
+
+pub(super) fn validate_existing_private_state(
+    state_root: &Path,
+    scope: InstallScope,
+) -> Result<(), PortError> {
+    if !path_present(state_root)? {
+        return Ok(());
+    }
+    validate_directory(state_root)?;
+    validate_private_directory(state_root, scope)?;
+    for directory in PRIVATE_STATE_DIRECTORIES {
+        let path = state_root.join(directory);
+        if path_present(&path)? {
+            validate_directory(&path)?;
+            validate_private_directory(&path, scope)?;
+        }
+    }
+    Ok(())
 }
 
 #[allow(

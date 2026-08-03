@@ -26,7 +26,7 @@ pub fn default_user_roots() -> io::Result<(PathBuf, PathBuf)> {
     #[cfg(windows)]
     {
         let base = required_absolute_env("LOCALAPPDATA")?.join("Luxury Installer");
-        Ok((base.join("Apps"), base.join("State")))
+        Ok((base.join("Apps"), base.join("State-v1")))
     }
     #[cfg(target_os = "macos")]
     {
@@ -34,7 +34,7 @@ pub fn default_user_roots() -> io::Result<(PathBuf, PathBuf)> {
             .join("Library")
             .join("Application Support")
             .join("Luxury Installer");
-        Ok((base.join("Apps"), base.join("State")))
+        Ok((base.join("Apps"), base.join("State-v1")))
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -45,7 +45,7 @@ pub fn default_user_roots() -> io::Result<(PathBuf, PathBuf)> {
             .unwrap_or_else(|| home.join(".local").join("state"));
         Ok((
             data.join("luxury-installer").join("apps"),
-            state.join("luxury-installer"),
+            state.join("luxury-installer-v1"),
         ))
     }
 }
@@ -83,7 +83,21 @@ fn absolute_env_path(name: &str, path: PathBuf) -> io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::default_system_roots;
+    use super::{default_system_roots, default_user_roots};
+
+    #[test]
+    fn user_roots_are_absolute_separate_and_versioned() {
+        let (install, state) = default_user_roots().unwrap();
+        assert!(install.is_absolute());
+        assert!(state.is_absolute());
+        assert!(!install.starts_with(&state));
+        assert!(!state.starts_with(&install));
+
+        #[cfg(any(windows, target_os = "macos"))]
+        assert!(state.ends_with("State-v1"));
+        #[cfg(all(unix, not(target_os = "macos")))]
+        assert!(state.ends_with("luxury-installer-v1"));
+    }
 
     #[test]
     fn system_roots_are_absolute_separate_and_fixed() {
