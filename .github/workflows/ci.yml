@@ -96,6 +96,9 @@ jobs:
             studio_path: dist/luxury-installer-studio-*-macos-x86_64.tar.gz
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: runner.os == 'macOS'
+        name: Use a non-symlinked macOS temporary root
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - if: runner.os == 'Linux'
         name: Install Tauri Linux dependencies
         run: |
