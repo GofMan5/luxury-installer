@@ -17,10 +17,9 @@
         "title": "Luxury Installer",
         "width": 1080,
         "height": 720,
-        "minWidth": 900,
-        "minHeight": 600,
         "center": true,
-        "resizable": true,
+        "resizable": false,
+        "maximizable": false,
         "decorations": false,
         "transparent": false,
         "dragDropEnabled": false

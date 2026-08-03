@@ -81,7 +81,6 @@ export function createTauriBridge(): LuxuryBridge {
     revealInstalled: () => invokeCommand('reveal_installed'),
     openFinishLink: (index) => invokeCommand('open_finish_link', { index }),
     minimizeWindow: () => invokeCommand('minimize_window'),
-    toggleMaximizeWindow: () => invokeCommand('toggle_maximize_window'),
     closeWindow: () => invokeCommand('close_window'),
   }
   return Object.freeze(bridge)

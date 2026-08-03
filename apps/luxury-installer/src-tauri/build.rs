@@ -15,7 +15,6 @@ fn main() {
         "reveal_installed",
         "open_finish_link",
         "minimize_window",
-        "toggle_maximize_window",
         "close_window",
     ];
     tauri_build::try_build(

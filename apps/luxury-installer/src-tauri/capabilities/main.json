@@ -7,7 +7,6 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-start-dragging",
-    "core:window:allow-internal-toggle-maximize",
     "allow-get-app-mode",
     "allow-get-bootstrap",
     "allow-create-project",
@@ -23,7 +22,6 @@
     "allow-reveal-installed",
     "allow-open-finish-link",
     "allow-minimize-window",
-    "allow-toggle-maximize-window",
     "allow-close-window"
   ]
 }

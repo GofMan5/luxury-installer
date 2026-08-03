@@ -301,6 +301,41 @@ test('production renderer needs no inline script or style capability', async () 
   assert.match(progress, /key: 'recovering',[\s\S]*?label: 'Проверка состояния'/)
 })
 
+test('desktop window is DPI-fitted, fixed, and has no maximize authority', async () => {
+  const [configText, shell, chrome, bridge, types, capabilities, build] = await Promise.all([
+    readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/components/WindowChrome.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/tauri-bridge.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/types.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/capabilities/main.json', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/build.rs', import.meta.url), 'utf8'),
+  ])
+  const window = JSON.parse(configText).app.windows[0]
+  assert.equal(window.resizable, false)
+  assert.equal(window.maximizable, false)
+  assert.equal('minWidth' in window, false)
+  assert.equal('minHeight' in window, false)
+  assert.match(shell, /fixed_window_size/)
+  assert.match(shell, /work_area\(\)/)
+  for (const source of [chrome, bridge, types, capabilities, build]) {
+    assert.equal(source.includes('toggleMaximize'), false)
+    assert.equal(source.includes('toggle_maximize'), false)
+    assert.equal(source.includes('toggle-maximize'), false)
+  }
+})
+
+test('completion screen separates optional links from primary completion actions', async () => {
+  const [result, styles] = await Promise.all([
+    readFile(new URL('../src/renderer/src/features/installer/ResultView.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8'),
+  ])
+  assert.match(result, /className="result-links"/)
+  assert.match(result, /className="result-actions result-actions--complete"/)
+  assert.match(result, /className="primary-button"[\s\S]*?'Закрываем…' : 'Готово'/)
+  assert.match(styles, /\.result-links\s*\{[\s\S]*?grid-template-columns:/)
+})
+
 test('renderer keeps flat square Codex geometry', async () => {
   const [styles, emptyView] = await Promise.all([
     readFile(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8'),

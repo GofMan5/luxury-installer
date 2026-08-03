@@ -85,7 +85,7 @@ code:focus-visible {
 
 .window-controls__error {
   align-self: center;
-  max-width: min(520px, calc(100vw - 170px));
+  max-width: min(520px, calc(100vw - 112px));
   margin-right: auto;
   padding: 0 14px;
   overflow: hidden;
@@ -973,6 +973,71 @@ code:focus-visible {
   margin-top: 24px;
 }
 
+.result-screen--complete {
+  width: min(640px, 100%);
+  align-items: stretch;
+  text-align: left;
+}
+
+.result-complete__summary {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.result-complete__summary .result-mark {
+  margin: 2px 0 0;
+}
+
+.result-complete__summary h1 {
+  margin: 0;
+}
+
+.result-complete__summary p {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.result-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.result-links .secondary-button {
+  min-width: 0;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.result-links .secondary-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-actions--complete {
+  justify-content: flex-end;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.result-actions--complete .primary-button,
+.result-actions--complete .secondary-button {
+  min-width: 126px;
+}
+
+.result-screen--complete .result-action-error {
+  margin: 24px 0 0;
+}
+
 .error-message {
   width: min(570px, 100%);
   margin: 30px 0 24px;
@@ -1431,7 +1496,7 @@ code:focus-visible {
 
 }
 
-@media (max-width: 760px) {
+@media (max-width: 840px) {
   .app-shell {
     grid-template-columns: 1fr;
   }
@@ -1514,6 +1579,27 @@ code:focus-visible {
   .studio-sections {
     grid-template-columns: 1fr;
   }
+
+  .result-links {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .result-complete__summary {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .result-actions--complete {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .result-actions--complete .primary-button,
+  .result-actions--complete .secondary-button {
+    width: 100%;
+  }
 }
 
 @media (max-width: 480px) {
@@ -1580,6 +1666,16 @@ code:focus-visible {
 
   .operation {
     min-height: 48px;
+  }
+
+  .result-links {
+    margin-top: 20px;
+    padding-top: 14px;
+  }
+
+  .result-actions--complete {
+    margin-top: 14px;
+    padding-top: 14px;
   }
 
   .studio-project {

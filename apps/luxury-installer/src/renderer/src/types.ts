@@ -165,6 +165,5 @@ export interface LuxuryBridge {
   revealInstalled(): Promise<void>
   openFinishLink(index: number): Promise<void>
   minimizeWindow(): Promise<void>
-  toggleMaximizeWindow(): Promise<void>
   closeWindow(): Promise<void>
 }
