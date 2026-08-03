@@ -32,11 +32,15 @@ use luxury_engine::{
 use luxury_platform::{
     LocalInstallAdapter, LocalLaunchAdapter, LocalUninstallAdapter, default_user_roots,
 };
-use luxury_spec::{FinishLink, InstallScope, Manifest, PackageId, Target};
+use luxury_spec::{
+    Architecture, FinishLink, InstallDirectory, InstallPolicy, InstallScope, Manifest,
+    OperatingSystem, Package, PackageId, PackagePath, Target,
+};
+use semver::Version;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-const PROTOCOL_VERSION: u32 = 2;
+const PROTOCOL_VERSION: u32 = 3;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 32_768;
 const MAX_MESSAGE_BYTES: usize = 1024;
@@ -319,6 +323,63 @@ fn handle_request<W: Write>(
                 Err(error) => write_error(output, Some(&request.id), error),
             }
         }
+        "updateProject" => {
+            if active_mutation.is_some() || active_operation.is_some() {
+                return write_busy(output, &request.id);
+            }
+            match decode_params::<UpdateProjectParams>(&request) {
+                Ok(params) => {
+                    match start_operation(request.id.clone(), sender.clone(), move |cancel| {
+                        update_project(params, cancel)
+                    }) {
+                        Ok(operation) => {
+                            *active_operation = Some(operation);
+                            true
+                        }
+                        Err(error) => write_error(output, Some(&request.id), error),
+                    }
+                }
+                Err(error) => write_error(output, Some(&request.id), error),
+            }
+        }
+        "importPayload" => {
+            if active_mutation.is_some() || active_operation.is_some() {
+                return write_busy(output, &request.id);
+            }
+            match decode_params::<ImportPayloadParams>(&request) {
+                Ok(params) => {
+                    match start_operation(request.id.clone(), sender.clone(), move |cancel| {
+                        import_payload(params, cancel)
+                    }) {
+                        Ok(operation) => {
+                            *active_operation = Some(operation);
+                            true
+                        }
+                        Err(error) => write_error(output, Some(&request.id), error),
+                    }
+                }
+                Err(error) => write_error(output, Some(&request.id), error),
+            }
+        }
+        "resolvePayloadPath" => {
+            if active_mutation.is_some() || active_operation.is_some() {
+                return write_busy(output, &request.id);
+            }
+            match decode_params::<ResolvePayloadPathParams>(&request) {
+                Ok(params) => {
+                    match start_operation(request.id.clone(), sender.clone(), move |_| {
+                        resolve_payload_path(params)
+                    }) {
+                        Ok(operation) => {
+                            *active_operation = Some(operation);
+                            true
+                        }
+                        Err(error) => write_error(output, Some(&request.id), error),
+                    }
+                }
+                Err(error) => write_error(output, Some(&request.id), error),
+            }
+        }
         "buildProject" => {
             if active_mutation.is_some() || active_operation.is_some() {
                 return write_busy(output, &request.id);
@@ -497,6 +558,66 @@ fn validate_project(path: PathBuf, cancel: &AtomicBool) -> Result<ProjectResult,
     ProjectResult::from_manifest(&manifest, "project_validation_failed")
 }
 
+fn update_project(
+    params: UpdateProjectParams,
+    cancel: &AtomicBool,
+) -> Result<ProjectResult, WireError> {
+    let project_path = absolute_path(params.project_path, "projectPath")?;
+    let update = luxury_compiler::ProjectUpdate {
+        package: Package {
+            id: params.package.id,
+            name: params.package.name,
+            version: params.package.version,
+            publisher: params.package.publisher,
+            description: params.package.description,
+            license: params.package.license,
+        },
+        target: Target {
+            os: params.target.os,
+            arch: params.target.arch,
+        },
+        install: InstallPolicy {
+            scope: params.install.scope,
+            directory: params.install.directory,
+            allow_downgrade: params.install.allow_downgrade,
+            entrypoint: params.install.entrypoint,
+            show_install_log: params.install.show_install_log,
+            finish_links: params.install.finish_links,
+        },
+        executable: params.executable,
+    };
+    let manifest = luxury_compiler::update_project_cancellable(project_path, update, cancel)
+        .map_err(|error| compiler_error(error, "project_update_failed"))?;
+    ProjectResult::from_manifest(&manifest, "project_update_failed")
+}
+
+fn import_payload(
+    params: ImportPayloadParams,
+    cancel: &AtomicBool,
+) -> Result<ProjectResult, WireError> {
+    let project_path = absolute_path(params.project_path, "projectPath")?;
+    let source_paths = params
+        .source_paths
+        .into_iter()
+        .map(|path| absolute_path(path, "sourcePaths"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let manifest = luxury_compiler::import_payload_cancellable(project_path, &source_paths, cancel)
+        .map_err(|error| compiler_error(error, "project_import_failed"))?;
+    ProjectResult::from_manifest(&manifest, "project_import_failed")
+}
+
+fn resolve_payload_path(
+    params: ResolvePayloadPathParams,
+) -> Result<ResolvePayloadPathResult, WireError> {
+    let project_path = absolute_path(params.project_path, "projectPath")?;
+    let selected_path = absolute_path(params.selected_path, "selectedPath")?;
+    let path = luxury_compiler::resolve_payload_file(project_path, selected_path)
+        .map_err(|error| compiler_error(error, "payload_path_invalid"))?;
+    Ok(ResolvePayloadPathResult {
+        path: path.to_string(),
+    })
+}
+
 fn build_project(
     params: BuildProjectParams,
     cancel: &AtomicBool,
@@ -515,6 +636,18 @@ fn build_project(
 fn compiler_error(error: luxury_compiler::CompilerError, fallback: &'static str) -> WireError {
     let code = match &error {
         luxury_compiler::CompilerError::Cancelled => "cancelled",
+        luxury_compiler::CompilerError::ProjectChanged => "state_conflict",
+        luxury_compiler::CompilerError::ImportConflict(_) => "collision",
+        luxury_compiler::CompilerError::Io { action, .. }
+            if matches!(
+                *action,
+                "rolling back payload import"
+                    | "restoring starter payload"
+                    | "inspecting starter payload restore path"
+            ) =>
+        {
+            "rollback_failed"
+        }
         _ => fallback,
     };
     WireError::new(code, error.to_string())
@@ -1338,6 +1471,66 @@ struct BuildProjectParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateProjectParams {
+    project_path: String,
+    package: UpdatePackageParams,
+    target: UpdateTargetParams,
+    install: UpdateInstallParams,
+    #[serde(default)]
+    executable: Option<Vec<PackagePath>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ImportPayloadParams {
+    project_path: String,
+    source_paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResolvePayloadPathParams {
+    project_path: String,
+    selected_path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdatePackageParams {
+    id: PackageId,
+    name: String,
+    version: Version,
+    publisher: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    license: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateTargetParams {
+    os: OperatingSystem,
+    arch: Architecture,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateInstallParams {
+    scope: InstallScope,
+    directory: InstallDirectory,
+    #[serde(default)]
+    allow_downgrade: bool,
+    #[serde(default)]
+    entrypoint: Option<PackagePath>,
+    #[serde(default)]
+    show_install_log: bool,
+    #[serde(default)]
+    finish_links: Vec<FinishLink>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InspectParams {
     package_path: String,
 }
@@ -1653,6 +1846,7 @@ struct ProjectResult {
     target: TargetResult,
     install: InstallResultPolicy,
     payload: PayloadResult,
+    authoring: ProjectAuthoringResult,
 }
 
 impl ProjectResult {
@@ -1684,6 +1878,7 @@ impl ProjectResult {
                 name: manifest.package.name.clone(),
                 publisher: manifest.package.publisher.clone(),
                 version,
+                description: manifest.package.description.clone(),
                 license: manifest.package.license.clone(),
             },
             target: TargetResult::from(manifest.target),
@@ -1702,6 +1897,15 @@ impl ProjectResult {
                 bytes: manifest.payload_size(),
                 install_log,
             },
+            authoring: ProjectAuthoringResult {
+                allow_downgrade: manifest.install.allow_downgrade,
+                entrypoint: manifest
+                    .install
+                    .entrypoint
+                    .as_ref()
+                    .map(ToString::to_string),
+                executable_files: manifest.files.iter().filter(|file| file.executable).count(),
+            },
         })
     }
 }
@@ -1712,6 +1916,11 @@ struct ProjectBuildResult {
     #[serde(flatten)]
     project: ProjectResult,
     output_path: String,
+}
+
+#[derive(Serialize)]
+struct ResolvePayloadPathResult {
+    path: String,
 }
 
 #[derive(Serialize)]
@@ -1802,6 +2011,8 @@ struct PackageResult {
     publisher: String,
     version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     license: Option<String>,
 }
 
@@ -1824,6 +2035,14 @@ struct PayloadResult {
     bytes: u64,
     #[serde(rename = "installLog", skip_serializing_if = "Option::is_none")]
     install_log: Option<InstallLogResult>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectAuthoringResult {
+    allow_downgrade: bool,
+    entrypoint: Option<String>,
+    executable_files: usize,
 }
 
 #[derive(Serialize)]
@@ -2028,13 +2247,17 @@ mod tests {
     const OTHER_TRUSTED_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAPUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=\n-----END PUBLIC KEY-----\n";
 
     fn stdio_request(method: &str, params: Value) -> Value {
+        stdio_request_version(PROTOCOL_VERSION, method, params)
+    }
+
+    fn stdio_request_version(protocol_version: u32, method: &str, params: Value) -> Value {
         let (sender, receiver) = mpsc::sync_channel(CHANNEL_CAPACITY);
         let mut active_mutation = None;
         let mut active_operation = None;
         let mut output = Vec::new();
         assert!(handle_request(
             Ok(Request {
-                protocol_version: PROTOCOL_VERSION,
+                protocol_version,
                 id: "studio-1".into(),
                 method: method.into(),
                 params,
@@ -2161,23 +2384,26 @@ mod tests {
     #[test]
     fn request_contract_is_strict_and_ids_are_safe_to_echo() {
         let request = parse_request(
-            br#"{"protocolVersion":2,"id":"request_1","method":"defaults","params":{}}"#,
+            br#"{"protocolVersion":3,"id":"request_1","method":"defaults","params":{}}"#,
         )
         .unwrap();
         assert_eq!(request.id, "request_1");
 
         let snake_case = parse_request(
-            br#"{"protocol_version":2,"id":"request_2","method":"defaults","params":{}}"#,
+            br#"{"protocol_version":3,"id":"request_2","method":"defaults","params":{}}"#,
         )
         .unwrap_err();
         assert_eq!(snake_case.id.as_deref(), Some("request_2"));
         assert_eq!(snake_case.error.code, "invalid_request");
 
         let unsafe_id = parse_request(
-            br#"{"protocolVersion":2,"id":"bad id","method":"defaults","params":{}}"#,
+            br#"{"protocolVersion":3,"id":"bad id","method":"defaults","params":{}}"#,
         )
         .unwrap_err();
         assert_eq!(unsafe_id.id, None);
+
+        let previous = stdio_request_version(2, "defaults", json!({}));
+        assert_eq!(previous["error"]["code"], "unsupported_protocol");
     }
 
     #[test]
@@ -2244,7 +2470,12 @@ mod tests {
                 "directory": "Luxury Demo",
                 "hasEntrypoint": false
             },
-            "payload": {"files": 1, "bytes": 29}
+            "payload": {"files": 1, "bytes": 29},
+            "authoring": {
+                "allowDowngrade": false,
+                "entrypoint": null,
+                "executableFiles": 0
+            }
         });
         assert_eq!(initialized["result"], expected);
 
@@ -2260,6 +2491,122 @@ mod tests {
         expected_build["outputPath"] = json!(output_path);
         assert_eq!(built["result"], expected_build);
         assert!(output.is_file());
+    }
+
+    #[test]
+    fn studio_update_wire_is_strict_validated_and_returns_authoring_state() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        let project_path = project.to_str().unwrap();
+        assert_eq!(
+            stdio_request("initProject", json!({"projectPath": project_path}))["type"],
+            "result"
+        );
+        let target = Target::host();
+        let params = json!({
+            "projectPath": project_path,
+            "package": {
+                "id": "dev.human.app",
+                "name": "Human App",
+                "version": "2.1.0",
+                "publisher": "Human Publisher",
+                "description": "Release-ready app",
+                "license": "Read these terms."
+            },
+            "target": {
+                "os": target.os.to_string(),
+                "arch": target.arch.to_string()
+            },
+            "install": {
+                "scope": "user",
+                "directory": "Human App",
+                "allowDowngrade": true,
+                "entrypoint": null,
+                "showInstallLog": true,
+                "finishLinks": [{
+                    "label": "Документация",
+                    "url": "https://example.com/docs"
+                }]
+            }
+        });
+        let updated = stdio_request("updateProject", params.clone());
+        assert_eq!(updated["type"], "result");
+        assert_eq!(
+            updated["result"]["schemaVersion"],
+            luxury_spec::LICENSE_SCHEMA_VERSION
+        );
+        assert_eq!(updated["result"]["package"]["id"], "dev.human.app");
+        assert_eq!(
+            updated["result"]["package"]["description"],
+            "Release-ready app"
+        );
+        assert_eq!(updated["result"]["install"]["showInstallLog"], true);
+        assert_eq!(updated["result"]["authoring"]["allowDowngrade"], true);
+
+        let before = fs::read(project.join("luxury.toml")).unwrap();
+        let mut extra = params;
+        extra["unexpected"] = json!(true);
+        let rejected = stdio_request("updateProject", extra);
+        assert_eq!(rejected["error"]["code"], "invalid_params");
+        assert_eq!(fs::read(project.join("luxury.toml")).unwrap(), before);
+    }
+
+    #[test]
+    fn studio_import_wire_keeps_source_paths_out_of_results_and_rejects_overwrite() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        let source = temp.path().join("app.bin");
+        fs::write(&source, b"application").unwrap();
+        let project_path = project.to_str().unwrap();
+        let source_path = source.to_str().unwrap();
+        assert_eq!(
+            stdio_request("initProject", json!({"projectPath": project_path}))["type"],
+            "result"
+        );
+
+        let imported = stdio_request(
+            "importPayload",
+            json!({"projectPath": project_path, "sourcePaths": [source_path]}),
+        );
+        assert_eq!(imported["type"], "result");
+        assert_eq!(imported["result"]["payload"]["files"], 1);
+        assert_eq!(imported["result"]["payload"]["bytes"], 11);
+        assert!(!imported.to_string().contains(source_path));
+        assert_eq!(
+            fs::read(project.join("payload/app.bin")).unwrap(),
+            b"application"
+        );
+        assert!(!project.join("payload/hello.txt").exists());
+        let resolved = stdio_request(
+            "resolvePayloadPath",
+            json!({
+                "projectPath": project_path,
+                "selectedPath": project.join("payload/app.bin").to_str().unwrap()
+            }),
+        );
+        assert_eq!(resolved["result"], json!({"path": "app.bin"}));
+        let outside = stdio_request(
+            "resolvePayloadPath",
+            json!({"projectPath": project_path, "selectedPath": source_path}),
+        );
+        assert_eq!(outside["error"]["code"], "payload_path_invalid");
+
+        fs::write(&source, b"replacement").unwrap();
+        let rejected = stdio_request(
+            "importPayload",
+            json!({"projectPath": project_path, "sourcePaths": [source_path]}),
+        );
+        assert_eq!(rejected["error"]["code"], "collision");
+        assert_eq!(
+            fs::read(project.join("payload/app.bin")).unwrap(),
+            b"application"
+        );
+
+        let relative = stdio_request(
+            "importPayload",
+            json!({"projectPath": project_path, "sourcePaths": ["relative.bin"]}),
+        );
+        assert_eq!(relative["error"]["code"], "invalid_params");
     }
 
     #[test]
@@ -2586,7 +2933,7 @@ mod tests {
         assert_eq!(
             lines[0],
             json!({
-                "protocolVersion": 2,
+                "protocolVersion": PROTOCOL_VERSION,
                 "type": "result",
                 "id": "request-1",
                 "result": {"requestId": "install-1", "accepted": true}

@@ -4,7 +4,7 @@ This is the shortest reliable workflow for coding agents and human contributors.
 
 ## Start here
 
-1. Read [`AGENTS.md`](../AGENTS.md) and [`MEMORY.md`](../MEMORY.md).
+1. Read [`llms.txt`](../llms.txt), this guide, and the applicable architecture/security document. Use the workspace's local working contract when one is supplied.
 2. Inspect `git status --short`; preserve unrelated or concurrent work.
 3. Trace the existing caller and trust boundary before editing.
 4. Select one vertical slice: `spec → use case → adapter → CLI/GUI`.
@@ -90,9 +90,19 @@ cargo fmt --manifest-path apps/luxury-installer/src-tauri/Cargo.toml -- --check
 
 The root `cargo fmt --all` cannot discover an excluded workspace.
 
-## Build and inspect packages
+## CLI and AI automation
 
-The human CLI is the complete authoring surface:
+Start from live help, not remembered syntax:
+
+```console
+cargo run -p luxury -- --help
+cargo run -p luxury -- build --help
+cargo run -p luxury -- help install
+```
+
+Every public subcommand supports non-mutating `--help`/`-h`. The complete agent workflow and exact JSONL examples live in [`skills/luxury-installer-cli`](../skills/luxury-installer-cli/SKILL.md); read its [CLI reference](../skills/luxury-installer-cli/references/cli.md) before implementing a client.
+
+Create, build, and inspect from the human CLI:
 
 ```console
 cargo run -p luxury -- init <project-dir>
@@ -100,7 +110,7 @@ cargo run -p luxury -- build <project-dir> <out-v1.luxpkg>
 cargo run -p luxury -- inspect <out-v1.luxpkg>
 ```
 
-`init` creates only its exact generated `luxury.toml` and `payload/hello.txt`. A repeated init requires byte-identical content and never overwrites user changes. `luxury.toml` is untrusted and capped at `1 MiB` before parsing.
+`init` creates only its exact generated `luxury.toml` and starter payload. A repeated init requires byte-identical content and never overwrites user changes. Studio's first successful real import removes that starter only when it remains the exact sole template file. `luxury.toml` is untrusted and capped at `1 MiB` before parsing; optional `package.description` is bounded plain text in the core spec even for hand-edited projects.
 
 Signed v2:
 
@@ -132,6 +142,8 @@ Use the matching external `--trusted-publisher-key` for v2/v3. Keep state outsid
 
 For schema-v3 projects with `package.license`, inspect the exact bounded text first and add `--accept-license` to the install command. JSONL/Tauri use the equivalent `acceptLicense` boolean; Rust rejects missing consent before platform access.
 
+Reuse the same install/state roots when a newer downloaded package is installed over an existing one. Rust classifies a strictly newer SemVer as update and equal precedence with the exact same file set/entrypoint as repair. Lower versions require both package policy and explicit CLI caller approval; Setup never silently authorizes downgrade. Update/repair preserve unknown data, remove obsolete owned files only when unchanged, publish a new external receipt atomically, and restore the previous bytes/receipt on cancellation or failure.
+
 ## Run the desktop locally
 
 Build the core backend and start Studio:
@@ -141,7 +153,7 @@ cargo build -p luxury
 pnpm --dir apps/luxury-installer run dev:app
 ```
 
-Debug mode without a package starts Studio. Rust-owned native dialogs choose project and output paths. Renderer commands contain intent only.
+Debug mode without a package starts Studio. Its validated form edits unsigned format-1 package/target/install/license/link settings. Rust-owned native dialogs create/open projects, import regular files or a directory without overwrite, select an entrypoint inside the payload, reveal the project, and choose output. The renderer receives portable authoring state but never native source/output paths or generic filesystem authority.
 
 Start bound-payload Setup by passing application arguments after the Tauri CLI separator:
 
@@ -166,7 +178,7 @@ React renderer
     │ exact Tauri invoke/events
     ▼
 Rust Tauri shell
-    │ JSONL v2 over child stdin/stdout
+    │ JSONL v3 over child stdin/stdout
     ▼
 luxury stdio
     │
@@ -193,7 +205,7 @@ Rules:
 - The Tauri backend client bounds line size and pending requests, correlates every response/event, gives cancellable ordinary operations five minutes plus 30 seconds to return their terminal cancellation, and leaves launch timeout-free after spawn.
 - EOF, malformed output, child exit, or shutdown must fail/drain pending requests and reap the child; never wait on a reader while leaving its pipe open.
 - Keep absolute paths at the Rust shell/backend boundary. Setup renderer intents stay pathless.
-- Studio renderer never submits project/output paths; Rust shell owns dialog results and active project state.
+- Studio renderer never submits project/output/source paths. Its native import and entrypoint commands are pathless; Rust shell owns dialog results and active project state, while `luxury-compiler` validates/copies/rolls back authoring mutations.
 - Setup shell owns package path/fingerprint/ID, state root, install base, latest preparation, and entrypoint authority.
 - Optional `install.show_install_log` stays default-off and exposes only a bounded display projection of authenticated manifest paths. `install.finish_links` accepts at most four HTTPS URLs; renderer sends only an index to the Rust-owned opener command.
 - System-scope initial/retry preparation goes through the authenticated privileged helper and calls Rust `prepare_system_install`; never fabricate a fresh-install state when the protected receipt is unreadable from the desktop process.
@@ -204,6 +216,7 @@ Rules:
 - Cancellation targets one active cancellable operation ID. Successful launch is not rollbackable and is not cancellable.
 - A Setup command acquires the shared startup gate before rechecking close-state. Window close waits for `starting -> active`, requests cooperative cancellation, and waits for the correlated terminal rollback/cleanup signal before closing backend/window. Repeated native close/Alt+F4 stays prevented until Rust sets `close_ready` for the final programmatic close; the cancel request consumes only the remaining shared timeout budget. Timeout leaves the process alive for retry.
 - Keep progress bounded and validate counters before emitting renderer events.
+- Current JSONL methods are `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, and `cancel`. Add/remove/rename one only with synchronized CLI reference, `llms.txt`, skill, Tauri types, and tests.
 
 Renderer commands and events must stay synchronized with Rust command signatures and strict Zod contracts. A compile pass alone is not proof of wire compatibility; update the focused contract test when the shape changes.
 
@@ -345,7 +358,7 @@ Before a public release, still require native container signing, signer provenan
 5. Run one focused gate; add broader gates only when scope justifies them.
 6. Check standalone Tauri formatting/lockfile when `src-tauri` changed.
 7. Inspect the final diff and search for generated artifacts, secrets, stale runtime terms, and accidental broad dependencies. Tauri `gen/schemas` and `permissions/autogenerated` are build/editor outputs and stay ignored.
-8. Update root `MEMORY.md` only when architecture, package, protocol, or build contract changed.
+8. Synchronize changed commands, JSONL methods, package fields, and authoring behavior across README, the relevant guide, `llms.txt`, and the public CLI skill; update workspace-local memory when the local contract requires it.
 9. State unverified OS, signing, privilege, durability, and hostile-filesystem ceilings plainly.
 
 Never commit signing keys, certificates, tokens, built payloads, `target/`, `node_modules/`, frontend `out/`, native runner output, evidence fixtures, or temporary QA files.

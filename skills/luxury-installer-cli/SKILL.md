@@ -1,0 +1,42 @@
+---
+name: luxury-installer-cli
+description: Build, inspect, install, update, repair, uninstall, launch, and automate Luxury Installer projects and .luxpkg packages through the current human CLI or strict JSONL v3 stdio protocol. Use for Luxury Installer repository work, AI-driven package authoring, CI scripts, signed-package flows, Studio backend operations, installer lifecycle automation, or any request involving the luxury command.
+---
+
+# Luxury Installer CLI
+
+Use the repository's current binary as authority. Never guess a command or retain a removed flag.
+
+## Start
+
+1. Locate the repository root and inspect `git status --short`.
+2. Read the applicable local working contract when the workspace supplies one.
+3. Run `luxury --help` and `luxury <command> --help`; in a source checkout use `cargo run -p luxury -- <command> --help`.
+4. Read [references/cli.md](references/cli.md) before authoring a package, mutating an installation, or implementing JSONL.
+5. Preserve unrelated work and use absolute paths for every JSONL filesystem field.
+
+## Choose the interface
+
+- Use the human CLI for one-shot local or CI commands.
+- Use `luxury stdio` for a long-lived typed v3 subprocess, Tauri integration, or an AI tool that needs structured results, progress, cancellation, and stable errors.
+- Use Studio for interactive unsigned-v1 authoring. Keep native file and folder selection in the Rust shell; never give the renderer generic filesystem authority.
+
+## Execute safely
+
+- Run `prepare-install` or JSONL `prepareInstall` before an install/update/repair when presenting a plan. Treat it as advisory and read-only; the mutation repeats every authoritative check.
+- Keep `state-root` outside the removable install tree and reuse the same roots for update, repair, uninstall, and launch.
+- Pass a private signing key only through the documented stdin flag. Never put it in argv, JSONL, environment variables, project files, logs, fixtures, or chat output.
+- Supply consent flags only when the caller explicitly authorized them. Never infer unsigned, license, downgrade, or publisher-migration consent.
+- Treat stdout from `luxury stdio` as protocol-only. Drain stdout and stderr independently and keep request IDs unique while active.
+- Do not retry collisions, state conflicts, publisher failures, downgrade denial, or reinstall mismatch without changing the proven cause.
+
+## Verify
+
+Run the smallest relevant gate:
+
+- CLI or compiler behavior: `cargo test -p luxury --locked` or a focused test filter.
+- Core cross-crate behavior: `cargo quick --locked`.
+- Renderer/Tauri contract: `cargo gui-check` after the frozen pnpm install.
+- Release work: use the host-native command and signing order documented in the repository; never infer release readiness from a cross-check.
+
+Before finishing, compare every changed command, JSONL method, package field, and example across `README.md`, `docs/`, `llms.txt`, this skill, and local project memory when its contract changed. Remove stale syntax instead of preserving compatibility prose.

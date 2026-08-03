@@ -224,12 +224,19 @@ test('Studio paths stay display-only and absolute', () => {
     name: 'Luxury Demo',
     publisher: 'Luxury Software',
     version: '1.0.0',
+    description: null,
+    license: null,
     hasLicense: false,
     targetOs: 'windows',
     targetArch: 'x86_64',
     installDirectory: 'Luxury Demo',
     scope: 'user',
+    allowDowngrade: false,
+    entrypoint: null,
     hasEntrypoint: false,
+    showInstallLog: false,
+    finishLinks: [],
+    executableFiles: 0,
     files: 1,
     bytes: 29,
   }
@@ -248,7 +255,12 @@ test('Studio paths stay display-only and absolute', () => {
     false,
   )
   assert.equal(
-    studioProjectSchema.safeParse({ ...project, schemaVersion: 3, hasLicense: true }).success,
+    studioProjectSchema.safeParse({
+      ...project,
+      schemaVersion: 3,
+      license: 'Terms',
+      hasLicense: true,
+    }).success,
     true,
   )
 })
@@ -278,6 +290,14 @@ test('renderer invokes only consent and pathless intents', async () => {
     assert.equal(bridge.includes(forbidden), false)
   }
   assert.match(bridge, /reloadProject: \(\) => parsedInvoke\('reload_project', studioProjectSchema\)/)
+  assert.match(
+    bridge,
+    /importProjectFiles: \(\) => parsedInvoke\('import_project_files', studioProjectSchema\.nullable\(\)\)/,
+  )
+  assert.match(
+    bridge,
+    /parsedInvoke\('choose_project_entrypoint', portablePath\.nullable\(\)\)/,
+  )
   assert.match(bridge, /revealProject: \(\) => invokeCommand\('reveal_project'\)/)
   assert.match(bridge, /openFinishLink: \(index\) => invokeCommand\('open_finish_link', \{ index \}\)/)
   assert.equal(bridge.includes('{ url'), false)

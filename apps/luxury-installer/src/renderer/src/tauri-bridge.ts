@@ -8,10 +8,12 @@ import {
   installRequestSchema,
   installerReviewSchema,
   operationStartedSchema,
+  portablePath,
   publicErrorSchema,
   setupEventSchema,
   studioBuildResultSchema,
   studioProjectSchema,
+  studioProjectUpdateSchema,
 } from './bridge-contracts'
 import type { LuxuryBridge, SetupEvent } from './types'
 
@@ -59,6 +61,15 @@ export function createTauriBridge(): LuxuryBridge {
     createProject: () => parsedInvoke('create_project', studioProjectSchema.nullable()),
     openProject: () => parsedInvoke('open_project', studioProjectSchema.nullable()),
     reloadProject: () => parsedInvoke('reload_project', studioProjectSchema),
+    updateProject: (input) =>
+      parsedInvoke('update_project', studioProjectSchema, {
+        input: studioProjectUpdateSchema.parse(input),
+      }),
+    importProjectFiles: () => parsedInvoke('import_project_files', studioProjectSchema.nullable()),
+    importProjectDirectory: () =>
+      parsedInvoke('import_project_directory', studioProjectSchema.nullable()),
+    chooseProjectEntrypoint: () =>
+      parsedInvoke('choose_project_entrypoint', portablePath.nullable()),
     revealProject: () => invokeCommand('reveal_project'),
     buildProject: () => parsedInvoke('build_project', studioBuildResultSchema.nullable()),
     chooseDirectory: () => parsedInvoke('choose_directory', installerReviewSchema.nullable()),

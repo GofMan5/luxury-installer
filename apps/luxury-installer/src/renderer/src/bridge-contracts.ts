@@ -23,6 +23,11 @@ const fingerprint = z.string().regex(/^[0-9a-f]{64}$/)
 const targetOs = z.enum(['windows', 'linux', 'macos'])
 const targetArch = z.enum(['x86_64', 'aarch64'])
 const scope = z.enum(['user', 'system'])
+const packageId = z
+  .string()
+  .min(3)
+  .max(128)
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/)
 const installAction = z.enum(['install', 'update', 'repair'])
 const installDirectory = z.string().min(1).max(255).refine(
   (value) =>
@@ -53,6 +58,17 @@ const installLogPath = z
           !component.endsWith(' ') &&
           !/[\u0000-\u001f\u007f-\u009f]/u.test(component),
       ),
+  )
+export const portablePath = z
+  .string()
+  .min(1)
+  .max(4_096)
+  .refine(
+    (value) =>
+      !value.startsWith('/') &&
+      !value.startsWith('\\') &&
+      !/[\\:\0]/u.test(value) &&
+      value.split('/').every((component) => component.length > 0 && component !== '.' && component !== '..'),
   )
 const installLog = z
   .object({ files: z.array(installLogPath).max(128), omittedFiles: count })
@@ -166,32 +182,57 @@ export const studioProjectSchema = z
     projectPath: path,
     formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
     schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
-    packageId: z
-      .string()
-      .min(3)
-      .max(128)
-      .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/),
+    packageId,
     name: text,
     publisher: text,
     version: text,
+    description: text.nullable(),
+    license: license.nullable(),
     hasLicense: z.boolean(),
     targetOs,
     targetArch,
     installDirectory,
     scope,
+    allowDowngrade: z.boolean(),
+    entrypoint: portablePath.nullable(),
     hasEntrypoint: z.boolean(),
+    showInstallLog: z.boolean(),
+    finishLinks: z.array(finishLink).max(4),
+    executableFiles: count,
     files: count,
     bytes: count,
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.hasEntrypoint && value.schemaVersion < 2) {
+    if (value.hasEntrypoint !== (value.entrypoint !== null) || (value.hasEntrypoint && value.schemaVersion < 2)) {
       context.addIssue({ code: 'custom', path: ['hasEntrypoint'], message: 'schema mismatch' })
     }
-    if (value.hasLicense && value.schemaVersion < 3) {
+    if (value.hasLicense !== (value.license !== null) || (value.hasLicense && value.schemaVersion < 3)) {
       context.addIssue({ code: 'custom', path: ['hasLicense'], message: 'schema mismatch' })
     }
+    if (value.executableFiles > value.files) {
+      context.addIssue({ code: 'custom', path: ['executableFiles'], message: 'count mismatch' })
+    }
   })
+
+export const studioProjectUpdateSchema = z
+  .object({
+    packageId,
+    name: text,
+    publisher: text,
+    version: text,
+    description: text.nullable(),
+    license: license.nullable(),
+    targetOs,
+    targetArch,
+    installDirectory,
+    scope,
+    allowDowngrade: z.boolean(),
+    entrypoint: portablePath.nullable(),
+    showInstallLog: z.boolean(),
+    finishLinks: z.array(finishLink).max(4),
+  })
+  .strict()
 
 export const studioBuildResultSchema = z
   .object({ outputPath: path, project: studioProjectSchema })

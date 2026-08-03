@@ -64,14 +64,38 @@ export interface StudioProject {
   name: string
   publisher: string
   version: string
+  description: string | null
+  license: string | null
   hasLicense: boolean
   targetOs: TargetOs
   targetArch: TargetArch
   installDirectory: string
   scope: InstallScope
+  allowDowngrade: boolean
+  entrypoint: string | null
   hasEntrypoint: boolean
+  showInstallLog: boolean
+  finishLinks: FinishLink[]
+  executableFiles: number
   files: number
   bytes: number
+}
+
+export interface StudioProjectUpdate {
+  packageId: string
+  name: string
+  publisher: string
+  version: string
+  description: string | null
+  license: string | null
+  targetOs: TargetOs
+  targetArch: TargetArch
+  installDirectory: string
+  scope: InstallScope
+  allowDowngrade: boolean
+  entrypoint: string | null
+  showInstallLog: boolean
+  finishLinks: FinishLink[]
 }
 
 export interface StudioBuildResult {
@@ -154,6 +178,10 @@ export interface LuxuryBridge {
   createProject(): Promise<StudioProject | null>
   openProject(): Promise<StudioProject | null>
   reloadProject(): Promise<StudioProject>
+  updateProject(input: StudioProjectUpdate): Promise<StudioProject>
+  importProjectFiles(): Promise<StudioProject | null>
+  importProjectDirectory(): Promise<StudioProject | null>
+  chooseProjectEntrypoint(): Promise<string | null>
   revealProject(): Promise<void>
   buildProject(): Promise<StudioBuildResult | null>
   chooseDirectory(): Promise<InstallerReview | null>

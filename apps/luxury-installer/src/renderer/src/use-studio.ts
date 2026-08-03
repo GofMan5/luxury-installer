@@ -1,12 +1,15 @@
 import { useRef, useState } from 'react'
 
-import type { LuxuryBridge, StudioBuildResult, StudioProject } from './types'
+import type { LuxuryBridge, StudioBuildResult, StudioProject, StudioProjectUpdate } from './types'
 
 export type StudioView =
   | { kind: 'empty' }
   | { kind: 'loading'; action: 'create' | 'open' }
   | { kind: 'ready'; project: StudioProject }
   | { kind: 'refreshing'; project: StudioProject }
+  | { kind: 'saving'; project: StudioProject }
+  | { kind: 'importing'; project: StudioProject }
+  | { kind: 'choosingEntrypoint'; project: StudioProject }
   | { kind: 'building'; project: StudioProject }
   | { kind: 'built'; result: StudioBuildResult }
   | { kind: 'error'; message: string; project: StudioProject | null }
@@ -17,6 +20,9 @@ export interface StudioController {
   createProject(): Promise<void>
   openProject(): Promise<void>
   reloadProject(): Promise<void>
+  updateProject(input: StudioProjectUpdate): Promise<void>
+  importProject(kind: 'files' | 'directory'): Promise<void>
+  chooseProjectEntrypoint(): Promise<string | null>
   revealProject(): Promise<void>
   buildProject(): Promise<void>
   dismissError(): void
@@ -75,6 +81,21 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     }
   }
 
+  async function updateProject(input: StudioProjectUpdate) {
+    if (busy.current) return
+    const project = projectFrom(view)
+    if (!project || project.formatVersion !== 1) return
+    busy.current = true
+    setView({ kind: 'saving', project })
+    try {
+      setView({ kind: 'ready', project: await bridge.updateProject(input) })
+    } catch (error) {
+      setView({ kind: 'error', message: errorMessage(error), project })
+    } finally {
+      busy.current = false
+    }
+  }
+
   async function buildProject() {
     if (busy.current) return
     const project = projectFrom(view)
@@ -87,6 +108,42 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
       setView(result ? { kind: 'built', result } : previous)
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project })
+    } finally {
+      busy.current = false
+    }
+  }
+
+  async function importProject(kind: 'files' | 'directory') {
+    if (busy.current) return
+    const project = projectFrom(view)
+    if (!project || project.formatVersion !== 1) return
+    busy.current = true
+    setView({ kind: 'importing', project })
+    try {
+      const imported = await (kind === 'files'
+        ? bridge.importProjectFiles()
+        : bridge.importProjectDirectory())
+      setView({ kind: 'ready', project: imported ?? project })
+    } catch (error) {
+      setView({ kind: 'error', message: errorMessage(error), project })
+    } finally {
+      busy.current = false
+    }
+  }
+
+  async function chooseProjectEntrypoint(): Promise<string | null> {
+    if (busy.current) return null
+    const project = projectFrom(view)
+    if (!project || project.formatVersion !== 1) return null
+    busy.current = true
+    setView({ kind: 'choosingEntrypoint', project })
+    try {
+      const selected = await bridge.chooseProjectEntrypoint()
+      setView({ kind: 'ready', project })
+      return selected
+    } catch (error) {
+      setView({ kind: 'error', message: errorMessage(error), project })
+      return null
     } finally {
       busy.current = false
     }
@@ -106,6 +163,9 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     createProject: () => loadProject('create'),
     openProject: () => loadProject('open'),
     reloadProject,
+    updateProject,
+    importProject,
+    chooseProjectEntrypoint,
     revealProject,
     buildProject,
     dismissError,
@@ -113,7 +173,14 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
 }
 
 export function projectFrom(view: StudioView): StudioProject | null {
-  if (view.kind === 'ready' || view.kind === 'refreshing' || view.kind === 'building') {
+  if (
+    view.kind === 'ready' ||
+    view.kind === 'refreshing' ||
+    view.kind === 'saving' ||
+    view.kind === 'importing' ||
+    view.kind === 'choosingEntrypoint' ||
+    view.kind === 'building'
+  ) {
     return view.project
   }
   if (view.kind === 'built') return view.result.project

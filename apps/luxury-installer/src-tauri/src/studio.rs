@@ -3,7 +3,7 @@ use std::{
     sync::{Mutex, atomic::AtomicBool},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
@@ -13,7 +13,10 @@ use crate::{
         AppMode, AppState, ExclusiveGuard, PublicError, valid_install_directory, valid_license,
         valid_package_id, valid_text,
     },
-    backend::{MAX_SAFE_INTEGER, ProjectBuildResult, ProjectResult},
+    backend::{
+        FinishLink, InstallScope, MAX_SAFE_INTEGER, ProjectBuildResult, ProjectResult,
+        ResolvedPayloadPath, TargetArch, TargetOs,
+    },
 };
 
 #[derive(Default)]
@@ -38,14 +41,40 @@ pub(crate) struct StudioProject {
     name: String,
     publisher: String,
     version: String,
+    description: Option<String>,
+    license: Option<String>,
     has_license: bool,
-    target_os: crate::backend::TargetOs,
-    target_arch: crate::backend::TargetArch,
+    target_os: TargetOs,
+    target_arch: TargetArch,
     install_directory: String,
-    scope: crate::backend::InstallScope,
+    scope: InstallScope,
+    allow_downgrade: bool,
+    entrypoint: Option<String>,
     has_entrypoint: bool,
+    show_install_log: bool,
+    finish_links: Vec<FinishLink>,
+    executable_files: u64,
     files: u64,
     bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct StudioProjectUpdate {
+    package_id: String,
+    name: String,
+    publisher: String,
+    version: String,
+    description: Option<String>,
+    license: Option<String>,
+    target_os: TargetOs,
+    target_arch: TargetArch,
+    install_directory: String,
+    scope: InstallScope,
+    allow_downgrade: bool,
+    entrypoint: Option<String>,
+    show_install_log: bool,
+    finish_links: Vec<FinishLink>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -90,6 +119,61 @@ pub(crate) async fn reload_project(
     tauri::async_runtime::spawn_blocking(move || reload_project_sync(&state))
         .await
         .map_err(|_| PublicError::new("internal_error", "Проверка Studio прервана."))?
+}
+
+#[tauri::command]
+pub(crate) async fn update_project(
+    input: StudioProjectUpdate,
+    state: State<'_, AppState>,
+) -> Result<StudioProject, PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || update_project_sync(&state, input))
+        .await
+        .map_err(|_| PublicError::new("internal_error", "Сохранение Studio прервано."))?
+}
+
+#[tauri::command]
+pub(crate) async fn import_project_files(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<StudioProject>, PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || import_project_files_sync(&app, &window, &state))
+        .await
+        .map_err(|_| PublicError::new("internal_error", "Импорт файлов Studio прерван."))?
+}
+
+#[tauri::command]
+pub(crate) async fn import_project_directory(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<StudioProject>, PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        import_project_directory_sync(&app, &window, &state)
+    })
+    .await
+    .map_err(|_| PublicError::new("internal_error", "Импорт папки Studio прерван."))?
+}
+
+#[tauri::command]
+pub(crate) async fn choose_project_entrypoint(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        choose_project_entrypoint_sync(&app, &window, &state)
+    })
+    .await
+    .map_err(|_| PublicError::new("internal_error", "Выбор точки запуска прерван."))?
 }
 
 #[tauri::command]
@@ -187,6 +271,203 @@ fn reload_project_sync(state: &AppState) -> Result<StudioProject, PublicError> {
     Ok(summary)
 }
 
+fn update_project_sync(
+    state: &AppState,
+    input: StudioProjectUpdate,
+) -> Result<StudioProject, PublicError> {
+    let _busy = ExclusiveGuard::acquire(
+        &state.studio.busy,
+        "busy",
+        "Другая операция Studio уже выполняется.",
+    )?;
+    let active = active_project(state)?;
+    if active.summary.format_version != 1 {
+        return Err(PublicError::new(
+            "project_update_failed",
+            "Подписанные проекты редактируются через CLI.",
+        ));
+    }
+    validate_project_update(&input)?;
+    let backend = state.backend().map_err(PublicError::from)?;
+    let project: ProjectResult = backend
+        .request_operation(
+            "updateProject",
+            json!({
+                "projectPath": path_text(&active.path)?,
+                "package": {
+                    "id": input.package_id,
+                    "name": input.name,
+                    "version": input.version,
+                    "publisher": input.publisher,
+                    "description": input.description,
+                    "license": input.license,
+                },
+                "target": {
+                    "os": input.target_os,
+                    "arch": input.target_arch,
+                },
+                "install": {
+                    "scope": input.scope,
+                    "directory": input.install_directory,
+                    "allowDowngrade": input.allow_downgrade,
+                    "entrypoint": input.entrypoint,
+                    "showInstallLog": input.show_install_log,
+                    "finishLinks": input.finish_links,
+                },
+            }),
+        )
+        .map_err(PublicError::from)?;
+    let summary = StudioProject::from_backend(&active.path, project)?;
+    set_active_project(state, active.path, &summary)?;
+    Ok(summary)
+}
+
+fn import_project_files_sync(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+) -> Result<Option<StudioProject>, PublicError> {
+    import_project_payload_sync(app, window, state, false)
+}
+
+fn import_project_directory_sync(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+) -> Result<Option<StudioProject>, PublicError> {
+    import_project_payload_sync(app, window, state, true)
+}
+
+fn import_project_payload_sync(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    directory: bool,
+) -> Result<Option<StudioProject>, PublicError> {
+    let _busy = ExclusiveGuard::acquire(
+        &state.studio.busy,
+        "busy",
+        "Другая операция Studio уже выполняется.",
+    )?;
+    let active = active_project(state)?;
+    if active.summary.format_version != 1 {
+        return Err(PublicError::new(
+            "project_import_failed",
+            "Подписанные проекты изменяются через CLI.",
+        ));
+    }
+    let _dialog = ExclusiveGuard::acquire(
+        &state.dialog_open,
+        "dialog_busy",
+        "Другой системный диалог уже открыт.",
+    )?;
+    let dialog = app
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title(if directory {
+            "Добавить папку в пакет"
+        } else {
+            "Добавить файлы в пакет"
+        });
+    let selected = if directory {
+        dialog.blocking_pick_folder().map(|path| vec![path])
+    } else {
+        dialog.blocking_pick_files()
+    };
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let source_paths = selected
+        .into_iter()
+        .map(|path| {
+            path.into_path().map_err(|_| {
+                PublicError::new("invalid_import_path", "Выбран недопустимый путь импорта.")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let source_paths = source_paths
+        .iter()
+        .map(|path| path_text(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let backend = state.backend().map_err(PublicError::from)?;
+    let project: ProjectResult = backend
+        .request_operation(
+            "importPayload",
+            json!({
+                "projectPath": path_text(&active.path)?,
+                "sourcePaths": source_paths,
+            }),
+        )
+        .map_err(PublicError::from)?;
+    let summary = StudioProject::from_backend(&active.path, project)?;
+    set_active_project(state, active.path, &summary)?;
+    Ok(Some(summary))
+}
+
+fn choose_project_entrypoint_sync(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+) -> Result<Option<String>, PublicError> {
+    let _busy = ExclusiveGuard::acquire(
+        &state.studio.busy,
+        "busy",
+        "Другая операция Studio уже выполняется.",
+    )?;
+    let active = active_project(state)?;
+    if active.summary.format_version != 1 {
+        return Err(PublicError::new(
+            "payload_path_invalid",
+            "Подписанные проекты изменяются через CLI.",
+        ));
+    }
+    let _dialog = ExclusiveGuard::acquire(
+        &state.dialog_open,
+        "dialog_busy",
+        "Другой системный диалог уже открыт.",
+    )?;
+    let payload = active.path.join("payload");
+    let start = if payload.is_dir() {
+        payload.as_path()
+    } else {
+        active.path.as_path()
+    };
+    let selected = app
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title("Выбрать точку запуска")
+        .set_directory(start)
+        .blocking_pick_file()
+        .map(|path| {
+            path.into_path().map_err(|_| {
+                PublicError::new("invalid_import_path", "Выбран недопустимый путь файла.")
+            })
+        })
+        .transpose()?;
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let backend = state.backend().map_err(PublicError::from)?;
+    let resolved: ResolvedPayloadPath = backend
+        .request_operation(
+            "resolvePayloadPath",
+            json!({
+                "projectPath": path_text(&active.path)?,
+                "selectedPath": path_text(&selected)?,
+            }),
+        )
+        .map_err(PublicError::from)?;
+    if !valid_portable_path(&resolved.path) {
+        return Err(PublicError::new(
+            "invalid_backend_output",
+            "Компонент Studio вернул недопустимую точку запуска.",
+        ));
+    }
+    Ok(Some(resolved.path))
+}
+
 fn reveal_project_sync(state: &AppState) -> Result<(), PublicError> {
     let _busy = ExclusiveGuard::acquire(
         &state.studio.busy,
@@ -273,6 +554,7 @@ fn build_project_sync(
         target: result.target,
         install: result.install,
         payload: result.payload,
+        authoring: result.authoring,
     };
     let summary = StudioProject::from_backend(&project.path, project_result)?;
     set_active_project(state, project.path, &summary)?;
@@ -345,10 +627,21 @@ impl StudioProject {
             || !valid_text(&project.package.version)
             || project
                 .package
+                .description
+                .as_deref()
+                .is_some_and(|description| !valid_text(description))
+            || project
+                .package
                 .license
                 .as_deref()
                 .is_some_and(|license| !valid_license(license))
             || !valid_install_directory(&project.install.directory)
+            || project
+                .authoring
+                .entrypoint
+                .as_deref()
+                .is_some_and(|path| !valid_portable_path(path))
+            || project.authoring.executable_files > project.payload.files
             || project.payload.files > MAX_SAFE_INTEGER
             || project.payload.bytes > MAX_SAFE_INTEGER
         {
@@ -365,16 +658,66 @@ impl StudioProject {
             name: project.package.name,
             publisher: project.package.publisher,
             version: project.package.version,
+            description: project.package.description,
+            license: project.package.license.clone(),
             has_license: project.package.license.is_some(),
             target_os: project.target.os,
             target_arch: project.target.arch,
             install_directory: project.install.directory,
             scope: project.install.scope,
+            allow_downgrade: project.authoring.allow_downgrade,
+            entrypoint: project.authoring.entrypoint,
             has_entrypoint: project.install.has_entrypoint,
+            show_install_log: project.install.show_install_log,
+            finish_links: project.install.finish_links,
+            executable_files: project.authoring.executable_files,
             files: project.payload.files,
             bytes: project.payload.bytes,
         })
     }
+}
+
+fn validate_project_update(input: &StudioProjectUpdate) -> Result<(), PublicError> {
+    let optional_text_valid = |value: Option<&str>| value.is_none_or(valid_text);
+    if !valid_package_id(&input.package_id)
+        || !valid_text(&input.name)
+        || !valid_text(&input.publisher)
+        || !valid_text(&input.version)
+        || !optional_text_valid(input.description.as_deref())
+        || input
+            .license
+            .as_deref()
+            .is_some_and(|license| !valid_license(license))
+        || !valid_install_directory(&input.install_directory)
+        || input
+            .entrypoint
+            .as_deref()
+            .is_some_and(|path| !valid_portable_path(path))
+        || input.finish_links.len() > 4
+        || input.finish_links.iter().any(|link| {
+            !valid_text(&link.label)
+                || link.label.chars().count() > 48
+                || link.url.len() > 2_048
+                || !link.url.starts_with("https://")
+                || link.url.contains(['\\', '\0'])
+        })
+    {
+        return Err(PublicError::new(
+            "project_update_failed",
+            "Проверьте поля проекта и повторите сохранение.",
+        ));
+    }
+    Ok(())
+}
+
+fn valid_portable_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4_096
+        && !value.starts_with(['/', '\\'])
+        && !value.contains(['\\', ':', '\0'])
+        && value
+            .split('/')
+            .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."))
 }
 
 fn path_text(path: &Path) -> Result<&str, PublicError> {
@@ -389,7 +732,8 @@ fn path_text(path: &Path) -> Result<&str, PublicError> {
 mod tests {
     use super::*;
     use crate::backend::{
-        InstallPolicy, InstallScope, PackageIdentity, Payload, Target, TargetArch, TargetOs,
+        InstallPolicy, InstallScope, PackageIdentity, Payload, ProjectAuthoring, Target,
+        TargetArch, TargetOs,
     };
 
     fn project(schema_version: u8, license: Option<&str>) -> ProjectResult {
@@ -401,6 +745,7 @@ mod tests {
                 name: "Luxury Demo".into(),
                 publisher: "Luxury Software".into(),
                 version: "1.0.0".into(),
+                description: None,
                 license: license.map(str::to_owned),
             },
             target: Target {
@@ -418,6 +763,11 @@ mod tests {
                 files: 1,
                 bytes: 29,
                 install_log: None,
+            },
+            authoring: ProjectAuthoring {
+                allow_downgrade: false,
+                entrypoint: None,
+                executable_files: 0,
             },
         }
     }

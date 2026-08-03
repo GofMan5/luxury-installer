@@ -401,9 +401,12 @@ fn public_backend_message(code: &str) -> (&str, &'static str) {
             "Недостаточно прав для этой папки. Выберите другую папку в профиле пользователя."
         }
         "project_build_failed" => "Не удалось собрать проект.",
+        "project_import_failed" => "Не удалось добавить выбранные файлы в проект.",
         "project_init_failed" => "Не удалось создать проект.",
         "project_not_open" => "Сначала откройте проект.",
+        "project_update_failed" => "Не удалось сохранить настройки проекта.",
         "project_validation_failed" => "Проверка проекта не пройдена.",
+        "payload_path_invalid" => "Выберите обычный файл внутри payload проекта.",
         "publisher_migration_not_offered" => "Подтверждение смены издателя сейчас недоступно.",
         "publisher_migration_required" => "Требуется подтверждение смены привязки издателя.",
         "publisher_mismatch"
@@ -466,6 +469,14 @@ mod tests {
         assert_eq!(
             public_backend_message("private_backend_detail").0,
             "internal_error"
+        );
+        assert_eq!(
+            public_backend_message("project_import_failed").1,
+            "Не удалось добавить выбранные файлы в проект."
+        );
+        assert_eq!(
+            public_backend_message("payload_path_invalid").1,
+            "Выберите обычный файл внутри payload проекта."
         );
     }
 

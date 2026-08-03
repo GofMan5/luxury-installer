@@ -13,15 +13,23 @@ use luxury_spec::{
     FORMAT_VERSION, FileEntry, InstallPolicy, Manifest, PUBLISHER_ROTATION_FORMAT_VERSION, Package,
     PackagePath, PublisherRotation, SIGNED_FORMAT_VERSION, Sha256Digest, SpecError, Target,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
+
+mod authoring;
+
+pub use authoring::{
+    ProjectUpdate, import_payload, import_payload_cancellable, resolve_payload_file,
+    update_project, update_project_cancellable,
+};
 
 const PROJECT_FILE: &str = "luxury.toml";
 const SAMPLE_FILE: &str = "hello.txt";
 const SAMPLE_PAYLOAD: &[u8] = b"Hello from Luxury Installer.\n";
 const MAX_PROJECT_CONFIG_BYTES: u64 = 1024 * 1024;
+const MAX_IMPORT_SOURCES: usize = 1_024;
 static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Error)]
@@ -59,6 +67,20 @@ pub enum CompilerError {
     InvalidOutput(PathBuf),
     #[error("existing bundle output `{0}` is not a regular file")]
     OutputNotRegular(PathBuf),
+    #[error("only unsigned format 1 projects can be edited in Studio")]
+    ProjectNotEditable,
+    #[error("project configuration changed while Studio was saving it")]
+    ProjectChanged,
+    #[error("payload import requires between 1 and {MAX_IMPORT_SOURCES} source paths")]
+    InvalidImportCount,
+    #[error("payload import contains no regular files")]
+    EmptyImport,
+    #[error("payload import source `{0}` overlaps the project payload")]
+    InvalidImportSource(PathBuf),
+    #[error("payload import source `{0}` changed while it was copied")]
+    ImportSourceChanged(PathBuf),
+    #[error("payload destination `{0}` already exists")]
+    ImportConflict(PathBuf),
     #[error("unsigned builds require project format 1, found {found}")]
     UnsignedBuildFormat { found: u32 },
     #[error("signed builds require project format 2 or 3, found {found}")]
@@ -85,7 +107,7 @@ impl From<toml::de::Error> for CompilerError {
 
 pub type Result<T> = std::result::Result<T, CompilerError>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectConfig {
     format_version: u32,
@@ -103,7 +125,7 @@ const fn legacy_schema_version() -> u32 {
     1
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PayloadConfig {
     directory: PackagePath,
@@ -210,7 +232,17 @@ fn prepare_project(
     let config_path = project_root.join(PROJECT_FILE);
     validate_regular_file(&config_path)?;
     let source = read_project_config(&config_path, cancelled)?;
-    let config: ProjectConfig = toml::from_str(&source)?;
+    prepare_project_source(&project_root, &source, signed_build, output, cancelled)
+}
+
+fn prepare_project_source(
+    project_root: &Path,
+    source: &str,
+    signed_build: Option<bool>,
+    output: Option<&Path>,
+    cancelled: &AtomicBool,
+) -> Result<(PathBuf, Manifest)> {
+    let config: ProjectConfig = toml::from_str(source)?;
     check_cancelled(cancelled)?;
 
     if let Some(signed_build) = signed_build
@@ -238,7 +270,7 @@ fn prepare_project(
     validate_directory_path(&payload_candidate)?;
 
     let payload_root = canonicalize(&payload_candidate, "resolving payload directory")?;
-    ensure_within(&payload_root, &project_root)?;
+    ensure_within(&payload_root, project_root)?;
     if let Some(output) = output {
         reject_output_inside_payload(output, &payload_root)?;
     }
@@ -722,7 +754,7 @@ mod tests {
     use std::fs;
 
     use luxury_bundle::{PackageSigningKey, PackageTrust, open_bundle};
-    use luxury_spec::{ENTRYPOINT_SCHEMA_VERSION, PackageId};
+    use luxury_spec::{ENTRYPOINT_SCHEMA_VERSION, LICENSE_SCHEMA_VERSION, PackageId};
     use sha2::{Digest, Sha256};
     use tempfile::tempdir;
 
@@ -808,6 +840,208 @@ mod tests {
         assert!(manifest.install.show_install_log);
         assert_eq!(manifest.install.finish_links.len(), 1);
         assert_eq!(manifest.install.finish_links[0].label, "Документация");
+    }
+
+    #[test]
+    fn studio_update_is_validated_and_atomically_replaces_only_unsigned_config() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        init_project(&project).unwrap();
+        let config = project.join(PROJECT_FILE);
+        let original = validate_project(&project).unwrap();
+        let mut package = original.package.clone();
+        package.name = "Human App".into();
+        package.version = "2.1.0".parse().unwrap();
+        package.license = Some("Read these terms before installing.".into());
+        let mut install = original.install.clone();
+        install.directory = luxury_spec::InstallDirectory::parse("Human App").unwrap();
+        install.show_install_log = true;
+        install.finish_links = vec![luxury_spec::FinishLink {
+            label: "Документация".into(),
+            url: "https://example.com/docs".into(),
+        }];
+
+        let updated = update_project(
+            &project,
+            ProjectUpdate {
+                package,
+                target: original.target,
+                install,
+                executable: Some(Vec::new()),
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.schema_version, LICENSE_SCHEMA_VERSION);
+        assert_eq!(updated.package.name, "Human App");
+        assert!(updated.install.show_install_log);
+        assert_eq!(validate_project(&project).unwrap(), updated);
+
+        let before_invalid = fs::read(&config).unwrap();
+        let mut invalid_install = updated.install.clone();
+        invalid_install.finish_links[0].url = "http://example.com".into();
+        let error = update_project(
+            &project,
+            ProjectUpdate {
+                package: updated.package.clone(),
+                target: updated.target,
+                install: invalid_install,
+                executable: Some(Vec::new()),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, CompilerError::InvalidManifest(_)));
+        assert_eq!(fs::read(&config).unwrap(), before_invalid);
+
+        let signed = String::from_utf8(before_invalid).unwrap().replacen(
+            "format_version = 1",
+            "format_version = 2",
+            1,
+        );
+        fs::write(&config, signed.as_bytes()).unwrap();
+        let error = update_project(
+            &project,
+            ProjectUpdate {
+                package: updated.package,
+                target: updated.target,
+                install: updated.install,
+                executable: Some(Vec::new()),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, CompilerError::ProjectNotEditable));
+        assert_eq!(fs::read(&config).unwrap(), signed.as_bytes());
+    }
+
+    #[test]
+    fn studio_update_preserves_executables_and_replaces_its_unix_entrypoint_intent() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        init_project(&project).unwrap();
+        fs::create_dir_all(project.join("payload/bin")).unwrap();
+        for path in ["old", "new", "helper"] {
+            fs::write(project.join("payload/bin").join(path), path.as_bytes()).unwrap();
+        }
+        let config = project.join(PROJECT_FILE);
+        let source = fs::read_to_string(&config)
+            .unwrap()
+            .replacen(
+                "format_version = 1",
+                "format_version = 1\nschema_version = 2",
+                1,
+            )
+            .replace(&format!("os = \"{}\"", Target::host().os), "os = \"linux\"")
+            .replace(
+                "directory = \"Luxury Demo\"",
+                "directory = \"Luxury Demo\"\nentrypoint = \"bin/old\"",
+            )
+            .replace(
+                "executable = []",
+                "executable = [\"bin/old\", \"bin/helper\"]",
+            );
+        fs::write(&config, source).unwrap();
+        let current = validate_project(&project).unwrap();
+        fs::remove_file(project.join("payload/bin/old")).unwrap();
+        let mut install = current.install.clone();
+        install.entrypoint = Some(PackagePath::parse("bin/new").unwrap());
+        let updated = update_project(
+            &project,
+            ProjectUpdate {
+                package: current.package,
+                target: current.target,
+                install,
+                executable: None,
+            },
+        )
+        .unwrap();
+        let executable = updated
+            .files
+            .iter()
+            .filter(|file| file.executable)
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(executable, ["bin/helper", "bin/new"]);
+    }
+
+    #[test]
+    fn studio_import_replaces_only_the_starter_and_never_overwrites_payload() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        init_project(&project).unwrap();
+        let sources = temp.path().join("sources");
+        fs::create_dir_all(sources.join("assets")).unwrap();
+        let app = sources.join("app.bin");
+        fs::write(&app, b"application").unwrap();
+        fs::write(sources.join("assets/config.json"), b"{}").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&app, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let imported = import_payload(&project, &[app.clone(), sources.join("assets")]).unwrap();
+        assert_eq!(
+            imported
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["app.bin", "assets/config.json"]
+        );
+        assert!(!project.join("payload").join(SAMPLE_FILE).exists());
+        assert_eq!(
+            fs::read(project.join("payload/app.bin")).unwrap(),
+            b"application"
+        );
+        assert_eq!(
+            resolve_payload_file(&project, project.join("payload/app.bin"))
+                .unwrap()
+                .as_str(),
+            "app.bin"
+        );
+        assert!(matches!(
+            resolve_payload_file(&project, &app),
+            Err(CompilerError::OutsideRoot { .. })
+        ));
+        #[cfg(unix)]
+        assert!(imported.files[0].executable);
+        #[cfg(not(unix))]
+        assert!(!imported.files[0].executable);
+
+        let new_source = sources.join("a-new.bin");
+        let conflicting = sources.join("app.bin");
+        fs::write(&new_source, b"new").unwrap();
+        fs::write(&conflicting, b"replacement").unwrap();
+        let error = import_payload(&project, &[new_source, conflicting]).unwrap_err();
+        assert!(matches!(error, CompilerError::ImportConflict(_)));
+        assert!(!project.join("payload/a-new.bin").exists());
+        assert_eq!(
+            fs::read(project.join("payload/app.bin")).unwrap(),
+            b"application"
+        );
+        assert_eq!(validate_project(&project).unwrap(), imported);
+
+        let empty = sources.join("empty");
+        fs::create_dir(&empty).unwrap();
+        assert!(matches!(
+            import_payload(&project, &[empty]),
+            Err(CompilerError::EmptyImport)
+        ));
+        assert_eq!(validate_project(&project).unwrap(), imported);
+
+        let non_starter_project = temp.path().join("non-starter");
+        init_project(&non_starter_project).unwrap();
+        fs::write(non_starter_project.join("payload/user.txt"), b"keep").unwrap();
+        let extra = sources.join("extra.bin");
+        fs::write(&extra, b"extra").unwrap();
+        import_payload(&non_starter_project, &[extra]).unwrap();
+        assert_eq!(
+            fs::read(non_starter_project.join("payload/hello.txt")).unwrap(),
+            SAMPLE_PAYLOAD
+        );
+        assert_eq!(
+            fs::read(non_starter_project.join("payload/user.txt")).unwrap(),
+            b"keep"
+        );
     }
 
     #[test]

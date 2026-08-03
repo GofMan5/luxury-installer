@@ -15,7 +15,7 @@ Luxury Installer combines hexagonal Rust boundaries with small vertical slices a
 │   ├─ strict public error mapping                                  │
 │   └─ bounded backend client                                       │
 └───────────────────────────────┬────────────────────────────────────┘
-                                │ JSONL protocol v2
+                                │ JSONL protocol v3
                                 │ inherited stdin/stdout
 ┌───────────────────────────────▼────────────────────────────────────┐
 │ luxury stdio / human CLI composition root                         │
@@ -51,7 +51,7 @@ luxury (CLI / stdio) ─→ compiler + bundle + platform + engine + spec
 - `luxury-bundle` owns deterministic package layout and the archive trust boundary.
 - `luxury-engine` owns commands, events, outcomes, use-case order, and ports.
 - `luxury-platform` owns filesystem/OS adapters, transactional state, recovery, and native launch.
-- `luxury-compiler` owns safe project scanning, validation, and `.luxpkg` assembly. Bundle output is written and synced through a same-directory `NamedTempFile`, rejects an existing link/reparse/non-file target, and uses the dependency's platform-native atomic replace instead of a check-then-rename backup namespace.
+- `luxury-compiler` owns safe project scanning, validation, and `.luxpkg` assembly; its `authoring` vertical slice owns atomic settings updates, bounded import staging/publication/rollback, and payload-path resolution instead of growing the crate root. Bundle output is written and synced through a same-directory `NamedTempFile`, rejects an existing link/reparse/non-file target, and uses the dependency's platform-native atomic replace instead of a check-then-rename backup namespace.
 - `luxury` is the human CLI and machine-facing `luxury stdio` composition root.
 - `xtask` owns repository gates, native runner assembly, smoke orchestration, and evidence validation.
 
@@ -73,7 +73,7 @@ Current slices:
 2. `install`: read-only preparation, authoritative recheck, recovery, capacity preflight, stage, publish, receipt commit, or rollback.
 3. `uninstall`: receipt-driven removal with modified/unknown-file preservation and aggregate public results.
 4. `launch`: exact receipt-owned entrypoint verification and direct native spawn without shell, arguments, or protocol streams.
-5. `Studio`: Rust-owned create/open/save dialogs, active-folder reveal, project reload/validation, and unsigned-v1 build; renderer sends pathless intents.
+5. `Studio`: typed unsigned-v1 settings, Rust-owned create/open/import/entrypoint/save dialogs, active-folder reveal, project reload/validation, and build; renderer never supplies native paths.
 6. `Setup`: one bootstrap-bound payload, Rust-owned destination/state/identity, install/update/repair/recovery, cancellation, maintenance uninstall, reveal, and explicit launch.
 7. `native runner`: host-only unsigned-v1 assembly, fixed resources, packaged verification, no-clobber publication, smoke lifecycle, and evidence schema v2.
 
@@ -91,7 +91,9 @@ Upgrade and same-version repair reuse the install use case. There is no parallel
 - `--verify-runner` removes configured windows before runtime startup and exits with an exact machine-readable verification result.
 - `--verify-studio` does the same for the payload-free Studio artifact.
 
-Studio dialogs run in Rust. The renderer requests create/open/reveal/reload/build with no project or output path. The shell retains the authoritative active project, opens that folder through the native OS adapter, and passes absolute paths to `luxury stdio` for validation/build. The intended loop is `create/open → native folder editor → reload → build`; no embedded editor or file-import surface duplicates normal filesystem tools. Signed v2/v3 authoring stays in the human CLI because private keys enter only through bounded stdin.
+Studio dialogs run in Rust. The renderer requests pathless create/open/import/entrypoint/reveal/reload/build actions and submits only strictly typed portable settings. The shell retains the authoritative active project and every native source/output selection; `luxury stdio` routes settings and imports to `luxury-compiler`, which validates before atomic config replacement, publishes imports without overwrite, and rolls back partial publication. The intended loop is `create/open → edit settings → native import → select entrypoint → save/reload → build`. Signed v2/v3 authoring stays in the human CLI because private keys enter only through bounded stdin.
+
+Project summaries return an executable-file count instead of every path, keeping one JSONL frame bounded at the maximum manifest size. When Studio omits `updateProject.executable`, the compiler preserves explicit executable intent, adds a changed Unix entrypoint, and removes the previous marker only if that old file is gone; an AI client may still provide the full array to replace it deliberately.
 
 Setup is not a package browser. The shell binds one package path, fingerprint, package ID, state root, selected install base, latest Rust preparation, and authenticated finish links. Renderer calls for destination, install, uninstall, cancel, reveal, launch, and finish-link opening do not carry package/root/entrypoint/URL authority; a finish link is selected only by bounded index. A chooser or drag-and-drop replacement would violate the product boundary.
 
@@ -112,10 +114,10 @@ Tauri invoke inputs, event payloads, and JSONL values use strict typed contracts
 The Rust Tauri shell starts `luxury stdio` with piped stdin/stdout/stderr. Human diagnostics belong on stderr. Stdout is one bounded JSON object per line and nothing else:
 
 ```json
-{"protocolVersion":2,"id":"request-1","method":"defaults","params":{}}
+{"protocolVersion":3,"id":"request-1","method":"defaults","params":{}}
 ```
 
-Protocol v2 methods are `defaults`, `initProject`, `validateProject`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, and `cancel`.
+Protocol v2 methods are `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, and `cancel`.
 
 Boundary rules:
 

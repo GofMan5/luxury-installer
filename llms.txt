@@ -8,9 +8,9 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 
 ## Read first
 
-- /AGENTS.md: mandatory working contract
-- /MEMORY.md: durable architecture, protocol, package, and build decisions
 - /docs/ai-build.md: exact agent workflow and gate selection
+- /skills/luxury-installer-cli/SKILL.md: reusable current CLI/JSONL workflow for coding agents
+- /skills/luxury-installer-cli/references/cli.md: complete human CLI and JSONL v3 reference
 - /docs/architecture.md: dependency, process, transaction, trust, runner, and evidence boundaries
 - /docs/design/design-system.md: Tauri renderer visual/accessibility contract
 - /docs/privileged-helper.md: required system-scope elevation and peer-authentication boundary
@@ -48,7 +48,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 
 ## Process topology
 
-- React renderer -> exact Tauri invoke/events -> Rust Tauri shell -> bounded JSONL v2 over child stdin/stdout -> luxury stdio -> Rust use cases
+- React renderer -> exact Tauri invoke/events -> Rust Tauri shell -> bounded JSONL v3 over child stdin/stdout -> luxury stdio -> Rust use cases
 - Renderer owns presentation/accessibility only
 - Rust Tauri shell owns native dialogs, bound project/package/path authority, backend lifecycle, transport validation, event correlation, and public error mapping
 - luxury stdio owns machine-facing composition
@@ -65,8 +65,8 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Release feature setup is mutually exclusive and uses fixed native backend/payload resources
 - --trusted-publisher-key and LUXURY_BACKEND_PATH are debug-only absolute paths
 - Setup is not a .luxpkg browser: no picker, drag-and-drop, file input, or renderer-supplied package/root path
-- Studio renderer sends pathless create/open/reveal/reload/build intent; Rust shell owns dialog results and active project/output path
-- Studio authoring loop is create/open -> native folder editor -> reload -> build; do not add an embedded editor, file importer, or renderer path argument
+- Studio renderer sends typed settings plus pathless create/open/import/entrypoint/reveal/reload/build intent; Rust shell owns native dialog results and active project/output/source paths
+- Studio authoring loop is create/open -> edit validated settings -> native file/folder import -> native entrypoint selection -> save/reload -> build. Renderer never receives source paths or generic filesystem authority
 - Setup renderer receives display review + hasEntrypoint and sends pathless destination/install/uninstall/cancel/reveal/launch intent
 - Exact capability grants event listen/unlisten, window dragging, and named app commands only
 - Renderer has no generic shell/fs/dialog/opener/process permission
@@ -90,6 +90,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - luxury install <package.luxpkg> <install-base> <state-root> [--trusted-publisher-key <public.pem>] [--allow-unsigned] [--accept-license] [--allow-downgrade] [--allow-publisher-migration]
 - luxury uninstall <package-id> <install-base> <state-root>
 - luxury launch <package-id> <install-base> <state-root>
+- luxury help [command]; every public command also supports non-mutating --help/-h
 - Development prefix: cargo run -p luxury -- <command>
 - Keep state-root outside the removable install tree
 
@@ -99,6 +100,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - format_version 2: Ed25519 exact-manifest signature; matching external SPKI trust anchor required; no unsigned fallback
 - format_version 3: A signs completed manifest/payload; B signs domain-separated package/version/A/B rotation proof
 - schema_version is independent; schema 2 adds exact-file install.entrypoint; schema 3 adds bounded authenticated plain-text package.license
+- Optional package.description is bounded plain text in luxury-spec, not only a Studio validation rule
 - Windows entrypoint requires .exe; Linux/macOS requires executable=true
 - No entrypoint args, package environment, auto-run, scripts, or generic actions framework
 - luxury.toml is untrusted and capped at 1 MiB before parsing
@@ -107,10 +109,11 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Ownership receipt v4 stores payload signer, authorized publisher, and optional entrypoint
 - Trusted rotation requires installed A and strictly higher SemVer; fresh/legacy/unsigned/replay/equal/downgrade/self rotation fails
 
-## JSONL protocol v2
+## JSONL protocol v3
 
 - One bounded JSON object per line on inherited stdin/stdout; stdout is protocol-only
-- Methods: defaults, initProject, validateProject, buildProject, inspect, prepareInstall, install, uninstall, launch, cancel
+- Methods: defaults, initProject, validateProject, updateProject, importPayload, resolvePayloadPath, buildProject, inspect, prepareInstall, install, uninstall, launch, cancel
+- Studio project summaries expose bounded authoring.executableFiles, not a potentially multi-megabyte executable path list; omitted updateProject.executable preserves the list, adds a new Unix entrypoint, and removes its old marker only when the old file is gone
 - Validate protocol version, request ID, method params, absolute paths, results, errors, events, tags, bounds, and cross-field relations on both sides
 - Tauri client bounds line size and pending requests; ordinary requests and shutdown have finite deadlines
 - EOF/malformed output/exit/shutdown fails or drains pending work and reaps the child
@@ -163,4 +166,4 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 
 ## Agent handoff
 
-Inspect status before editing, preserve concurrent/unrelated work, run the smallest relevant gate, and report exact results plus unverified OS/security/release coverage. Update /MEMORY.md only when architecture, package, protocol, or build contract changes. Never commit keys, tokens, payload builds, target/, node_modules/, frontend out/, runner output, evidence fixtures, or temporary QA files.
+Inspect status before editing, preserve concurrent/unrelated work, run the smallest relevant gate, and report exact results plus unverified OS/security/release coverage. Any CLI/JSONL/authoring change must update README, the relevant guide, this file, and the public CLI skill in the same slice. Never commit keys, tokens, payload builds, target/, node_modules/, frontend out/, runner output, evidence fixtures, or temporary QA files.
