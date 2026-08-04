@@ -1556,14 +1556,31 @@ fn extract_rpm(package: &Path, destination: &Path) -> Result<(), String> {
     let decoded = decoder
         .wait_with_output()
         .map_err(|error| format!("could not finish rpm2cpio: {error}"))?;
-    if !decoded.status.success() || !extraction.status.success() {
+    if !rpm2cpio_output_is_complete(
+        decoded.status.code(),
+        &decoded.stderr,
+        extraction.status.success(),
+    ) {
         return Err(format!(
-            "RPM extraction failed; rpm2cpio: {}; cpio: {}",
+            "RPM extraction failed; rpm2cpio code {:?}: {}; cpio code {:?}: {}",
+            decoded.status.code(),
             bounded_output(&decoded.stderr),
+            extraction.status.code(),
             bounded_output(&extraction.stderr)
         ));
     }
     Ok(())
+}
+
+fn rpm2cpio_output_is_complete(
+    decoder_code: Option<i32>,
+    decoder_stderr: &[u8],
+    extraction_succeeded: bool,
+) -> bool {
+    // Ubuntu rpm2cpio 4.18 can emit a complete stream and return 1 without diagnostics.
+    // The caller still validates the extracted tree byte-for-byte before publication.
+    extraction_succeeded
+        && (decoder_code == Some(0) || (decoder_code == Some(1) && decoder_stderr.is_empty()))
 }
 
 fn validate_extracted_tree(
@@ -2072,6 +2089,16 @@ mod tests {
         .unwrap();
         assert!(tauri_patched_launcher_hash(&launcher, TAURI_DEB_MARKER).is_err());
         assert!(tauri_patched_launcher_hash(&launcher, b"short").is_err());
+    }
+
+    #[test]
+    fn rpm2cpio_exit_one_is_usable_only_after_a_clean_complete_extraction() {
+        assert!(rpm2cpio_output_is_complete(Some(0), b"", true));
+        assert!(rpm2cpio_output_is_complete(Some(1), b"", true));
+        assert!(!rpm2cpio_output_is_complete(Some(1), b"warning", true));
+        assert!(!rpm2cpio_output_is_complete(Some(1), b"", false));
+        assert!(!rpm2cpio_output_is_complete(Some(2), b"", true));
+        assert!(!rpm2cpio_output_is_complete(None, b"", true));
     }
 
     #[test]

@@ -32,6 +32,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 ### Fixed
 
 - Independent Tauri `.deb`/RPM verification now derives the exact launcher hash after the pinned bundler's single `UNK -> DEB/RPM` bundle-type marker patch instead of incorrectly requiring the unpatched source hash.
+- RPM cross-checking accepts the observed `rpm2cpio 4.18` empty-stderr exit `1` only when `cpio` completed successfully; exact paths, modes, ownership, and SHA-256 verification still run afterward.
 - Standalone Rust RPM generation now records and verifies publisher provenance through the serialized `Vendor` field instead of the broken `rpm 0.16` `Packager` setter.
 - macOS lifecycle cleanup reaps a confirmed exited process-group leader before retrying Darwin's zombie-only `EPERM`, while timeout and live-descendant containment remain fail-closed.
 - Windows uninstall crash QA now triggers directly from the first rollback-backup filesystem transition instead of racing a delayed coalesced progress frame with full live-state hashing.
