@@ -33,6 +33,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Standalone Rust RPM generation now records and verifies publisher provenance through the serialized `Vendor` field instead of the broken `rpm 0.16` `Packager` setter.
 - macOS lifecycle cleanup reaps a confirmed exited process-group leader before retrying Darwin's zombie-only `EPERM`, while timeout and live-descendant containment remain fail-closed.
 - Windows uninstall crash QA now triggers directly from the first rollback-backup filesystem transition instead of racing a delayed coalesced progress frame with full live-state hashing.
+- Headless Linux native verification disables only the unavailable AT-SPI bridge so strict packaged-runner stderr checks are not tripped by the hosted image's missing accessibility D-Bus service.
 
 ### Security
 

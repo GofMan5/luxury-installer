@@ -336,6 +336,8 @@ Schema v2 records target, pinned Tauri shell kind/version, package identity/fing
 
 The file is unsigned and does not separately encode recovery, cancellation, or receipt-owned launch, even though those probes gate its production. Treat it as a deterministic verification receipt, not attestation or native-signature evidence.
 
+Hosted Linux runs Tauri probes under Xvfb with `NO_AT_BRIDGE=1`. This suppresses only GTK's attempt to connect to an accessibility D-Bus service that the headless runner does not provide; packaged stdout/stderr verification remains exact and production accessibility is unchanged.
+
 Verify the downloaded Linux/Windows x86_64 plus macOS ARM64 set:
 
 ```console
