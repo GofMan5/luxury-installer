@@ -41,6 +41,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 ### Security
 
 - Strict portable-path, archive, JSONL, Tauri invoke/event, receipt, journal, and privileged-helper boundaries.
+- Tauri's independent Linux `.deb`/RPM bundler receives the exact reviewed package fingerprint from `xtask`; its rebuilt Setup launcher must remain byte-identical to the verified bound launcher.
 - Read-only destination permission and capacity preflight before installation starts.
 - Versioned private user state rejects legacy broad ACL/modes without rewriting or trusting old receipts and journals.
 - Core manifest validation bounds optional package descriptions instead of relying on Studio-only checks.

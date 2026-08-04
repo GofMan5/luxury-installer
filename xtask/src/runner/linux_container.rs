@@ -384,7 +384,7 @@ fn build_runner_in_work(
             )?;
             let config_path = work.join("tauri.linux-package.conf.json");
             write_json(&config_path, &config)?;
-            run_tauri_bundle(root, &triple, &isolated_target, &config_path)?;
+            run_tauri_bundle(root, &triple, &isolated_target, &config_path, fingerprint)?;
         }
         None => {
             #[cfg(all(target_os = "linux", feature = "standalone-linux-packager"))]
@@ -565,7 +565,13 @@ fn bundle_config(
     }))
 }
 
-fn run_tauri_bundle(root: &Path, triple: &str, target: &Path, config: &Path) -> Result<(), String> {
+fn run_tauri_bundle(
+    root: &Path,
+    triple: &str,
+    target: &Path,
+    config: &Path,
+    fingerprint: &str,
+) -> Result<(), String> {
     let app = root.join("apps").join("luxury-installer");
     let pnpm = env::var_os("PNPM").unwrap_or_else(|| OsString::from("pnpm"));
     let version = Command::new(&pnpm)
@@ -586,19 +592,15 @@ fn run_tauri_bundle(root: &Path, triple: &str, target: &Path, config: &Path) -> 
     }
 
     println!("> tauri bundle --bundles deb,rpm --features setup --target {triple}");
-    let output = Command::new(pnpm)
+    let mut command = Command::new(pnpm);
+    command
         .args(["exec", "tauri", "bundle", "--bundles", "deb,rpm"])
         .args(["--features", "setup", "--target", triple, "--config"])
         .arg(config)
         .args(["--ci", "--no-sign"])
-        .current_dir(&app)
-        .env("CARGO_TARGET_DIR", target)
-        .env("CI", "true")
-        .env_remove("LUXURY_BOUND_PACKAGE_FINGERPRINT")
-        .env_remove("TAURI_SIGNING_PRIVATE_KEY")
-        .env_remove("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
-        .env_remove("TAURI_SIGNING_RPM_KEY")
-        .env_remove("TAURI_SIGNING_RPM_KEY_PASSPHRASE")
+        .current_dir(&app);
+    configure_tauri_bundle_environment(&mut command, target, fingerprint)?;
+    let output = command
         .output()
         .map_err(|error| format!("could not start the pinned Tauri bundler: {error}"))?;
     if output.status.success() {
@@ -610,6 +612,25 @@ fn run_tauri_bundle(root: &Path, triple: &str, target: &Path, config: &Path) -> 
             bounded_output(&output.stderr)
         ))
     }
+}
+
+fn configure_tauri_bundle_environment(
+    command: &mut Command,
+    target: &Path,
+    fingerprint: &str,
+) -> Result<(), String> {
+    if !super::is_lower_hex_64(fingerprint) {
+        return Err("Tauri Linux bundler requires an exact package fingerprint".into());
+    }
+    command
+        .env("CARGO_TARGET_DIR", target)
+        .env("CI", "true")
+        .env("LUXURY_BOUND_PACKAGE_FINGERPRINT", fingerprint)
+        .env_remove("TAURI_SIGNING_PRIVATE_KEY")
+        .env_remove("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
+        .env_remove("TAURI_SIGNING_RPM_KEY")
+        .env_remove("TAURI_SIGNING_RPM_KEY_PASSPHRASE");
+    Ok(())
 }
 
 #[cfg(all(target_os = "linux", feature = "standalone-linux-packager"))]
@@ -1985,6 +2006,28 @@ mod tests {
         assert!(parse_dpkg_contents_line("-rw-r--r-- user/user 1 now now usr/file").is_err());
         assert!(parse_dpkg_contents_line("-rw-r--r-- 0/0 nope now now usr/file").is_err());
         assert!(parse_dpkg_contents_line("-rw-r--r-- 0/0 1 now now").is_err());
+    }
+
+    #[test]
+    fn tauri_bundler_receives_only_the_exact_reviewed_binding() {
+        let mut command = Command::new("pnpm");
+        let target = Path::new("isolated-target");
+        let fingerprint = "1".repeat(64);
+        configure_tauri_bundle_environment(&mut command, target, &fingerprint).unwrap();
+
+        let env = |name: &str| {
+            command
+                .get_envs()
+                .find(|(key, _)| *key == OsStr::new(name))
+                .map(|(_, value)| value)
+        };
+        assert_eq!(
+            env("LUXURY_BOUND_PACKAGE_FINGERPRINT"),
+            Some(Some(OsStr::new(&fingerprint)))
+        );
+        assert_eq!(env("CARGO_TARGET_DIR"), Some(Some(target.as_os_str())));
+        assert_eq!(env("TAURI_SIGNING_PRIVATE_KEY"), Some(None));
+        assert!(configure_tauri_bundle_environment(&mut command, target, &"g".repeat(64)).is_err());
     }
 
     #[test]
