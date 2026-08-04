@@ -91,9 +91,9 @@ jobs:
             evidence: windows-x86_64.json
             studio_path: dist/luxury-installer-studio-*-windows-x86_64
           - os: macos-latest
-            label: macOS-X64
-            evidence: macos-x86_64.json
-            studio_path: dist/luxury-installer-studio-*-macos-x86_64.tar.gz
+            label: macOS-ARM64
+            evidence: macos-aarch64.json
+            studio_path: dist/luxury-installer-studio-*-macos-aarch64.tar.gz
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - if: runner.os == 'macOS'

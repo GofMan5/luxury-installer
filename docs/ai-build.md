@@ -342,7 +342,7 @@ Verify a downloaded three-host x86_64 set:
 cargo run --locked -p xtask -- verify-evidence-set <directory>
 ```
 
-The directory must contain exactly `linux-x86_64.json`, `windows-x86_64.json`, and `macos-x86_64.json` with consistent package identity. Do not claim three-OS coverage from CI configuration or one local file.
+The directory must contain exactly `linux-x86_64.json`, `windows-x86_64.json`, and `macos-aarch64.json` with consistent package identity. Do not claim three-OS coverage from CI configuration or one local file.
 
 ## Cross-platform and release contract
 
@@ -362,7 +362,7 @@ Manual `workflow_dispatch`:
 - full root-workspace tests;
 - standalone Tauri tests;
 - payload-free Studio assembly and `--verify-studio` on each native host;
-- inspected unsigned `.deb`/RPM development packaging on Linux, plus native runner smoke on Linux, Windows, and macOS x86_64;
+- inspected unsigned `.deb`/RPM development packaging on Linux, plus native runner smoke on Linux/Windows x86_64 and macOS ARM64;
 - exact schema-v2 evidence-set verification.
 
 Before a public release, still require native container signing, signer provenance, installer install/uninstall behavior, platform privilege review, recovery/cancellation on final bytes, and downloaded artifact verification. Current configuration is not release readiness.

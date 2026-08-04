@@ -242,7 +242,7 @@ verify-authenticode-pair requires two valid Windows Authenticode chains and the 
 verify-windows-release binds the signed NSIS parent to its signed Tauri launcher and elevated Rust helper, then rejects unexpected arguments.
 verify-macos-release requires matching designated requirements, strict nested codesign, Gatekeeper acceptance, and a stapled notarization ticket.
 verify-macos-dmg requires a signed, Gatekeeper-accepted, stapled image containing exactly that verified app and an Applications link.
-verify-evidence-set validates the exact Linux, Windows, and macOS x86_64 evidence files.
+verify-evidence-set validates Linux/Windows x86_64 plus macOS ARM64 evidence files.
 Signed-v2/v3 runner assembly stays disabled until the native container has a verified trust anchor."
     );
 }

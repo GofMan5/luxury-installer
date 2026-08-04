@@ -158,7 +158,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Evidence schemaVersion=2 records target, shell kind/version, package identity/fingerprint, backend/payload/frontendTree/launcher hashes, lifecycle counts, and explicit normal lifecycle/cleanup/Tauri checks
 - Evidence has no timestamp/path/signature and is not attestation
 - Recovery/cancellation/receipt-owned launch gate the command but are not separate evidence fields
-- Exact combined x86_64 set: linux-x86_64.json, windows-x86_64.json, macos-x86_64.json
+- Exact combined set: linux-x86_64.json, windows-x86_64.json, macos-aarch64.json
 - CI configuration is not runtime proof; use downloaded evidence artifacts
 
 ## Local desktop QA

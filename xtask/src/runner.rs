@@ -60,7 +60,7 @@ const CANCELLATION_MARKER_FILES: u64 = 768;
 const EXPECTED_EVIDENCE: [(&str, &str, &str); 3] = [
     ("linux-x86_64.json", "linux", "x86_64"),
     ("windows-x86_64.json", "windows", "x86_64"),
-    ("macos-x86_64.json", "macos", "x86_64"),
+    ("macos-aarch64.json", "macos", "aarch64"),
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2592,14 +2592,15 @@ mod tests {
 
     fn platform_evidence(os: &str) -> RunnerEvidence {
         let mut evidence = sample_evidence();
-        let (triple, marker) = match os {
-            "linux" => ("x86_64-unknown-linux-gnu", '1'),
-            "windows" => ("x86_64-pc-windows-msvc", '2'),
-            "macos" => ("x86_64-apple-darwin", '3'),
+        let (triple, arch, marker) = match os {
+            "linux" => ("x86_64-unknown-linux-gnu", "x86_64", '1'),
+            "windows" => ("x86_64-pc-windows-msvc", "x86_64", '2'),
+            "macos" => ("aarch64-apple-darwin", "aarch64", '3'),
             other => panic!("unsupported test OS {other}"),
         };
         evidence.target.triple = triple.into();
         evidence.target.os = os.into();
+        evidence.target.arch = arch.into();
         evidence.package.fingerprint = marker.to_string().repeat(64);
         evidence.artifacts.payload_sha256 = marker.to_string().repeat(64);
         evidence
@@ -2747,7 +2748,7 @@ mod tests {
     fn evidence_set_rejects_missing_file() {
         let work = WorkDirectory::new(&env::temp_dir()).unwrap();
         write_evidence_set(&work.path);
-        fs::remove_file(work.path.join("macos-x86_64.json")).unwrap();
+        fs::remove_file(work.path.join("macos-aarch64.json")).unwrap();
         assert!(verify_evidence_set(&work.path).is_err());
     }
 
@@ -2791,7 +2792,7 @@ mod tests {
     fn evidence_set_rejects_mismatched_package_version() {
         let work = WorkDirectory::new(&env::temp_dir()).unwrap();
         write_evidence_set(&work.path);
-        let path = work.path.join("macos-x86_64.json");
+        let path = work.path.join("macos-aarch64.json");
         let mut evidence = platform_evidence("macos");
         evidence.package.version = "2.0.0".into();
         fs::write(path, evidence_bytes(&evidence).unwrap()).unwrap();

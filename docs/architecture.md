@@ -207,7 +207,7 @@ Evidence schema v2 contains no timestamp, absolute path, secret, or signature. L
 
 Recovery, cancellation, and receipt-owned launch gate the producing command but are not separate schema-v2 claims. The JSON is an unsigned verification receipt, not provenance attestation, native signing, or proof of another host.
 
-The exact combined set is currently Linux/Windows/macOS x86_64. `verify-evidence-set` rejects extra/missing files, wrong host labels, malformed fields, and inconsistent package identity. Workflow configuration is not runtime evidence; only successful downloaded artifacts prove a run.
+The exact combined set is currently Linux/Windows x86_64 plus macOS ARM64. `verify-evidence-set` rejects extra/missing files, wrong host labels, malformed fields, and inconsistent package identity. Workflow configuration is not runtime evidence; only successful downloaded artifacts prove a run.
 
 ## Build contract
 
@@ -224,7 +224,7 @@ The exact combined set is currently Linux/Windows/macOS x86_64. `verify-evidence
 - `cargo verify-windows-signers -- <launcher.exe> <helper.exe>` requires two embedded Authenticode chains and one exact leaf certificate; it does not sign either file.
 - Windows release order is fixed: externally sign the inner Tauri launcher/backend with one leaf certificate, run `cargo windows-release-setup -- <signed-runner-dir> <nsis.zip>`, externally sign the emitted outer NSIS with that certificate, then run `cargo verify-windows-release -- <signed-setup.exe>`. Rust never receives signing credentials.
 - Routine pull-request/main CI runs format, quick, desktop, and focused Windows `luxury-windows-trust + luxury-platform` jobs separately.
-- Manual CI runs full root tests, standalone Tauri tests, inspected unsigned Linux `.deb`/RPM generation, and host-native runner smoke on Linux/Windows/macOS x86_64, then verifies the exact schema-v2 set.
+- Manual CI runs full root tests, standalone Tauri tests, inspected unsigned Linux `.deb`/RPM generation, and host-native runner smoke on Linux/Windows x86_64 plus macOS ARM64, then verifies the exact schema-v2 set.
 
 One gate has one purpose. Do not repeat the same broad check without new code or evidence.
 
