@@ -1191,12 +1191,14 @@ mod tests {
 
     #[test]
     fn project_output_is_an_absolute_setup_executable() {
-        let project = Path::new(r"C:\projects\demo");
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        let output = temp.path().join("Demo-Setup.EXE");
         assert_eq!(
-            validate_project_output(project, Path::new(r"C:\builds\Demo-Setup.EXE")).unwrap(),
-            Path::new(r"C:\builds")
+            validate_project_output(&project, &output).unwrap(),
+            temp.path()
         );
-        assert!(validate_project_output(project, Path::new(r"C:\builds\demo.luxpkg")).is_err());
+        assert!(validate_project_output(&project, &temp.path().join("demo.luxpkg")).is_err());
         assert!(validate_project_output(Path::new("demo"), Path::new("Demo-Setup.exe")).is_err());
     }
 

@@ -547,9 +547,10 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
-        thread,
-        time::Duration,
     };
+
+    #[cfg(windows)]
+    use std::{thread, time::Duration};
 
     use luxury_engine::{
         PortErrorKind,
