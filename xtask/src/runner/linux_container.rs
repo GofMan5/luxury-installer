@@ -9,8 +9,6 @@ use std::{
 };
 
 use serde_json::{Map, Value, json};
-
-#[cfg(all(target_os = "linux", feature = "standalone-linux-packager"))]
 use sha2::{Digest as _, Sha256};
 #[cfg(all(target_os = "linux", feature = "standalone-linux-packager"))]
 use std::io::Read as _;
@@ -35,6 +33,9 @@ use super::{
 };
 
 const TAURI_CLI_VERSION: &str = "2.11.4";
+const TAURI_BUNDLE_MARKER: &[u8] = b"__TAURI_BUNDLE_TYPE_VAR_UNK";
+const TAURI_DEB_MARKER: &[u8] = b"__TAURI_BUNDLE_TYPE_VAR_DEB";
+const TAURI_RPM_MARKER: &[u8] = b"__TAURI_BUNDLE_TYPE_VAR_RPM";
 const PACKAGE_NAME: &str = "luxury-installer";
 const PUBLISHER: &str = "Luxury Installer Contributors <opensource@luxury.software>";
 const PROVENANCE_FILENAME: &str = "provenance.json";
@@ -384,7 +385,7 @@ fn build_runner_in_work(
             )?;
             let config_path = work.join("tauri.linux-package.conf.json");
             write_json(&config_path, &config)?;
-            run_tauri_bundle(root, &triple, &isolated_target, &config_path, fingerprint)?;
+            run_tauri_bundle(root, &triple, &isolated_target, &config_path)?;
         }
         None => {
             #[cfg(all(target_os = "linux", feature = "standalone-linux-packager"))]
@@ -414,8 +415,20 @@ fn build_runner_in_work(
     let deb_hash = sha256_file(&deb)?;
     let rpm_hash = sha256_file(&rpm)?;
     if workspace_root.is_some() {
-        verify_deb(&deb, work, host, &expected)?;
-        verify_rpm(&rpm, work, host, fingerprint_prefix, &expected)?;
+        let deb_launcher_hash = tauri_patched_launcher_hash(&bundled_binary, TAURI_DEB_MARKER)?;
+        let rpm_launcher_hash = tauri_patched_launcher_hash(&bundled_binary, TAURI_RPM_MARKER)?;
+        let mut deb_expected = expected.clone();
+        deb_expected
+            .get_mut(LAUNCHER_PATH)
+            .expect("the launcher expectation is always present")
+            .sha256 = Some(deb_launcher_hash);
+        let mut rpm_expected = expected.clone();
+        rpm_expected
+            .get_mut(LAUNCHER_PATH)
+            .expect("the launcher expectation is always present")
+            .sha256 = Some(rpm_launcher_hash);
+        verify_deb(&deb, work, host, &deb_expected)?;
+        verify_rpm(&rpm, work, host, fingerprint_prefix, &rpm_expected)?;
     } else {
         #[cfg(all(target_os = "linux", feature = "standalone-linux-packager"))]
         {
@@ -565,13 +578,7 @@ fn bundle_config(
     }))
 }
 
-fn run_tauri_bundle(
-    root: &Path,
-    triple: &str,
-    target: &Path,
-    config: &Path,
-    fingerprint: &str,
-) -> Result<(), String> {
+fn run_tauri_bundle(root: &Path, triple: &str, target: &Path, config: &Path) -> Result<(), String> {
     let app = root.join("apps").join("luxury-installer");
     let pnpm = env::var_os("PNPM").unwrap_or_else(|| OsString::from("pnpm"));
     let version = Command::new(&pnpm)
@@ -599,7 +606,7 @@ fn run_tauri_bundle(
         .arg(config)
         .args(["--ci", "--no-sign"])
         .current_dir(&app);
-    configure_tauri_bundle_environment(&mut command, target, fingerprint)?;
+    configure_tauri_bundle_environment(&mut command, target);
     let output = command
         .output()
         .map_err(|error| format!("could not start the pinned Tauri bundler: {error}"))?;
@@ -614,23 +621,15 @@ fn run_tauri_bundle(
     }
 }
 
-fn configure_tauri_bundle_environment(
-    command: &mut Command,
-    target: &Path,
-    fingerprint: &str,
-) -> Result<(), String> {
-    if !super::is_lower_hex_64(fingerprint) {
-        return Err("Tauri Linux bundler requires an exact package fingerprint".into());
-    }
+fn configure_tauri_bundle_environment(command: &mut Command, target: &Path) {
     command
         .env("CARGO_TARGET_DIR", target)
         .env("CI", "true")
-        .env("LUXURY_BOUND_PACKAGE_FINGERPRINT", fingerprint)
+        .env_remove("LUXURY_BOUND_PACKAGE_FINGERPRINT")
         .env_remove("TAURI_SIGNING_PRIVATE_KEY")
         .env_remove("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
         .env_remove("TAURI_SIGNING_RPM_KEY")
         .env_remove("TAURI_SIGNING_RPM_KEY_PASSPHRASE");
-    Ok(())
 }
 
 #[cfg(all(target_os = "linux", feature = "standalone-linux-packager"))]
@@ -938,6 +937,26 @@ fn expected_files(
         },
     );
     Ok(expected)
+}
+
+fn tauri_patched_launcher_hash(path: &Path, replacement: &[u8]) -> Result<[u8; 32], String> {
+    if replacement.len() != TAURI_BUNDLE_MARKER.len() {
+        return Err("Tauri bundle marker length changed".into());
+    }
+    let mut bytes = fs::read(path)
+        .map_err(|error| format!("could not read the verified Tauri launcher: {error}"))?;
+    let mut matches = bytes
+        .windows(TAURI_BUNDLE_MARKER.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == TAURI_BUNDLE_MARKER).then_some(index));
+    let index = matches
+        .next()
+        .ok_or_else(|| "verified Tauri launcher has no bundle marker".to_owned())?;
+    if matches.next().is_some() {
+        return Err("verified Tauri launcher has multiple bundle markers".into());
+    }
+    bytes[index..index + replacement.len()].copy_from_slice(replacement);
+    Ok(Sha256::digest(&bytes).into())
 }
 
 #[cfg(all(target_os = "linux", feature = "standalone-linux-packager"))]
@@ -2009,11 +2028,10 @@ mod tests {
     }
 
     #[test]
-    fn tauri_bundler_receives_only_the_exact_reviewed_binding() {
+    fn tauri_bundler_receives_only_the_isolated_target_without_credentials() {
         let mut command = Command::new("pnpm");
         let target = Path::new("isolated-target");
-        let fingerprint = "1".repeat(64);
-        configure_tauri_bundle_environment(&mut command, target, &fingerprint).unwrap();
+        configure_tauri_bundle_environment(&mut command, target);
 
         let env = |name: &str| {
             command
@@ -2021,13 +2039,39 @@ mod tests {
                 .find(|(key, _)| *key == OsStr::new(name))
                 .map(|(_, value)| value)
         };
-        assert_eq!(
-            env("LUXURY_BOUND_PACKAGE_FINGERPRINT"),
-            Some(Some(OsStr::new(&fingerprint)))
-        );
+        assert_eq!(env("LUXURY_BOUND_PACKAGE_FINGERPRINT"), Some(None));
         assert_eq!(env("CARGO_TARGET_DIR"), Some(Some(target.as_os_str())));
         assert_eq!(env("TAURI_SIGNING_PRIVATE_KEY"), Some(None));
-        assert!(configure_tauri_bundle_environment(&mut command, target, &"g".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn tauri_launcher_hash_allows_only_its_single_exact_bundle_marker_patch() {
+        let temp = tempfile::tempdir().unwrap();
+        let launcher = temp.path().join("luxury-installer");
+        let mut original = b"prefix".to_vec();
+        original.extend_from_slice(TAURI_BUNDLE_MARKER);
+        original.extend_from_slice(b"suffix");
+        fs::write(&launcher, &original).unwrap();
+
+        for replacement in [TAURI_DEB_MARKER, TAURI_RPM_MARKER] {
+            let mut patched = original.clone();
+            let start = b"prefix".len();
+            patched[start..start + replacement.len()].copy_from_slice(replacement);
+            assert_eq!(
+                tauri_patched_launcher_hash(&launcher, replacement).unwrap(),
+                <[u8; 32]>::from(Sha256::digest(&patched))
+            );
+        }
+
+        fs::write(&launcher, b"no marker").unwrap();
+        assert!(tauri_patched_launcher_hash(&launcher, TAURI_DEB_MARKER).is_err());
+        fs::write(
+            &launcher,
+            [TAURI_BUNDLE_MARKER, TAURI_BUNDLE_MARKER].concat(),
+        )
+        .unwrap();
+        assert!(tauri_patched_launcher_hash(&launcher, TAURI_DEB_MARKER).is_err());
+        assert!(tauri_patched_launcher_hash(&launcher, b"short").is_err());
     }
 
     #[test]

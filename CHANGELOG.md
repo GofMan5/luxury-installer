@@ -31,6 +31,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Fixed
 
+- Independent Tauri `.deb`/RPM verification now derives the exact launcher hash after the pinned bundler's single `UNK -> DEB/RPM` bundle-type marker patch instead of incorrectly requiring the unpatched source hash.
 - Standalone Rust RPM generation now records and verifies publisher provenance through the serialized `Vendor` field instead of the broken `rpm 0.16` `Packager` setter.
 - macOS lifecycle cleanup reaps a confirmed exited process-group leader before retrying Darwin's zombie-only `EPERM`, while timeout and live-descendant containment remain fail-closed.
 - Windows uninstall crash QA now triggers directly from the first rollback-backup filesystem transition instead of racing a delayed coalesced progress frame with full live-state hashing.
@@ -41,7 +42,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 ### Security
 
 - Strict portable-path, archive, JSONL, Tauri invoke/event, receipt, journal, and privileged-helper boundaries.
-- Tauri's independent Linux `.deb`/RPM bundler receives the exact reviewed package fingerprint from `xtask`; its rebuilt Setup launcher must remain byte-identical to the verified bound launcher.
+- Tauri's independent Linux `.deb`/RPM bundler receives only the isolated verified launcher and no build-binding or signing credentials; Rust accepts only its pinned, single fixed-width bundle-type marker patch and verifies every other launcher byte through the independently derived container hash.
 - Read-only destination permission and capacity preflight before installation starts.
 - Versioned private user state rejects legacy broad ACL/modes without rewriting or trusting old receipts and journals.
 - Core manifest validation bounds optional package descriptions instead of relying on Studio-only checks.
