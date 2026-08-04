@@ -78,6 +78,10 @@ impl ChildContainment {
         self.containment.terminate()
     }
 
+    pub(super) fn terminate_after_primary_exit(&self, child: &mut Child) -> io::Result<()> {
+        self.containment.terminate_after_primary_exit(child)
+    }
+
     pub(super) fn wait_for_primary_exit(&self, child: &Child) -> io::Result<()> {
         self.containment.platform.wait_for_primary_exit(child)
     }
@@ -117,6 +121,17 @@ impl SharedContainment {
             .termination
             .get_or_init(|| self.platform.terminate().map_err(StoredIoError::from))
         {
+            Ok(()) => Ok(()),
+            Err(error) => Err(error.to_io_error()),
+        }
+    }
+
+    fn terminate_after_primary_exit(&self, child: &mut Child) -> io::Result<()> {
+        match self.termination.get_or_init(|| {
+            self.platform
+                .terminate_after_primary_exit(child)
+                .map_err(StoredIoError::from)
+        }) {
             Ok(()) => Ok(()),
             Err(error) => Err(error.to_io_error()),
         }
@@ -345,6 +360,10 @@ impl PlatformContainment {
             Ok(())
         }
     }
+
+    fn terminate_after_primary_exit(&self, _: &mut Child) -> io::Result<()> {
+        self.terminate()
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -398,6 +417,17 @@ impl PlatformContainment {
             Err(error) => Err(io::Error::from(error)),
         }
     }
+
+    fn terminate_after_primary_exit(&self, _child: &mut Child) -> io::Result<()> {
+        match self.terminate() {
+            #[cfg(target_os = "macos")]
+            Err(error) if error.raw_os_error() == Some(rustix::io::Errno::PERM.raw_os_error()) => {
+                _child.wait()?;
+                self.terminate()
+            }
+            result => result,
+        }
+    }
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
@@ -429,6 +459,10 @@ impl PlatformContainment {
     fn terminate(&self) -> io::Result<()> {
         Ok(())
     }
+
+    fn terminate_after_primary_exit(&self, _: &mut Child) -> io::Result<()> {
+        self.terminate()
+    }
 }
 
 #[cfg(test)]
@@ -454,6 +488,7 @@ mod tests {
         match env::var(HELPER_MODE).as_deref() {
             Ok("parent") => return helper_parent(),
             Ok("grandchild") => return helper_grandchild(),
+            Ok("empty") => return,
             _ => {}
         }
 
@@ -499,6 +534,27 @@ mod tests {
         assert!(containment_elapsed < Duration::from_secs(3));
         assert!(!sentinel.exists());
         assert!(output.len() < 64 * 1024);
+    }
+
+    #[test]
+    fn completed_primary_closes_an_empty_process_group() {
+        let executable = env::current_exe().unwrap();
+        let mut command = Command::new(executable);
+        command
+            .args(["--exact", &helper_test_name(), "--nocapture"])
+            .env(HELPER_MODE, "empty")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let (mut child, mut containment) =
+            ChildContainment::spawn(&mut command, Duration::from_secs(10)).unwrap();
+
+        containment.wait_for_primary_exit(&child).unwrap();
+        containment
+            .terminate_after_primary_exit(&mut child)
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        containment.disarm();
     }
 
     fn helper_parent() {

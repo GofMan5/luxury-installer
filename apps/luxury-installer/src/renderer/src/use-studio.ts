@@ -29,7 +29,7 @@ export interface StudioController {
   openRecentProject(index: number): Promise<void>
   reloadProject(): Promise<void>
   updateProject(input: StudioProjectUpdate): Promise<void>
-  importProject(kind: 'files' | 'directory'): Promise<void>
+  importProject(kind: 'files' | 'directory' | 'replace'): Promise<void>
   chooseProjectEntrypoint(): Promise<string | null>
   revealProject(): Promise<void>
   buildProject(): Promise<void>
@@ -158,7 +158,7 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     }
   }
 
-  async function importProject(kind: 'files' | 'directory') {
+  async function importProject(kind: 'files' | 'directory' | 'replace') {
     if (busy.current) return
     const project = projectFrom(view)
     if (!project || project.formatVersion !== 1) return
@@ -167,7 +167,9 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     try {
       const imported = await (kind === 'files'
         ? bridge.importProjectFiles()
-        : bridge.importProjectDirectory())
+        : kind === 'directory'
+          ? bridge.importProjectDirectory()
+          : bridge.replaceProjectPayload())
       setView({ kind: 'ready', project: imported ?? project })
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project })

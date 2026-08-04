@@ -83,6 +83,7 @@ export function ReviewView({
           <span>
             {summary.publisher} · {summary.version}
           </span>
+          {summary.description ? <small title={summary.description}>{summary.description}</small> : null}
         </div>
         <div className="package-hero__facts">
           <span>{formatBytes(summary.bytes)}</span>

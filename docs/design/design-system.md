@@ -14,7 +14,7 @@ The interface follows the flat dark language of Codex and ChatGPT:
 - no status badges, oversized icon containers, dashboard tiles, or nested cards; status is plain icon + text and content is arranged as open rows;
 - no internal package/runtime terminology in Setup end-user copy; Studio uses only terms needed for authoring.
 
-Setup makes four facts obvious: which application is being installed, where it will be installed, whether its publisher is trusted, and what the installation is doing. Studio keeps project actions in the rail and one flat form for validated identity, target, install policy, license, finish links, payload import, and build. Its empty surface may show up to six recent projects as a flat two-column list with name, publisher/version, target, and a truncated display-only path; opening one sends only its bounded index.
+Setup makes four facts obvious: which application is being installed, where it will be installed, whether its publisher is trusted, and what the installation is doing. Studio keeps project actions in the rail and one flat form for validated identity, target, install policy, license, finish links, additive payload import, explicit staged whole-payload replacement, build, and pathless output reveal. Its empty surface may show up to six recent projects as a flat two-column list with name, publisher/version, target, and a truncated display-only path; opening one sends only its bounded index.
 
 ## Implementation stack
 
@@ -77,7 +77,7 @@ No font download is required at runtime.
 - Loading: disable project actions while the Rust-owned native dialog and validation complete.
 - Ready: show the current project, manifest facts, payload counts/size, target, one primary build action, and secondary native-folder/reload actions in the rail.
 - Refreshing: preserve the last validated summary, disable project actions, and show one bounded validation status until Rust returns the replacement summary.
-- Building/built: show bounded Rust progress copy, then the selected output path from the validated result.
+- Building/built: show bounded Rust progress copy, then the selected output path and one pathless Rust-owned reveal action from the validated result.
 - Error: preserve the active project when possible and keep one dismiss action.
 - V2/v3 projects remain openable and validated, but GUI build is disabled with a CLI/stdin signing note; v3 explains that PoP is verified during CLI build with the current key.
 

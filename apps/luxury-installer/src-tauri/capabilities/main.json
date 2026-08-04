@@ -19,6 +19,7 @@
     "allow-import-project-directory",
     "allow-choose-project-entrypoint",
     "allow-reveal-project",
+    "allow-reveal-build-output",
     "allow-build-project",
     "allow-choose-directory",
     "allow-start-install",

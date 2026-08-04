@@ -331,6 +331,7 @@ pub fn run() {
             studio::import_project_directory,
             studio::choose_project_entrypoint,
             studio::reveal_project,
+            studio::reveal_build_output,
             studio::build_project,
             setup::get_bootstrap,
             setup::choose_directory,

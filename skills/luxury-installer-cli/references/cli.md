@@ -58,7 +58,7 @@ cargo project-installer -- C:\work\my-app-installer C:\work\My-App-Setup.exe
 
 On Linux, the output argument is a new directory containing `.deb` and `.rpm`; on macOS it is a new `.dmg`. The packager creates and removes the internal `.luxpkg` itself. Use low-level `luxury build` only for signed-package, protocol, or lifecycle automation that explicitly needs that trust boundary.
 
-The project contains `luxury.toml` and its configured payload directory. `init` never overwrites different existing files. Studio can reopen a bounded Rust-owned recent-project entry by index, edit unsigned format-1 settings, import regular files or one directory without overwrite, select an entrypoint through a native dialog, and build the native output. Imported links, reparse points, special entries, path aliases, empty imports, and payload/project overlap fail closed; partial publication rolls back.
+The project contains `luxury.toml` and its configured payload directory. `init` never overwrites different existing files. Studio can reopen a bounded Rust-owned recent-project entry by index, edit unsigned format-1 settings, import regular files or one directory without overwrite, replace the complete payload through same-project staging with one directory's contents, select an entrypoint through a native dialog, build the native output, and reveal that retained output through a pathless Rust action. Imported links, reparse points, special entries, path aliases, empty imports, and payload/project overlap fail closed. Ordinary partial publication or replacement failures roll back; a rollback failure reports `rollback_failed` and keeps the staging backup. Replacement also refreshes executable intent and clears an entrypoint missing from the new tree with exact-case comparison.
 
 Minimal configuration shape:
 
@@ -189,6 +189,14 @@ Import selected absolute paths without exposing them in the result:
 ```json
 {"protocolVersion":3,"id":"import-1","method":"importPayload","params":{"projectPath":"C:\\work\\project","sourcePaths":["C:\\build\\app.exe","C:\\build\\assets"]}}
 ```
+
+Replace the complete payload with the contents of exactly one directory:
+
+```json
+{"protocolVersion":3,"id":"replace-1","method":"importPayload","params":{"projectPath":"C:\\work\\project","sourcePaths":["C:\\build\\release"],"replace":true}}
+```
+
+Omitted or false `replace` keeps additive create-new behavior. Replacement rejects files, multiple sources, empty trees, links, special entries, project/payload overlap, and invalid portable paths before commit.
 
 Resolve a native selection to a validated portable payload path:
 

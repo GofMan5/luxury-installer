@@ -42,6 +42,7 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
       onSave={(input) => void studio.updateProject(input)}
       onImportFiles={() => void studio.importProject('files')}
       onImportDirectory={() => void studio.importProject('directory')}
+      onReplacePayload={() => void studio.importProject('replace')}
       onChooseEntrypoint={studio.chooseProjectEntrypoint}
       onBuild={() => void studio.buildProject()}
       folderPending={studio.folderPending}
@@ -62,6 +63,7 @@ interface StudioViewProps {
   onSave(input: StudioProjectUpdate): void
   onImportFiles(): void
   onImportDirectory(): void
+  onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
   onBuild(): void
   folderPending: boolean
@@ -80,6 +82,7 @@ export function StudioView({
   onSave,
   onImportFiles,
   onImportDirectory,
+  onReplacePayload,
   onChooseEntrypoint,
   onBuild,
   folderPending,
@@ -167,8 +170,10 @@ export function StudioView({
             onSave={onSave}
             onImportFiles={onImportFiles}
             onImportDirectory={onImportDirectory}
+            onReplacePayload={onReplacePayload}
             onChooseEntrypoint={onChooseEntrypoint}
             onBuild={onBuild}
+            onRevealBuildOutput={bridge.revealBuildOutput}
             onDismissError={onDismissError}
           />
         ) : null}
@@ -279,8 +284,10 @@ function ProjectView({
   onSave,
   onImportFiles,
   onImportDirectory,
+  onReplacePayload,
   onChooseEntrypoint,
   onBuild,
+  onRevealBuildOutput,
   onDismissError,
 }: {
   project: StudioProject
@@ -289,8 +296,10 @@ function ProjectView({
   onSave(input: StudioProjectUpdate): void
   onImportFiles(): void
   onImportDirectory(): void
+  onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
   onBuild(): void
+  onRevealBuildOutput(): Promise<void>
   onDismissError(): void
 }) {
   const building = state.kind === 'building'
@@ -387,11 +396,13 @@ function ProjectView({
       {importing ? (
         <div className="studio-build-progress" role="status" aria-live="polite">
           <SquareDashed className="spin" size={19} aria-hidden="true" />
-          Rust проверяет и добавляет выбранные файлы…
+          Rust проверяет файлы приложения…
         </div>
       ) : null}
 
-      {result ? <BuildResult result={result} /> : null}
+      {result ? (
+        <BuildResult key={result.outputPath} result={result} onReveal={onRevealBuildOutput} />
+      ) : null}
 
       {buildable ? (
         <div className="studio-editor">
@@ -514,6 +525,15 @@ function ProjectView({
               <button className="secondary-button" type="button" disabled={busy || dirty} onClick={onImportDirectory}>
                 <Folder size={15} aria-hidden="true" />Папка
               </button>
+              <button
+                className="secondary-button"
+                type="button"
+                title="Текущие файлы приложения будут полностью заменены содержимым выбранной папки"
+                disabled={busy || dirty}
+                onClick={onReplacePayload}
+              >
+                <RefreshCw size={15} aria-hidden="true" />Заменить всё
+              </button>
             </div>
           </section>
         </div>
@@ -560,14 +580,38 @@ function StudioField({ label, hint, wide = false, children }: { label: string; h
   )
 }
 
-function BuildResult({ result }: { result: StudioBuildResult }) {
+function BuildResult({ result, onReveal }: { result: StudioBuildResult; onReveal(): Promise<void> }) {
+  const pendingRef = useRef(false)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const reveal = async () => {
+    if (pendingRef.current) return
+    pendingRef.current = true
+    setPending(true)
+    setError(null)
+    try {
+      await onReveal()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Не удалось показать установщик.')
+    } finally {
+      pendingRef.current = false
+      setPending(false)
+    }
+  }
+
   return (
     <section className="studio-build-result" aria-labelledby="studio-build-result-title" aria-live="polite">
       <Check size={21} strokeWidth={2.5} aria-hidden="true" />
       <div>
         <h2 id="studio-build-result-title">Установщик готов</h2>
         <code tabIndex={0} title={result.outputPath}>{result.outputPath}</code>
+        {error ? <small role="alert">{error}</small> : null}
       </div>
+      <button className="secondary-button" type="button" disabled={pending} onClick={() => void reveal()}>
+        {pending ? <SquareDashed className="spin" size={15} aria-hidden="true" /> : <FolderOpen size={15} aria-hidden="true" />}
+        {pending ? 'Открываем…' : 'Показать результат'}
+      </button>
     </section>
   )
 }

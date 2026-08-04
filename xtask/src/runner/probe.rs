@@ -940,7 +940,7 @@ impl LifecycleSession {
         }
         let termination = self
             .containment
-            .terminate()
+            .terminate_after_primary_exit(&mut self.child)
             .map_err(|error| format!("lifecycle containment failed: {error}"));
         let status = self
             .child

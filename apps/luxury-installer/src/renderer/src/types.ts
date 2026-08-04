@@ -27,6 +27,7 @@ export interface PackageSummary {
   name: string
   publisher: string
   version: string
+  description: string | null
   license: string | null
   targetOs: TargetOs
   targetArch: TargetArch
@@ -192,8 +193,10 @@ export interface LuxuryBridge {
   updateProject(input: StudioProjectUpdate): Promise<StudioProject>
   importProjectFiles(): Promise<StudioProject | null>
   importProjectDirectory(): Promise<StudioProject | null>
+  replaceProjectPayload(): Promise<StudioProject | null>
   chooseProjectEntrypoint(): Promise<string | null>
   revealProject(): Promise<void>
+  revealBuildOutput(): Promise<void>
   buildProject(): Promise<StudioBuildResult | null>
   chooseDirectory(): Promise<InstallerReview | null>
   startInstall(input: InstallRequest): Promise<{ operationId: string }>

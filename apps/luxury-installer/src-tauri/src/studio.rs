@@ -34,6 +34,7 @@ pub(crate) struct StudioState {
     build_active: AtomicBool,
     build_cancel: AtomicBool,
     active: Mutex<Option<ActiveProject>>,
+    last_output: Mutex<Option<PathBuf>>,
     recent_path: Option<PathBuf>,
     recent: Mutex<Vec<RecentProject>>,
 }
@@ -52,6 +53,7 @@ impl StudioState {
             build_active: AtomicBool::new(false),
             build_cancel: AtomicBool::new(false),
             active: Mutex::new(None),
+            last_output: Mutex::new(None),
             recent_path,
             recent: Mutex::new(recent),
         }
@@ -230,6 +232,7 @@ pub(crate) async fn import_project_files(
 
 #[tauri::command]
 pub(crate) async fn import_project_directory(
+    replace: bool,
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
@@ -237,7 +240,7 @@ pub(crate) async fn import_project_directory(
     state.require_mode(AppMode::Studio)?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        import_project_directory_sync(&app, &window, &state)
+        import_project_directory_sync(&app, &window, &state, replace)
     })
     .await
     .map_err(|_| PublicError::new("internal_error", "Импорт папки Studio прерван."))?
@@ -265,6 +268,15 @@ pub(crate) async fn reveal_project(state: State<'_, AppState>) -> Result<(), Pub
     tauri::async_runtime::spawn_blocking(move || reveal_project_sync(&state))
         .await
         .map_err(|_| PublicError::new("internal_error", "Открытие папки Studio прервано."))?
+}
+
+#[tauri::command]
+pub(crate) async fn reveal_build_output(state: State<'_, AppState>) -> Result<(), PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || reveal_build_output_sync(&state))
+        .await
+        .map_err(|_| PublicError::new("internal_error", "Открытие результата сборки прервано."))?
 }
 
 #[tauri::command]
@@ -459,15 +471,16 @@ fn import_project_files_sync(
     window: &WebviewWindow,
     state: &AppState,
 ) -> Result<Option<StudioProject>, PublicError> {
-    import_project_payload_sync(app, window, state, false)
+    import_project_payload_sync(app, window, state, false, false)
 }
 
 fn import_project_directory_sync(
     app: &AppHandle,
     window: &WebviewWindow,
     state: &AppState,
+    replace: bool,
 ) -> Result<Option<StudioProject>, PublicError> {
-    import_project_payload_sync(app, window, state, true)
+    import_project_payload_sync(app, window, state, true, replace)
 }
 
 fn import_project_payload_sync(
@@ -475,6 +488,7 @@ fn import_project_payload_sync(
     window: &WebviewWindow,
     state: &AppState,
     directory: bool,
+    replace: bool,
 ) -> Result<Option<StudioProject>, PublicError> {
     let _busy = ExclusiveGuard::acquire(
         &state.studio.busy,
@@ -497,7 +511,9 @@ fn import_project_payload_sync(
         .dialog()
         .file()
         .set_parent(window)
-        .set_title(if directory {
+        .set_title(if replace {
+            "Заменить файлы приложения содержимым папки"
+        } else if directory {
             "Добавить папку в пакет"
         } else {
             "Добавить файлы в пакет"
@@ -529,6 +545,7 @@ fn import_project_payload_sync(
             json!({
                 "projectPath": path_text(&active.path)?,
                 "sourcePaths": source_paths,
+                "replace": replace,
             }),
         )
         .map_err(PublicError::from)?;
@@ -609,6 +626,38 @@ fn reveal_project_sync(state: &AppState) -> Result<(), PublicError> {
     let project = active_project(state)?;
     tauri_plugin_opener::open_path(project.path, None::<&str>)
         .map_err(|_| PublicError::new("project_reveal_failed", "Не удалось открыть папку проекта."))
+}
+
+fn reveal_build_output_sync(state: &AppState) -> Result<(), PublicError> {
+    let output = state
+        .studio
+        .last_output
+        .lock()
+        .map_err(|_| PublicError::new("internal_error", "Результат сборки недоступен."))?
+        .clone()
+        .ok_or_else(|| PublicError::new("build_output_missing", "Сначала соберите установщик."))?;
+    let metadata = fs::symlink_metadata(&output).map_err(|_| {
+        PublicError::new(
+            "build_output_missing",
+            "Собранный установщик больше не найден в выбранной папке.",
+        )
+    })?;
+    if metadata.is_dir() {
+        tauri_plugin_opener::open_path(output, None::<&str>)
+    } else if metadata.is_file() {
+        tauri_plugin_opener::reveal_item_in_dir(output)
+    } else {
+        return Err(PublicError::new(
+            "build_output_missing",
+            "Результат сборки имеет неподдерживаемый тип.",
+        ));
+    }
+    .map_err(|_| {
+        PublicError::new(
+            "build_output_reveal_failed",
+            "Не удалось показать собранный установщик.",
+        )
+    })
 }
 
 fn build_project_sync(
@@ -737,6 +786,12 @@ fn build_project_sync(
         .map_err(PublicError::from)?;
     let summary = StudioProject::from_backend(&project.path, project_result)?;
     set_active_project(state, project.path, &summary)?;
+    *state
+        .studio
+        .last_output
+        .lock()
+        .map_err(|_| PublicError::new("internal_error", "Результат сборки недоступен."))? =
+        Some(output.clone());
     Ok(Some(StudioBuildResult {
         output_path,
         project: summary,
@@ -1177,13 +1232,7 @@ fn validate_project_update(input: &StudioProjectUpdate) -> Result<(), PublicErro
 }
 
 fn valid_portable_path(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 4_096
-        && !value.starts_with(['/', '\\'])
-        && !value.contains(['\\', ':', '\0'])
-        && value
-            .split('/')
-            .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."))
+    luxury_spec::PackagePath::parse(value).is_ok()
 }
 
 fn path_text(path: &Path) -> Result<&str, PublicError> {

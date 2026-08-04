@@ -850,7 +850,7 @@ fn build_embedded_rpm(
     .description(
         "A bound Luxury Installer Setup with verified payload, rollback, ownership receipts, and native least-privilege system integration.",
     )
-    .packager(PUBLISHER)
+    .vendor(PUBLISHER)
     .compression(rpm::CompressionWithLevel::Gzip(9))
     .requires(rpm::Dependency::any("polkit"))
     .requires(rpm::Dependency::any("libwebkit2gtk-4.1.so.0()(64bit)"))
@@ -1144,7 +1144,7 @@ fn verify_rpm_embedded(
         || metadata.get_release().ok() != Some(expected_release.as_str())
         || metadata.get_arch().ok() != Some(rpm_arch(host)?)
         || metadata.get_license().ok() != Some("MIT OR Apache-2.0")
-        || metadata.get_packager().ok() != Some(PUBLISHER)
+        || metadata.get_vendor().ok() != Some(PUBLISHER)
     {
         return Err("RPM metadata does not match the verified runner".into());
     }

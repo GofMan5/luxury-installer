@@ -265,31 +265,15 @@ pub(crate) fn package_requested() -> bool {
 }
 
 pub(crate) fn valid_package_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && !value.starts_with('.')
-        && !value.ends_with('.')
-        && value.contains('.')
-        && value.split('.').all(|part| {
-            !part.is_empty()
-                && !part.starts_with('-')
-                && !part.ends_with('-')
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        })
+    luxury_spec::PackageId::parse(value).is_ok()
 }
 
 pub(crate) fn valid_text(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 1024 && !value.chars().any(char::is_control)
+    !value.is_empty() && value.chars().count() <= 1024 && !value.chars().any(char::is_control)
 }
 
 pub(crate) fn valid_install_directory(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 255
-        && !matches!(value, "." | "..")
-        && !value.contains(['/', '\\', ':', '\0'])
-        && !value.ends_with(['.', ' '])
+    luxury_spec::InstallDirectory::parse(value).is_ok()
 }
 
 #[derive(Default)]

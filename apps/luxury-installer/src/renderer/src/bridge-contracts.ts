@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
-const text = z.string().min(1).max(1024)
+const text = z
+  .string()
+  .min(1)
+  .refine((value) => [...value].length <= 1024)
+  .refine((value) => !/[\u0000-\u001f\u007f-\u009f]/u.test(value))
 const license = z
   .string()
   .min(1)
@@ -92,6 +96,7 @@ export const packageSummarySchema = z
     name: text,
     publisher: text,
     version: text,
+    description: text.nullable(),
     license: license.nullable(),
     targetOs,
     targetArch,

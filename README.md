@@ -31,16 +31,16 @@ Open Studio and describe the application instead of hand-writing a setup script:
 
 - edit identity, version, publisher, target, architecture, and install scope;
 - reopen up to six validated recent projects without browsing for their folders again;
-- add files or a complete folder through native dialogs;
+- add files or a complete folder through native dialogs, or safely replace the whole payload with a staged new build folder;
 - choose the launch file from the real payload;
 - add a license, optional installation details, and up to four HTTPS finish links;
-- save, revalidate, and build a real `.exe`, `.deb` + `.rpm`, or `.dmg` for the selected native target.
+- save, revalidate, and build a real `.exe`, `.deb` + `.rpm`, or `.dmg` for the selected native target, then reveal it directly from Studio.
 
 The internal package container stays between the Rust compiler and packager and is deleted with the build workspace. It is not the file a Studio user ships. Source and output paths stay in the Rust shell; React receives validated portable settings, not generic filesystem access.
 
 ### Setup for the person installing the application
 
-Each Setup is bound to one reviewed payload. It shows the application, publisher, version, destination, and exact operation without becoming a package browser.
+Each Setup is bound to one reviewed payload. It shows the application description, publisher, version, destination, and exact operation without becoming a package browser.
 
 - a newer downloaded version becomes an update;
 - the same version with the exact file set becomes repair;

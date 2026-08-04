@@ -12,6 +12,9 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Optional completed-install details and bounded HTTPS finish links controlled by `luxury.toml`.
 - Host-native assembly, focused CI gates, and independent Windows/Linux/macOS verification commands.
 - Studio form authoring, native no-overwrite file/folder import, and validated payload entrypoint selection.
+- Staged whole-payload replacement from a native folder picker, with rollback and stale-entrypoint cleanup for repeat release builds.
+- A pathless Studio action that reveals the last verified native build output.
+- Authenticated package descriptions now appear in Setup instead of being authorable but invisible.
 - Safe per-command CLI help plus strict JSONL v3, a validated public AI skill, and a complete CLI/protocol reference.
 - One native project build command that publishes Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg` while keeping the package handoff internal.
 - A bounded recent-project list that revalidates projects before reopening them.
@@ -22,6 +25,14 @@ All notable changes to Luxury Installer are documented here. The project follows
 - The completion screen separates optional links from the clear `Запустить` and `Готово` actions.
 - Downloaded newer packages keep one receipt-bound install/update/repair flow, and Tauri now rejects a terminal action that disagrees with the prepared plan.
 - Released Studio bundles carry a payload-free Setup template and Rust packager; Windows uses bundled SHA-256-pinned NSIS, while Linux writes and independently parses `.deb`/RPM in Rust without a source checkout or system packaging CLI.
+- Portable package paths now enforce the common 255-byte component ceiling, and Tauri reuses the same Rust validators instead of maintaining looser copies.
+- GitHub Actions are pinned to current Node 24 releases so hosted CI no longer depends on forced execution of deprecated Node 20 actions.
+
+### Fixed
+
+- Standalone Rust RPM generation now records and verifies publisher provenance through the serialized `Vendor` field instead of the broken `rpm 0.16` `Packager` setter.
+- macOS lifecycle cleanup reaps a confirmed exited process-group leader before retrying Darwin's zombie-only `EPERM`, while timeout and live-descendant containment remain fail-closed.
+- Windows uninstall crash QA now triggers directly from the first rollback-backup filesystem transition instead of racing a delayed coalesced progress frame with full live-state hashing.
 
 ### Security
 

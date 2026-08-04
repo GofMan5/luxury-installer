@@ -596,13 +596,23 @@ fn import_payload(
     cancel: &AtomicBool,
 ) -> Result<ProjectResult, WireError> {
     let project_path = absolute_path(params.project_path, "projectPath")?;
+    if params.replace && params.source_paths.len() != 1 {
+        return Err(WireError::new(
+            "invalid_params",
+            "payload replacement requires exactly one source directory",
+        ));
+    }
     let source_paths = params
         .source_paths
         .into_iter()
         .map(|path| absolute_path(path, "sourcePaths"))
         .collect::<Result<Vec<_>, _>>()?;
-    let manifest = luxury_compiler::import_payload_cancellable(project_path, &source_paths, cancel)
-        .map_err(|error| compiler_error(error, "project_import_failed"))?;
+    let manifest = if params.replace {
+        luxury_compiler::replace_payload_cancellable(project_path, &source_paths[0], cancel)
+    } else {
+        luxury_compiler::import_payload_cancellable(project_path, &source_paths, cancel)
+    }
+    .map_err(|error| compiler_error(error, "project_import_failed"))?;
     ProjectResult::from_manifest(&manifest, "project_import_failed")
 }
 
@@ -644,6 +654,8 @@ fn compiler_error(error: luxury_compiler::CompilerError, fallback: &'static str)
                 "rolling back payload import"
                     | "restoring starter payload"
                     | "inspecting starter payload restore path"
+                    | "rolling back replacement project payload"
+                    | "restoring previous project payload"
             ) =>
         {
             "rollback_failed"
@@ -1485,6 +1497,8 @@ struct UpdateProjectParams {
 struct ImportPayloadParams {
     project_path: String,
     source_paths: Vec<String>,
+    #[serde(default)]
+    replace: bool,
 }
 
 #[derive(Deserialize)]
@@ -2600,6 +2614,41 @@ mod tests {
         assert_eq!(
             fs::read(project.join("payload/app.bin")).unwrap(),
             b"application"
+        );
+
+        let replacement = temp.path().join("replacement");
+        fs::create_dir(&replacement).unwrap();
+        fs::write(replacement.join("app.bin"), b"replacement").unwrap();
+        fs::write(replacement.join("next.bin"), b"next").unwrap();
+        let replaced = stdio_request(
+            "importPayload",
+            json!({
+                "projectPath": project_path,
+                "sourcePaths": [replacement.to_str().unwrap()],
+                "replace": true
+            }),
+        );
+        assert_eq!(replaced["type"], "result");
+        assert_eq!(replaced["result"]["payload"]["files"], 2);
+        assert!(!replaced.to_string().contains(replacement.to_str().unwrap()));
+        assert_eq!(
+            fs::read(project.join("payload/app.bin")).unwrap(),
+            b"replacement"
+        );
+        assert_eq!(fs::read(project.join("payload/next.bin")).unwrap(), b"next");
+
+        let invalid_replacement = stdio_request(
+            "importPayload",
+            json!({
+                "projectPath": project_path,
+                "sourcePaths": [replacement.to_str().unwrap(), source_path],
+                "replace": true
+            }),
+        );
+        assert_eq!(invalid_replacement["error"]["code"], "invalid_params");
+        assert_eq!(
+            fs::read(project.join("payload/app.bin")).unwrap(),
+            b"replacement"
         );
 
         let relative = stdio_request(

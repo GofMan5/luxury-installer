@@ -21,8 +21,8 @@ use thiserror::Error;
 mod authoring;
 
 pub use authoring::{
-    ProjectUpdate, import_payload, import_payload_cancellable, resolve_payload_file,
-    update_project, update_project_cancellable,
+    ProjectUpdate, import_payload, import_payload_cancellable, replace_payload,
+    replace_payload_cancellable, resolve_payload_file, update_project, update_project_cancellable,
 };
 
 const PROJECT_FILE: &str = "luxury.toml";
@@ -1042,6 +1042,77 @@ mod tests {
             fs::read(non_starter_project.join("payload/user.txt")).unwrap(),
             b"keep"
         );
+    }
+
+    #[test]
+    fn studio_payload_replacement_swaps_the_whole_tree_and_keeps_precommit_failures_unchanged() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        init_project(&project).unwrap();
+
+        let first_source = temp.path().join("first");
+        fs::create_dir(&first_source).unwrap();
+        fs::write(first_source.join("old.exe"), b"old application").unwrap();
+        fs::write(first_source.join("shared.txt"), b"old shared").unwrap();
+        let first = replace_payload(&project, &first_source).unwrap();
+        let mut install = first.install.clone();
+        install.entrypoint = Some(PackagePath::parse("old.exe").unwrap());
+        let configured = update_project(
+            &project,
+            ProjectUpdate {
+                package: first.package,
+                target: Target {
+                    os: luxury_spec::OperatingSystem::Windows,
+                    arch: first.target.arch,
+                },
+                install,
+                executable: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(configured.schema_version, ENTRYPOINT_SCHEMA_VERSION);
+
+        let next_source = temp.path().join("next");
+        fs::create_dir_all(next_source.join("assets")).unwrap();
+        fs::write(next_source.join("OLD.EXE"), b"new application").unwrap();
+        fs::write(next_source.join("shared.txt"), b"new shared").unwrap();
+        fs::write(next_source.join("assets/data.bin"), b"data").unwrap();
+        let replaced = replace_payload(&project, &next_source).unwrap();
+        assert_eq!(replaced.schema_version, 1);
+        assert!(replaced.install.entrypoint.is_none());
+        assert_eq!(
+            replaced
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            ["OLD.EXE", "assets/data.bin", "shared.txt"]
+        );
+        assert_eq!(
+            fs::read(project.join("payload/shared.txt")).unwrap(),
+            b"new shared"
+        );
+
+        let empty = temp.path().join("empty");
+        fs::create_dir(&empty).unwrap();
+        assert!(matches!(
+            replace_payload(&project, &empty),
+            Err(CompilerError::EmptyImport)
+        ));
+        assert_eq!(validate_project(&project).unwrap(), replaced);
+
+        assert!(matches!(
+            replace_payload(&project, next_source.join("OLD.EXE")),
+            Err(CompilerError::InvalidImportSource(_))
+        ));
+        assert_eq!(validate_project(&project).unwrap(), replaced);
+
+        let cancelled = AtomicBool::new(true);
+        assert!(matches!(
+            replace_payload_cancellable(&project, &first_source, &cancelled),
+            Err(CompilerError::Cancelled)
+        ));
+        assert_eq!(validate_project(&project).unwrap(), replaced);
     }
 
     #[test]

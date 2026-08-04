@@ -12,6 +12,7 @@ fn main() {
         "import_project_directory",
         "choose_project_entrypoint",
         "reveal_project",
+        "reveal_build_output",
         "build_project",
         "choose_directory",
         "start_install",

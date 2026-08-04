@@ -20,6 +20,7 @@ const packageSummary = {
   name: 'Luxury Demo',
   publisher: 'Luxury Software',
   version: '1.0.0',
+  description: null,
   license: null,
   targetOs: 'windows',
   targetArch: 'x86_64',
@@ -115,6 +116,27 @@ test('package license stays bounded plain text', () => {
   ]) {
     assert.equal(packageSummarySchema.safeParse({ ...packageSummary, license }).success, false)
   }
+})
+
+test('authenticated package description stays bounded and reaches Setup review', async () => {
+  assert.equal(
+    packageSummarySchema.safeParse({ ...packageSummary, description: 'Human-facing app summary.' }).success,
+    true,
+  )
+  assert.equal(packageSummarySchema.safeParse({ ...packageSummary, description: '' }).success, false)
+  assert.equal(
+    packageSummarySchema.safeParse({ ...packageSummary, description: 'x'.repeat(1025) }).success,
+    false,
+  )
+  assert.equal(
+    packageSummarySchema.safeParse({ ...packageSummary, description: '💚'.repeat(1024) }).success,
+    true,
+  )
+  const reviewView = await readFile(
+    new URL('../src/renderer/src/features/installer/ReviewView.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(reviewView, /summary\.description/)
 })
 
 test('install details and finish links stay bounded and safe', () => {
@@ -330,9 +352,18 @@ test('renderer invokes only consent and pathless intents', async () => {
   )
   assert.match(
     bridge,
+    /importProjectDirectory: \(\) =>[\s\S]*?\{ replace: false \}/,
+  )
+  assert.match(
+    bridge,
+    /replaceProjectPayload: \(\) =>[\s\S]*?\{ replace: true \}/,
+  )
+  assert.match(
+    bridge,
     /parsedInvoke\('choose_project_entrypoint', portablePath\.nullable\(\)\)/,
   )
   assert.match(bridge, /revealProject: \(\) => invokeCommand\('reveal_project'\)/)
+  assert.match(bridge, /revealBuildOutput: \(\) => invokeCommand\('reveal_build_output'\)/)
   assert.match(bridge, /parsedInvoke\('open_recent_project', studioProjectSchema, \{[\s\S]*?index:/)
   assert.match(bridge, /openFinishLink: \(index\) => invokeCommand\('open_finish_link', \{ index \}\)/)
   assert.equal(bridge.includes('{ url'), false)

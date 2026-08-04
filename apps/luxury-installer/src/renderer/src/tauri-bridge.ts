@@ -74,10 +74,13 @@ export function createTauriBridge(): LuxuryBridge {
       }),
     importProjectFiles: () => parsedInvoke('import_project_files', studioProjectSchema.nullable()),
     importProjectDirectory: () =>
-      parsedInvoke('import_project_directory', studioProjectSchema.nullable()),
+      parsedInvoke('import_project_directory', studioProjectSchema.nullable(), { replace: false }),
+    replaceProjectPayload: () =>
+      parsedInvoke('import_project_directory', studioProjectSchema.nullable(), { replace: true }),
     chooseProjectEntrypoint: () =>
       parsedInvoke('choose_project_entrypoint', portablePath.nullable()),
     revealProject: () => invokeCommand('reveal_project'),
+    revealBuildOutput: () => invokeCommand('reveal_build_output'),
     buildProject: () => parsedInvoke('build_project', studioBuildResultSchema.nullable()),
     chooseDirectory: () => parsedInvoke('choose_directory', installerReviewSchema.nullable()),
     startInstall: async (input) => {

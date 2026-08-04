@@ -112,7 +112,7 @@ cargo run -p luxury -- build <project-dir> <out-v1.luxpkg>
 cargo run -p luxury -- inspect <out-v1.luxpkg>
 ```
 
-`init` creates only its exact generated `luxury.toml` and starter payload. A repeated init requires byte-identical content and never overwrites user changes. Studio's first successful real import removes that starter only when it remains the exact sole template file. `luxury.toml` is untrusted and capped at `1 MiB` before parsing; optional `package.description` is bounded plain text in the core spec even for hand-edited projects.
+`init` creates only its exact generated `luxury.toml` and starter payload. A repeated init requires byte-identical content and never overwrites user changes. Studio's first successful real import removes that starter only when it remains the exact sole template file. For repeat releases, Studio can replace the complete payload with the contents of one selected directory: Rust copies and validates the new tree before swapping it, restores the old tree on ordinary validation/config failure, retains the staging backup if rollback itself fails, replaces executable intent, and clears an entrypoint that no longer exists with exact case. `luxury.toml` is untrusted and capped at `1 MiB` before parsing; optional `package.description` is bounded plain text in the core spec even for hand-edited projects.
 
 Signed v2:
 
@@ -155,7 +155,7 @@ cargo build -p luxury
 pnpm --dir apps/luxury-installer run dev:app
 ```
 
-Debug mode without a package starts Studio. Its validated form edits unsigned format-1 package/target/install/license/link settings. Rust-owned native dialogs create/open projects, import regular files or a directory without overwrite, select an entrypoint inside the payload, reveal the project, and choose output. The renderer receives portable authoring state but never native source/output paths or generic filesystem authority.
+Debug mode without a package starts Studio. Its validated form edits unsigned format-1 package/target/install/license/link settings. Rust-owned native dialogs create/open projects, add regular files or a directory without overwrite, stage and replace the payload from one directory, select an entrypoint inside the payload, reveal the project or last verified build output, and choose output. The renderer receives portable authoring state but never native source/output paths or generic filesystem authority.
 
 Start bound-payload Setup by passing application arguments after the Tauri CLI separator:
 
@@ -207,7 +207,7 @@ Rules:
 - The Tauri backend client bounds line size and pending requests, correlates every response/event, gives cancellable ordinary operations five minutes plus 30 seconds to return their terminal cancellation, and leaves launch timeout-free after spawn.
 - EOF, malformed output, child exit, or shutdown must fail/drain pending requests and reap the child; never wait on a reader while leaving its pipe open.
 - Keep absolute paths at the Rust shell/backend boundary. Setup renderer intents stay pathless.
-- Studio renderer never submits project/output/source paths. Its native import and entrypoint commands are pathless; Rust shell owns dialog results and active project state, while `luxury-compiler` validates/copies/rolls back authoring mutations.
+- Studio renderer never submits project/output/source paths. Its native import, whole-payload replacement, and entrypoint commands are pathless; Rust shell owns dialog results and active project state, while `luxury-compiler` validates/copies/rolls back authoring mutations.
 - Setup shell owns package path/fingerprint/ID, state root, install base, latest preparation, and entrypoint authority.
 - Optional `install.show_install_log` stays default-off and exposes only a bounded display projection of authenticated manifest paths. `install.finish_links` accepts at most four HTTPS URLs; renderer sends only an index to the Rust-owned opener command.
 - System-scope initial/retry preparation goes through the authenticated privileged helper and calls Rust `prepare_system_install`; never fabricate a fresh-install state when the protected receipt is unreadable from the desktop process.
@@ -336,7 +336,7 @@ Schema v2 records target, pinned Tauri shell kind/version, package identity/fing
 
 The file is unsigned and does not separately encode recovery, cancellation, or receipt-owned launch, even though those probes gate its production. Treat it as a deterministic verification receipt, not attestation or native-signature evidence.
 
-Verify a downloaded three-host x86_64 set:
+Verify the downloaded Linux/Windows x86_64 plus macOS ARM64 set:
 
 ```console
 cargo run --locked -p xtask -- verify-evidence-set <directory>

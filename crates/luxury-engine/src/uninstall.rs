@@ -236,8 +236,6 @@ pub enum ReceiptError {
     LegacyEntrypoint,
     #[error("invalid receipt entrypoint: {0}")]
     InvalidEntrypoint(#[source] SpecError),
-    #[error("receipt scope {found:?} is not supported; only user scope is enabled")]
-    UnsupportedScope { found: InstallScope },
     #[error("receipt contains no owned files")]
     EmptyFiles,
     #[error("receipt contains too many files: {0}")]

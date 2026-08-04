@@ -51,7 +51,7 @@ luxury (CLI / stdio) ─→ compiler + bundle + platform + engine + spec
 - `luxury-bundle` owns deterministic package layout and the archive trust boundary.
 - `luxury-engine` owns commands, events, outcomes, use-case order, and ports.
 - `luxury-platform` owns filesystem/OS adapters, transactional state, recovery, and native launch.
-- `luxury-compiler` owns safe project scanning, validation, and `.luxpkg` assembly; its `authoring` vertical slice owns atomic settings updates, bounded import staging/publication/rollback, and payload-path resolution instead of growing the crate root. Bundle output is written and synced through a same-directory `NamedTempFile`, rejects an existing link/reparse/non-file target, and uses the dependency's platform-native atomic replace instead of a check-then-rename backup namespace.
+- `luxury-compiler` owns safe project scanning, validation, and `.luxpkg` assembly; its `authoring` vertical slice owns atomic settings updates, bounded additive import, staged whole-payload replacement with rollback, and payload-path resolution instead of growing the crate root. Bundle output is written and synced through a same-directory `NamedTempFile`, rejects an existing link/reparse/non-file target, and uses the dependency's platform-native atomic replace instead of a check-then-rename backup namespace.
 - `luxury` is the human CLI and machine-facing `luxury stdio` composition root.
 - `xtask` owns repository gates, native runner assembly, smoke orchestration, and evidence validation.
 
@@ -73,7 +73,7 @@ Current slices:
 2. `install`: read-only preparation, authoritative recheck, recovery, capacity preflight, stage, publish, receipt commit, or rollback.
 3. `uninstall`: receipt-driven removal with modified/unknown-file preservation and aggregate public results.
 4. `launch`: exact receipt-owned entrypoint verification and direct native spawn without shell, arguments, or protocol streams.
-5. `Studio`: typed unsigned-v1 settings, Rust-owned create/open/import/entrypoint/save dialogs, active-folder reveal, project reload/validation, and build; renderer never supplies native paths.
+5. `Studio`: typed unsigned-v1 settings, Rust-owned create/open/import/replace/entrypoint/save dialogs, active-folder reveal, project reload/validation, and build; renderer never supplies native paths.
 6. `Setup`: one bootstrap-bound payload, Rust-owned destination/state/identity, install/update/repair/recovery, cancellation, maintenance uninstall, reveal, and explicit launch.
 7. `native runner`: host-only unsigned-v1 assembly, fixed resources, packaged verification, no-clobber publication, smoke lifecycle, and evidence schema v2.
 
@@ -91,7 +91,7 @@ Upgrade and same-version repair reuse the install use case. There is no parallel
 - `--verify-runner` removes configured windows before runtime startup and exits with an exact machine-readable verification result.
 - `--verify-studio` does the same for the payload-free Studio artifact.
 
-Studio dialogs run in Rust. The renderer requests pathless create/open/import/entrypoint/reveal/reload/build actions and submits only strictly typed portable settings. A bounded six-entry recent list is persisted atomically under app config; renderer receives display data and reopens only by index, then Rust repeats `validateProject` before activation. The shell retains the authoritative active project and every native source/output selection; `luxury stdio` routes settings and imports to `luxury-compiler`, which validates before atomic config replacement, publishes imports without overwrite, and rolls back partial publication. The intended loop is `create/open/recent → edit settings → native import → select entrypoint → save/reload → native build`. Signed v2/v3 authoring stays in the human CLI because private keys enter only through bounded stdin.
+Studio dialogs run in Rust. The renderer requests pathless create/open/import/replace/entrypoint/reveal/reload/build actions and submits only strictly typed portable settings. A bounded six-entry recent list is persisted atomically under app config; renderer receives display data and reopens only by index, then Rust repeats `validateProject` before activation. The shell retains the authoritative active project and every native source/output selection; `luxury stdio` routes settings and payload mutations to `luxury-compiler`. Additive imports publish without overwrite and roll back partial publication. Whole-payload replacement copies the selected directory contents into same-project staging, validates and rechecks the complete current/candidate trees, swaps the tree, atomically updates executable/entrypoint config, and restores the prior tree on ordinary failure; a rollback failure keeps the staging backup instead of deleting it. The intended loop is `create/open/recent → edit settings → add or replace payload → select entrypoint → save/reload → native build`. Signed v2/v3 authoring stays in the human CLI because private keys enter only through bounded stdin.
 
 Project summaries return an executable-file count instead of every path, keeping one JSONL frame bounded at the maximum manifest size. When Studio omits `updateProject.executable`, the compiler preserves explicit executable intent, adds a changed Unix entrypoint, and removes the previous marker only if that old file is gone; an AI client may still provide the full array to replace it deliberately.
 
@@ -117,7 +117,7 @@ The Rust Tauri shell starts `luxury stdio` with piped stdin/stdout/stderr. Human
 {"protocolVersion":3,"id":"request-1","method":"defaults","params":{}}
 ```
 
-Protocol v2 methods are `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, and `cancel`.
+Protocol v3 methods are `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, and `cancel`. `importPayload.replace=true` requires one source directory and replaces its contents as the payload root; omitted/false preserves additive no-overwrite import.
 
 Boundary rules:
 
@@ -141,7 +141,7 @@ The backend keeps one latest progress frame behind its bounded ticker and flushe
 - Schema v2 adds one optional exact-file `install.entrypoint`. Windows requires `.exe`; Linux/macOS require `executable=true`. Arguments, environment, automatic run, and generic actions do not exist.
 - Schema v3 adds one optional authenticated `package.license` plain-text agreement. It is bounded to 16,384 Unicode characters / 64 KiB UTF-8 and rejects unsafe controls and bidi overrides. Install requires caller consent before package verification or platform access; CLI, JSONL, Tauri, and renderer validate that contract independently.
 - `install.show_install_log` and `install.finish_links` are optional presentation policy with byte-compatible omitted defaults. Details are capped at 128 authenticated relative paths plus an omitted count. At most four credential-free HTTPS links are accepted; generic commands, schemes, auto-run, arguments, and environment mutation remain forbidden.
-- Logical paths are portable forward-slash relative paths. Absolute, parent, UNC, device, ADS, empty/dot, backslash, NUL, device-name, and trailing-dot/space forms are rejected.
+- Logical paths are portable forward-slash relative paths, at most 512 UTF-8 bytes overall and 255 bytes per component. Absolute, parent, UNC, device, ADS, empty/dot, backslash, NUL, device-name, and trailing-dot/space forms are rejected.
 - The reader rejects missing, extra, duplicate, linked, special, hash-mismatched, size-mismatched, and trailing compressed content.
 - V1 hashes provide integrity only and require explicit unsigned consent.
 - V2 authenticates the exact manifest through Ed25519 and an external matching SPKI trust anchor.

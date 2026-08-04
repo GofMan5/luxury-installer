@@ -66,9 +66,9 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Release feature setup is mutually exclusive and uses fixed native backend/payload resources
 - --trusted-publisher-key and LUXURY_BACKEND_PATH are debug-only absolute paths
 - Setup is not a .luxpkg browser: no picker, drag-and-drop, file input, or renderer-supplied package/root path
-- Studio renderer sends typed settings plus pathless create/open/import/entrypoint/reveal/reload/build intent; Rust shell owns native dialog results and active project/output/source paths
+- Studio renderer sends typed settings plus pathless create/open/import/replace/entrypoint/reveal/reload/build intent; Rust shell owns native dialog results and active project/output/source paths
 - Recent projects are a bounded six-item Rust-owned display list persisted atomically under app config; renderer reopens by validated index and Rust repeats validateProject before activation
-- Studio authoring loop is create/open -> edit validated settings -> native file/folder import -> native entrypoint selection -> save/reload -> build. Renderer never receives source paths or generic filesystem authority
+- Studio authoring loop is create/open -> edit validated settings -> native additive import or staged whole-payload replacement -> native entrypoint selection -> save/reload -> build/reveal output. Renderer never receives source paths or generic filesystem authority
 - Setup renderer receives display review + hasEntrypoint and sends pathless destination/install/uninstall/cancel/reveal/launch intent
 - Exact capability grants event listen/unlisten, window dragging, and named app commands only
 - Renderer has no generic shell/fs/dialog/opener/process permission
@@ -116,6 +116,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 
 - One bounded JSON object per line on inherited stdin/stdout; stdout is protocol-only
 - Methods: defaults, initProject, validateProject, updateProject, importPayload, resolvePayloadPath, buildProject, inspect, prepareInstall, install, uninstall, launch, cancel
+- importPayload defaults to additive no-overwrite import; replace=true requires one source directory, uses its contents as the new payload root, restores ordinary failures, and preserves the staging backup when rollback itself fails
 - Studio project summaries expose bounded authoring.executableFiles, not a potentially multi-megabyte executable path list; omitted updateProject.executable preserves the list, adds a new Unix entrypoint, and removes its old marker only when the old file is gone
 - Validate protocol version, request ID, method params, absolute paths, results, errors, events, tags, bounds, and cross-field relations on both sides
 - Tauri client bounds line size and pending requests; ordinary requests and shutdown have finite deadlines

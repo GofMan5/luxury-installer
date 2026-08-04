@@ -134,6 +134,7 @@ struct PackageSummary {
     name: String,
     publisher: String,
     version: String,
+    description: Option<String>,
     license: Option<String>,
     target_os: TargetOs,
     target_arch: TargetArch,
@@ -1398,6 +1399,11 @@ impl BoundPackage {
             || !valid_text(&inspected.package.version)
             || inspected
                 .package
+                .description
+                .as_deref()
+                .is_some_and(|description| !valid_text(description))
+            || inspected
+                .package
                 .license
                 .as_deref()
                 .is_some_and(|license| !valid_license(license))
@@ -1439,6 +1445,7 @@ impl BoundPackage {
                 name: inspected.package.name,
                 publisher: inspected.package.publisher,
                 version: inspected.package.version,
+                description: inspected.package.description,
                 license: inspected.package.license,
                 target_os: inspected.target.os,
                 target_arch: inspected.target.arch,
@@ -1604,17 +1611,7 @@ fn valid_install_log(show: bool, log: Option<&InstallLog>, total_files: u64) -> 
 }
 
 fn valid_install_log_path(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 512
-        && !value.starts_with('/')
-        && !value.contains(['\\', '\0', ':', '<', '>', '"', '|', '?', '*'])
-        && value.split('/').all(|component| {
-            !component.is_empty()
-                && component != "."
-                && component != ".."
-                && !component.ends_with(['.', ' '])
-                && !component.chars().any(char::is_control)
-        })
+    luxury_spec::PackagePath::parse(value).is_ok()
 }
 
 fn valid_https_url(value: &str) -> bool {
@@ -1727,6 +1724,7 @@ mod tests {
     #[test]
     fn install_presentation_metadata_is_bounded_and_cross_checked() {
         let mut value = inspected();
+        value.package.description = Some("Human-facing application summary.".into());
         value.install.show_install_log = true;
         value.install.finish_links = vec![FinishLink {
             label: "Документация".into(),
@@ -1737,6 +1735,10 @@ mod tests {
             omitted_files: 0,
         });
         let package = BoundPackage::from_backend("payload.luxpkg".into(), value.clone()).unwrap();
+        assert_eq!(
+            package.summary.description.as_deref(),
+            Some("Human-facing application summary.")
+        );
         assert_eq!(package.summary.finish_links.len(), 1);
         assert_eq!(package.summary.install_log.unwrap().files, ["hello.txt"]);
 
@@ -1752,6 +1754,14 @@ mod tests {
             .unwrap()
             .omitted_files = 1;
         assert!(BoundPackage::from_backend("payload.luxpkg".into(), mismatched).is_err());
+
+        let mut invalid_description = value.clone();
+        invalid_description.package.description = Some("bad\ndescription".into());
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), invalid_description).is_err());
+
+        let mut unicode_description = value.clone();
+        unicode_description.package.description = Some("я".repeat(1024));
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), unicode_description).is_ok());
 
         value.payload.install_log.as_mut().unwrap().files[0] = "../escape".into();
         assert!(BoundPackage::from_backend("payload.luxpkg".into(), value).is_err());
