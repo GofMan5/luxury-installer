@@ -1213,6 +1213,14 @@ mod tests {
     }
 
     #[test]
+    fn nsis_forwards_public_arguments_to_the_strict_bound_runner() {
+        let source = std::str::from_utf8(NSIS_SCRIPT).unwrap();
+        assert!(source.contains("normal_with_parameters:"));
+        assert!(source.contains("Luxury Installer.exe\" $Parameters"));
+        assert!(!source.contains("invalid_parameters:"));
+    }
+
+    #[test]
     fn tree_hash_binds_paths_and_bytes() {
         let temp = tempdir().unwrap();
         let root = temp.path().join("tree");

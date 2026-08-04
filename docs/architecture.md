@@ -97,6 +97,8 @@ Project summaries return an executable-file count instead of every path, keeping
 
 Setup is not a package browser. The shell binds one package path, fingerprint, package ID, state root, selected install base, latest Rust preparation, and authenticated finish links. Renderer calls for destination, install, uninstall, cancel, reveal, launch, and finish-link opening do not carry package/root/entrypoint/URL authority; a finish link is selected only by bounded index. A chooser or drag-and-drop replacement would violate the product boundary.
 
+The final bound launcher also exposes one windowless deployment surface: `--unattended-install` with explicit unsigned/license/publisher-migration consents, idempotent `--unattended-uninstall`, and `--help`. Argument parsing and the existing Rust backend/helper composition run before Tauri is constructed, so Linux needs neither `DISPLAY` nor GTK initialization. It always uses the compiled payload binding and host-native default roots; argv cannot supply paths, keys, downgrade approval, launch intent, environment, or commands. Windows NSIS forwards arguments without interpreting authority, while the inner Rust runner waits for the same terminal install/uninstall result and rollback and returns stable exit codes.
+
 ### Capability and webview policy
 
 [`capabilities/main.json`](../apps/luxury-installer/src-tauri/capabilities/main.json) grants only:

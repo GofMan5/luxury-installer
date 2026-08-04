@@ -18,6 +18,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Safe per-command CLI help plus strict JSONL v3, a validated public AI skill, and a complete CLI/protocol reference.
 - One native project build command that publishes Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg` while keeping the package handoff internal.
 - A bounded recent-project list that revalidates projects before reopening them.
+- Strict windowless install/uninstall on the final bound Setup, with explicit consent flags, idempotent removal, and stable exit codes for deployment tools.
 
 ### Changed
 
@@ -34,6 +35,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - macOS lifecycle cleanup reaps a confirmed exited process-group leader before retrying Darwin's zombie-only `EPERM`, while timeout and live-descendant containment remain fail-closed.
 - Windows uninstall crash QA now triggers directly from the first rollback-backup filesystem transition instead of racing a delayed coalesced progress frame with full live-state hashing.
 - Headless Linux native verification disables only the unavailable AT-SPI bridge so strict packaged-runner stderr checks are not tripped by the hosted image's missing accessibility D-Bus service.
+- The packaged Linux Studio native-build smoke now supplies Xvfb while keeping Cargo, rustc, and pnpm unavailable to the standalone packager.
 
 ### Security
 

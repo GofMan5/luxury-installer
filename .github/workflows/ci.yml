@@ -169,10 +169,13 @@ jobs:
           mkdir -p "$output_root"
           cargo run --locked -p luxury -- init "$project"
           if [ "$RUNNER_OS" = 'Linux' ]; then
+            setup_template="$(find dist -type f -path '*/templates/linux-x86_64/usr/bin/luxury-installer' -print -quit)"
+            test -n "$setup_template"
+            env -u DISPLAY "$setup_template" --help | grep -Fq -- '--unattended-install'
             packager="$(find dist -type f -path '*/usr/lib/Luxury Installer/packager/luxury-packager' -print -quit)"
             test -n "$packager"
             packager="$(cd "$(dirname "$packager")" && pwd -P)/$(basename "$packager")"
-            (cd "$RUNNER_TEMP" && PATH=/missing CARGO=/missing/cargo PNPM=/missing/pnpm RUSTC=/missing/rustc "$packager" project-installer "$project" "$output_root/installers")
+            (cd "$RUNNER_TEMP" && xvfb-run -a /usr/bin/env PATH=/missing CARGO=/missing/cargo PNPM=/missing/pnpm RUSTC=/missing/rustc "$packager" project-installer "$project" "$output_root/installers")
           else
             packager="$(find dist -type f -path '*/Contents/Resources/packager/luxury-packager' -print -quit)"
             test -n "$packager"

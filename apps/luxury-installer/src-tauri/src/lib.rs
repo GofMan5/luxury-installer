@@ -1,5 +1,7 @@
 #![deny(unsafe_code)]
 
+use std::ffi::OsString;
+
 use tauri::{LogicalSize, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
@@ -26,6 +28,7 @@ const NO_REQUESTED_EXIT: i32 = i32::MIN;
 const DEFAULT_WINDOW_WIDTH: f64 = 1080.0;
 const DEFAULT_WINDOW_HEIGHT: f64 = 720.0;
 const WINDOW_WORK_AREA_MARGIN: f64 = 32.0;
+const UNATTENDED_HELP: &str = "Usage:\n  Setup --unattended-install [--allow-unsigned] [--accept-license] [--allow-publisher-migration]\n  Setup --unattended-uninstall\n\nThe bound package and host-native default roots are used; paths cannot be supplied.\nExit codes: 0 success (including already absent uninstall), 1 operation failed, 64 invalid arguments.";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct FixedWindowSize {
@@ -108,6 +111,144 @@ const fn final_exit_code(runtime: i32, requested: i32) -> i32 {
     }
 }
 
+fn parse_unattended_command(
+    arguments: &[OsString],
+    strict_setup: bool,
+) -> Result<Option<setup::UnattendedCommand>, PublicError> {
+    let invalid = || {
+        PublicError::new(
+            "invalid_arguments",
+            "Параметры запуска Setup недействительны. Используйте --help.",
+        )
+    };
+    let mut action = None;
+    let mut help = false;
+    let mut allow_unsigned = false;
+    let mut accept_license = false;
+    let mut allow_publisher_migration = false;
+    let mut control_requested = false;
+    let mut verifier_requested = false;
+    let mut unknown = false;
+    let mut index = 1;
+    while index < arguments.len() {
+        let argument = arguments[index].to_str();
+        match argument {
+            Some("--unattended-install") => {
+                control_requested = true;
+                if action.replace(true).is_some() {
+                    return Err(invalid());
+                }
+            }
+            Some("--unattended-uninstall") => {
+                control_requested = true;
+                if action.replace(false).is_some() {
+                    return Err(invalid());
+                }
+            }
+            Some("--allow-unsigned") => {
+                control_requested = true;
+                if std::mem::replace(&mut allow_unsigned, true) {
+                    return Err(invalid());
+                }
+            }
+            Some("--accept-license") => {
+                control_requested = true;
+                if std::mem::replace(&mut accept_license, true) {
+                    return Err(invalid());
+                }
+            }
+            Some("--allow-publisher-migration") => {
+                control_requested = true;
+                if std::mem::replace(&mut allow_publisher_migration, true) {
+                    return Err(invalid());
+                }
+            }
+            Some("--help" | "-h") => {
+                control_requested = true;
+                if std::mem::replace(&mut help, true) {
+                    return Err(invalid());
+                }
+            }
+            Some(
+                "--verify-runner"
+                | "--verify-studio"
+                | "--verify-elevated-transport"
+                | "--verify-authenticated-transport"
+                | "--verify-container-parent"
+                | "--verify-system-authorization",
+            ) => verifier_requested = true,
+            Some("--package" | "--trusted-publisher-key") if !strict_setup => {
+                index += 1;
+                if index >= arguments.len() {
+                    return Err(invalid());
+                }
+            }
+            Some(argument)
+                if !strict_setup
+                    && (argument.starts_with("--package=")
+                        || argument.starts_with("--trusted-publisher-key=")) => {}
+            _ => unknown = true,
+        }
+        index += 1;
+    }
+    if (strict_setup && unknown)
+        || (control_requested && (unknown || verifier_requested))
+        || (help
+            && (action.is_some() || allow_unsigned || accept_license || allow_publisher_migration))
+    {
+        return Err(invalid());
+    }
+    if help {
+        return Ok(Some(setup::UnattendedCommand::Help));
+    }
+    if !control_requested {
+        return Ok(None);
+    }
+    match action {
+        Some(true) => Ok(Some(setup::UnattendedCommand::Install {
+            allow_unsigned,
+            accept_license,
+            allow_publisher_migration,
+        })),
+        Some(false) if !allow_unsigned && !accept_license && !allow_publisher_migration => {
+            Ok(Some(setup::UnattendedCommand::Uninstall))
+        }
+        _ => Err(invalid()),
+    }
+}
+
+fn require_unelevated_runtime() -> Result<(), PublicError> {
+    match privilege::is_elevated() {
+        Ok(elevated) if privilege::desktop_runtime_allowed(elevated, false) => Ok(()),
+        Ok(_) => Err(PublicError::new(
+            "elevated_ui_forbidden",
+            "Luxury Installer не запускается с повышенными правами; system scope использует отдельный защищённый helper.",
+        )),
+        Err(_) => Err(PublicError::new(
+            "privilege_check_failed",
+            "Не удалось безопасно определить уровень прав процесса.",
+        )),
+    }
+}
+
+fn run_unattended_process(command: setup::UnattendedCommand) -> i32 {
+    let result = require_unelevated_runtime().and_then(|()| {
+        let state = AppState::new_headless().map_err(PublicError::from)?;
+        let result = setup::run_unattended(&state, command);
+        if let Ok(backend) = state.backend() {
+            backend.close();
+        }
+        result
+    });
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("[{}] {}", error.code, error.message);
+            1
+        }
+    }
+}
+
 #[tauri::command]
 fn get_app_mode(state: State<'_, AppState>) -> AppMode {
     state.mode
@@ -186,34 +327,51 @@ async fn close_window_inner(window: WebviewWindow, state: AppState) -> Result<()
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let verify_runner = std::env::args_os().any(|argument| argument == "--verify-runner");
-    let verify_studio = std::env::args_os().any(|argument| argument == "--verify-studio");
-    let verify_elevated_transport =
-        std::env::args_os().any(|argument| argument == "--verify-elevated-transport");
-    let verify_authenticated_transport =
-        std::env::args_os().any(|argument| argument == "--verify-authenticated-transport");
-    let verify_container_parent =
-        std::env::args_os().any(|argument| argument == "--verify-container-parent");
-    let verify_system_authorization =
-        std::env::args_os().any(|argument| argument == "--verify-system-authorization");
+    let arguments = std::env::args_os().collect::<Vec<_>>();
+    let has_argument = |expected: &str| arguments.iter().any(|argument| argument == expected);
+    let verify_runner = has_argument("--verify-runner");
+    let verify_studio = has_argument("--verify-studio");
+    let verify_elevated_transport = has_argument("--verify-elevated-transport");
+    let verify_authenticated_transport = has_argument("--verify-authenticated-transport");
+    let verify_container_parent = has_argument("--verify-container-parent");
+    let verify_system_authorization = has_argument("--verify-system-authorization");
     let verify_requested = verify_runner || verify_studio;
+    let development_setup = cfg!(debug_assertions) && app::package_requested();
+    let setup_mode = cfg!(feature = "setup") || development_setup;
+    let parsed_command = parse_unattended_command(
+        &arguments,
+        cfg!(feature = "setup") && !cfg!(debug_assertions),
+    )
+    .and_then(|command| {
+        if command.is_some() && !setup_mode {
+            Err(PublicError::new(
+                "invalid_arguments",
+                "Unattended-режим доступен только для Setup.",
+            ))
+        } else {
+            Ok(command)
+        }
+    });
+    let (unattended_command, argument_error) = match parsed_command {
+        Ok(command) => (command, None),
+        Err(error) => (None, Some(error)),
+    };
+    if let Some(error) = argument_error {
+        eprintln!("[{}] {}", error.code, error.message);
+        std::process::exit(64);
+    }
+    if matches!(unattended_command, Some(setup::UnattendedCommand::Help)) {
+        println!("{UNATTENDED_HELP}");
+        std::process::exit(0);
+    }
+    if let Some(command) = unattended_command {
+        std::process::exit(run_unattended_process(command));
+    }
     let startup_error = if verify_requested {
         None
     } else {
-        match privilege::is_elevated() {
-            Ok(elevated) if privilege::desktop_runtime_allowed(elevated, false) => None,
-            Ok(_) => Some((
-                "elevated_ui_forbidden",
-                "Luxury Installer не запускает web-интерфейс с повышенными правами.",
-            )),
-            Err(_) => Some((
-                "privilege_check_failed",
-                "Не удалось безопасно определить уровень прав процесса.",
-            )),
-        }
+        require_unelevated_runtime().err()
     };
-    let development_setup = cfg!(debug_assertions) && app::package_requested();
-    let setup_mode = cfg!(feature = "setup") || development_setup;
     let mut context = tauri::generate_context!();
     if verify_requested || startup_error.is_some() {
         context.config_mut().app.windows.clear();
@@ -235,12 +393,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
-            if let Some((code, message)) = startup_error {
+            if let Some(error) = startup_error {
                 app.dialog()
-                    .message(message)
+                    .message(&error.message)
                     .title("Luxury Installer")
                     .blocking_show();
-                eprintln!("[{code}] {message}");
+                eprintln!("[{}] {}", error.code, error.message);
                 setup_exit_code.store(1, std::sync::atomic::Ordering::Release);
                 app.handle().exit(1);
                 return Ok(());
@@ -385,10 +543,20 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use super::{
         CloseRequestDisposition, DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, NO_REQUESTED_EXIT,
         close_request_disposition, container_parent_mode_valid, final_exit_code, fixed_window_size,
+        parse_unattended_command,
     };
+    use crate::setup::UnattendedCommand;
+
+    fn arguments(values: &[&str]) -> Vec<OsString> {
+        std::iter::once(OsString::from("Setup"))
+            .chain(values.iter().map(|value| OsString::from(*value)))
+            .collect()
+    }
 
     #[test]
     fn fixed_window_fits_the_monitor_work_area_at_any_scale() {
@@ -412,6 +580,68 @@ mod tests {
         assert_eq!(final_exit_code(0, 1), 1);
         assert_eq!(final_exit_code(1, 0), 0);
         assert_eq!(final_exit_code(7, NO_REQUESTED_EXIT), 7);
+    }
+
+    #[test]
+    fn unattended_arguments_are_exact_and_consent_bound() {
+        assert_eq!(
+            parse_unattended_command(
+                &arguments(&[
+                    "--unattended-install",
+                    "--allow-unsigned",
+                    "--accept-license",
+                    "--allow-publisher-migration",
+                ]),
+                true,
+            )
+            .unwrap(),
+            Some(UnattendedCommand::Install {
+                allow_unsigned: true,
+                accept_license: true,
+                allow_publisher_migration: true,
+            })
+        );
+        assert_eq!(
+            parse_unattended_command(&arguments(&["--unattended-uninstall"]), true).unwrap(),
+            Some(UnattendedCommand::Uninstall)
+        );
+        assert!(
+            parse_unattended_command(
+                &arguments(&["--unattended-uninstall", "--allow-unsigned"]),
+                true,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_unattended_command(
+                &arguments(&["--unattended-install", "--verify-runner"]),
+                true,
+            )
+            .is_err()
+        );
+        assert!(parse_unattended_command(&arguments(&["--unknown"]), true).is_err());
+    }
+
+    #[test]
+    fn development_setup_keeps_path_authority_out_of_unattended_flags() {
+        let command = parse_unattended_command(
+            &arguments(&[
+                "--package",
+                "/tmp/demo.luxpkg",
+                "--unattended-install",
+                "--allow-unsigned",
+            ]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            command,
+            Some(UnattendedCommand::Install {
+                allow_unsigned: true,
+                accept_license: false,
+                allow_publisher_migration: false,
+            })
+        );
     }
 
     #[test]

@@ -119,6 +119,19 @@ pnpm --dir apps/luxury-installer exec tauri dev -- -- --package="<absolute-packa
 
 Signed development QA may append `--trusted-publisher-key="<absolute-public.pem>"`. Release Setup ignores debug path overrides and uses only its embedded backend and bound payload.
 
+### Unattended native Setup
+
+The shipped Setup can install, update, repair, recover, or remove its bound application without starting Tauri, GTK, or a webview:
+
+```console
+My-App-Setup.exe --unattended-install --allow-unsigned
+My-App-Setup.exe --unattended-uninstall
+```
+
+Current Studio builds are unsigned development artifacts, so they need explicit `--allow-unsigned`. Add `--accept-license` only when the authenticated package contains a license, and `--allow-publisher-migration` only when preflight requires that migration. Unattended removal is idempotent. Paths, keys, downgrade approval, launch, and arbitrary commands are not accepted.
+
+The same flags belong to the bound launcher inside Linux and macOS containers. System-scope operations can still show the OS-native UAC/polkit authorization prompt. Exit `0` means success (including an already absent uninstall), `1` means the verified operation failed, and `64` means invalid arguments. `--help` prints the exact surface.
+
 ## Signed packages
 
 Private signing keys are bounded PKCS#8 PEM read from stdin only:

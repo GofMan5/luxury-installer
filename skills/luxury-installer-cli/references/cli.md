@@ -5,6 +5,7 @@
 - [Authority and process rules](#authority-and-process-rules)
 - [Human CLI](#human-cli)
 - [Project authoring](#project-authoring)
+- [Bound Setup unattended mode](#bound-setup-unattended-mode)
 - [Install, update, repair, and removal](#install-update-repair-and-removal)
 - [Signed packages and rotation](#signed-packages-and-rotation)
 - [JSONL process contract](#jsonl-process-contract)
@@ -85,6 +86,25 @@ executable = []
 ```
 
 Optional authoring fields include a 1-1024-character plain-text `package.description`, `package.license`, `install.allow_downgrade`, `install.entrypoint`, `install.show_install_log`, and up to four `[[install.finish_links]]` HTTPS links. Windows entrypoints must end in `.exe`; Linux/macOS entrypoints must also appear in `payload.executable`.
+
+## Bound Setup unattended mode
+
+Automate the final user-facing artifact without exposing its internal `.luxpkg`:
+
+```console
+My-App-Setup.exe --unattended-install --allow-unsigned
+My-App-Setup.exe --unattended-uninstall
+```
+
+On Linux invoke the installed bound `luxury-installer` binary. On macOS invoke `Luxury Installer.app/Contents/MacOS/Luxury Installer` directly; `open` does not preserve the operation's exit code. The accepted surface is exact:
+
+```text
+--unattended-install [--allow-unsigned] [--accept-license] [--allow-publisher-migration]
+--unattended-uninstall
+--help | -h
+```
+
+No package path, install root, state root, key, downgrade approval, launch, environment, or arbitrary command is accepted. The runner uses its compiled payload binding and host-native default roots, waits for terminal rollback/cleanup, and returns `0` on success, `1` on an operation failure, or `64` on invalid arguments. Unattended uninstall is idempotent; system scope can still require the OS-native UAC/polkit authorization prompt. Supply each consent only when the caller explicitly authorized the currently authenticated request.
 
 ## Install, update, repair, and removal
 

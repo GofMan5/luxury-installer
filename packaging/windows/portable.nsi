@@ -21,11 +21,7 @@ Section
   ${GetParameters} $Parameters
   StrCmp $Parameters "" extract
   StrCmp $Parameters "--verify-runner" extract
-  StrCmp $Parameters "--verify-authenticated-transport" extract invalid_parameters
-
-invalid_parameters:
-  SetErrorLevel 64
-  Quit
+  StrCmp $Parameters "--verify-authenticated-transport" extract
 
 extract:
   InitPluginsDir
@@ -34,7 +30,8 @@ extract:
 
   ClearErrors
   StrCmp $Parameters "--verify-runner" verify
-  StrCmp $Parameters "--verify-authenticated-transport" verify_authenticated normal
+  StrCmp $Parameters "--verify-authenticated-transport" verify_authenticated
+  StrCmp $Parameters "" normal normal_with_parameters
 
 verify:
   ExecWait '"$PLUGINSDIR\app\Luxury Installer.exe" --verify-runner' $ChildExitCode
@@ -46,6 +43,10 @@ verify_authenticated:
 
 normal:
   ExecWait '"$PLUGINSDIR\app\Luxury Installer.exe"' $ChildExitCode
+  Goto child_finished
+
+normal_with_parameters:
+  ExecWait '"$PLUGINSDIR\app\Luxury Installer.exe" $Parameters' $ChildExitCode
 
 child_finished:
   IfErrors child_failed

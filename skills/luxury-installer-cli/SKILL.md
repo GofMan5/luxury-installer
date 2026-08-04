@@ -21,6 +21,7 @@ Use the repository's current binary as authority. Never guess a command or retai
 - Use `luxury stdio` for a long-lived typed v3 subprocess, Tauri integration, or an AI tool that needs structured results, progress, cancellation, and stable errors.
 - Use Studio for interactive unsigned-v1 authoring. Add files without overwrite or replace the complete payload from one native-selected directory; keep every native selection in the Rust shell and never give the renderer generic filesystem authority.
 - Use `cargo project-installer -- <absolute-project> <absolute-native-output>` for the file a user ships: Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg`. Treat `.luxpkg` as the low-level signing/lifecycle boundary, not the Studio result.
+- Use the final bound launcher's `--unattended-install` / `--unattended-uninstall` for deployment. Never extract its internal package or invent path flags; pass consent flags only with explicit caller authority.
 
 ## Execute safely
 

@@ -104,6 +104,15 @@ cargo run -p luxury -- help install
 
 Every public subcommand supports non-mutating `--help`/`-h`. The complete agent workflow and exact JSONL examples live in [`skills/luxury-installer-cli`](../skills/luxury-installer-cli/SKILL.md); read its [CLI reference](../skills/luxury-installer-cli/references/cli.md) before implementing a client.
 
+For deployment automation, invoke the already-built bound Setup instead of extracting its internal package:
+
+```console
+My-App-Setup.exe --unattended-install --allow-unsigned
+My-App-Setup.exe --unattended-uninstall
+```
+
+Linux uses the installed bound `luxury-installer` launcher. On macOS invoke `Luxury Installer.app/Contents/MacOS/Luxury Installer` directly so the caller receives the real exit code. The runner accepts no path, key, downgrade, launch, or command authority. Add `--accept-license` only for a package that offers a license and `--allow-publisher-migration` only for an offered migration. Exit codes are `0` success/already absent, `1` operation failure, and `64` invalid arguments.
+
 Create, build, and inspect from the human CLI:
 
 ```console

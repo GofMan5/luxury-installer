@@ -185,6 +185,17 @@ pub(crate) struct StartInstallInput {
     allow_publisher_migration: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UnattendedCommand {
+    Help,
+    Install {
+        allow_unsigned: bool,
+        accept_license: bool,
+        allow_publisher_migration: bool,
+    },
+    Uninstall,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OperationStarted {
@@ -637,6 +648,40 @@ fn start_install_sync(
     let context = setup_context(&state)?;
     let starting = acquire_idle(&state, &context)?;
     let selection = selection(&context)?;
+    let operation = create_install_operation(&input, &state, &context, &selection)?;
+    let operation_id = operation.operation_id().to_owned();
+    let system_cancel = operation.system_cancellation();
+    *context
+        .active
+        .lock()
+        .map_err(|_| PublicError::new("internal_error", "Состояние операции недоступно."))? =
+        Some(ActiveOperation {
+            operation_id: operation_id.clone(),
+            kind: ActiveKind::Install,
+            system_cancel: system_cancel.clone(),
+            completion: Arc::new((Mutex::new(false), Condvar::new())),
+        });
+    drop(starting);
+    if let Err(error) =
+        spawn_install_completion(app, state.clone(), context.clone(), selection, operation)
+    {
+        clear_active(&context, &operation_id);
+        if let Some(cancel) = system_cancel {
+            cancel.store(true, Ordering::Release);
+        } else if let Ok(backend) = state.backend() {
+            let _ = backend.cancel(&operation_id);
+        }
+        return Err(error);
+    }
+    Ok(OperationStarted { operation_id })
+}
+
+fn create_install_operation(
+    input: &StartInstallInput,
+    state: &AppState,
+    context: &SetupContext,
+    selection: &SetupSelection,
+) -> Result<SetupOperation, PublicError> {
     let (space_available, migration_required) = match &selection.preparation {
         PrepareInstallResult::Ready {
             publisher_migration_required,
@@ -674,7 +719,7 @@ fn start_install_sync(
         input.accept_license,
     )?;
     context.install_completed.store(false, Ordering::Release);
-    let operation = match context.package.summary.scope {
+    Ok(match context.package.summary.scope {
         InstallScope::User => SetupOperation::User(
             state
                 .backend()
@@ -717,32 +762,7 @@ fn start_install_sync(
                 })?,
             )
         }
-    };
-    let operation_id = operation.operation_id().to_owned();
-    let system_cancel = operation.system_cancellation();
-    *context
-        .active
-        .lock()
-        .map_err(|_| PublicError::new("internal_error", "Состояние операции недоступно."))? =
-        Some(ActiveOperation {
-            operation_id: operation_id.clone(),
-            kind: ActiveKind::Install,
-            system_cancel: system_cancel.clone(),
-            completion: Arc::new((Mutex::new(false), Condvar::new())),
-        });
-    drop(starting);
-    if let Err(error) =
-        spawn_install_completion(app, state.clone(), context.clone(), selection, operation)
-    {
-        clear_active(&context, &operation_id);
-        if let Some(cancel) = system_cancel {
-            cancel.store(true, Ordering::Release);
-        } else if let Ok(backend) = state.backend() {
-            let _ = backend.cancel(&operation_id);
-        }
-        return Err(error);
-    }
-    Ok(OperationStarted { operation_id })
+    })
 }
 
 fn require_license_consent(license: Option<&str>, accepted: bool) -> Result<(), PublicError> {
@@ -774,7 +794,40 @@ fn start_uninstall_sync(app: AppHandle, state: AppState) -> Result<OperationStar
             "Приложение не установлено.",
         ));
     }
-    let operation = match context.package.summary.scope {
+    let operation = create_uninstall_operation(&state, &context, &selection)?;
+    let operation_id = operation.operation_id().to_owned();
+    let system_cancel = operation.system_cancellation();
+    *context
+        .active
+        .lock()
+        .map_err(|_| PublicError::new("internal_error", "Состояние операции недоступно."))? =
+        Some(ActiveOperation {
+            operation_id: operation_id.clone(),
+            kind: ActiveKind::Uninstall,
+            system_cancel: system_cancel.clone(),
+            completion: Arc::new((Mutex::new(false), Condvar::new())),
+        });
+    drop(starting);
+    if let Err(error) =
+        spawn_uninstall_completion(app, state.clone(), context.clone(), selection, operation)
+    {
+        clear_active(&context, &operation_id);
+        if let Some(cancel) = system_cancel {
+            cancel.store(true, Ordering::Release);
+        } else if let Ok(backend) = state.backend() {
+            let _ = backend.cancel(&operation_id);
+        }
+        return Err(error);
+    }
+    Ok(OperationStarted { operation_id })
+}
+
+fn create_uninstall_operation(
+    state: &AppState,
+    context: &SetupContext,
+    selection: &SetupSelection,
+) -> Result<SetupOperation, PublicError> {
+    Ok(match context.package.summary.scope {
         InstallScope::User => SetupOperation::User(
             state
                 .backend()
@@ -809,32 +862,90 @@ fn start_uninstall_sync(app: AppHandle, state: AppState) -> Result<OperationStar
                 })?,
             )
         }
-    };
-    let operation_id = operation.operation_id().to_owned();
-    let system_cancel = operation.system_cancellation();
-    *context
-        .active
-        .lock()
-        .map_err(|_| PublicError::new("internal_error", "Состояние операции недоступно."))? =
-        Some(ActiveOperation {
-            operation_id: operation_id.clone(),
-            kind: ActiveKind::Uninstall,
-            system_cancel: system_cancel.clone(),
-            completion: Arc::new((Mutex::new(false), Condvar::new())),
-        });
-    drop(starting);
-    if let Err(error) =
-        spawn_uninstall_completion(app, state.clone(), context.clone(), selection, operation)
-    {
-        clear_active(&context, &operation_id);
-        if let Some(cancel) = system_cancel {
-            cancel.store(true, Ordering::Release);
-        } else if let Ok(backend) = state.backend() {
-            let _ = backend.cancel(&operation_id);
+    })
+}
+
+pub(crate) fn run_unattended(
+    state: &AppState,
+    command: UnattendedCommand,
+) -> Result<(), PublicError> {
+    state.require_mode(AppMode::Setup)?;
+    let context = setup_context(state)?;
+    let starting = acquire_idle(state, &context)?;
+    let selection = selection(&context)?;
+    match command {
+        UnattendedCommand::Help => Ok(()),
+        UnattendedCommand::Install {
+            allow_unsigned,
+            accept_license,
+            allow_publisher_migration,
+        } => {
+            let operation = create_install_operation(
+                &StartInstallInput {
+                    allow_unsigned,
+                    accept_license,
+                    allow_publisher_migration,
+                },
+                state,
+                &context,
+                &selection,
+            )?;
+            drop(starting);
+            wait_unattended_install(&context, &selection, operation)
         }
-        return Err(error);
+        UnattendedCommand::Uninstall => {
+            let operation = create_uninstall_operation(state, &context, &selection)?;
+            drop(starting);
+            wait_unattended_uninstall(&context, operation)
+        }
     }
-    Ok(OperationStarted { operation_id })
+}
+
+fn wait_unattended_install(
+    context: &SetupContext,
+    selection: &SetupSelection,
+    operation: SetupOperation,
+) -> Result<(), PublicError> {
+    loop {
+        match operation.recv().map_err(PublicError::from)? {
+            OperationMessage::Event(_) => {}
+            OperationMessage::Complete(result) => {
+                let value = result.map_err(PublicError::from)?;
+                let result =
+                    strict_value::<InstallResult>(value, "install result").map_err(|_| {
+                        PublicError::new(
+                            "invalid_backend_output",
+                            "Компонент установки вернул неверный результат.",
+                        )
+                    })?;
+                validate_install_result(context, selection, result)?;
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn wait_unattended_uninstall(
+    context: &SetupContext,
+    operation: SetupOperation,
+) -> Result<(), PublicError> {
+    loop {
+        match operation.recv().map_err(PublicError::from)? {
+            OperationMessage::Event(_) => {}
+            OperationMessage::Complete(result) => {
+                let value = result.map_err(PublicError::from)?;
+                let result =
+                    strict_value::<UninstallResult>(value, "uninstall result").map_err(|_| {
+                        PublicError::new(
+                            "invalid_backend_output",
+                            "Компонент удаления вернул неверный результат.",
+                        )
+                    })?;
+                validate_uninstall_result(context, result)?;
+                return Ok(());
+            }
+        }
+    }
 }
 
 fn spawn_install_completion(
