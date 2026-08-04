@@ -4,6 +4,8 @@ fn main() {
         "get_bootstrap",
         "create_project",
         "open_project",
+        "get_recent_projects",
+        "open_recent_project",
         "reload_project",
         "update_project",
         "import_project_files",

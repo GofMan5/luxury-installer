@@ -12,14 +12,15 @@ use sha2::{Digest, Sha256};
 
 use super::{
     HostLayout, ShellFlavor, assemble_into, bounded_output, exact_object, is_link_or_reparse,
+    patch_setup_template_binding,
     probe::{
         probe_authenticated_container_runner, probe_authenticated_runner, probe_backend,
         probe_container_runner, probe_runner,
     },
-    required_hash, required_string, required_u64, sha256_hex,
+    require_setup_template_binding, required_hash, required_string, required_u64, sha256_hex,
     staging::{
-        WorkDirectory, checked_input, copy_file, ensure_real_directory, require_missing,
-        require_only_file, require_regular_file, retry_transient_io, sha256_file,
+        WorkDirectory, checked_input, copy_file, ensure_real_directory, publish_file_no_clobber,
+        require_missing, require_only_file, require_regular_file, retry_transient_io, sha256_file,
     },
     validate_portable_bundle,
 };
@@ -82,6 +83,203 @@ pub(super) fn build(package: &Path, nsis_archive: &Path) -> Result<(), String> {
         }
         Err(error) => Err(error),
     }
+}
+
+pub(super) fn build_project(project: &Path, destination: &Path) -> Result<(), String> {
+    if env::consts::OS != "windows" || env::consts::ARCH != "x86_64" {
+        return Err("Windows Setup.exe project builds require native Windows x86_64".into());
+    }
+    let parent = validate_project_output(project, destination)?;
+    ensure_real_directory(parent)?;
+    require_missing(destination, "Windows Setup.exe output")?;
+
+    let root = crate::workspace_root();
+    let target = super::resolve_target_dir(&root, env::var_os("CARGO_TARGET_DIR").as_deref());
+    fs::create_dir_all(&target)
+        .map_err(|error| format!("could not create target directory: {error}"))?;
+    ensure_real_directory(&target)?;
+    let pin = parse_pin(NSIS_LOCK)?;
+    let nsis_archive = cached_nsis_archive(&target, &pin)?;
+
+    let work = WorkDirectory::new(parent)?;
+    let package = work.path.join("internal-package.luxpkg");
+    luxury_compiler::compile_project(project, &package)
+        .map_err(|error| format!("could not compile installer project: {error}"))?;
+    let package = checked_input(&package, "internal Windows Setup payload")?;
+
+    let output = work.path.join("container-output");
+    let container_work = work.path.join("container-work");
+    fs::create_dir(&output)
+        .map_err(|error| format!("could not create container output directory: {error}"))?;
+    fs::create_dir(&container_work)
+        .map_err(|error| format!("could not create container work directory: {error}"))?;
+    let artifact = build_in_work(&output, &container_work, &package, &nsis_archive, &pin)?;
+    let setup = artifact.join(SETUP_FILENAME);
+    publish_file_no_clobber(&setup, destination)?;
+    work.cleanup().map_err(|error| {
+        format!(
+            "verified Windows Setup.exe was published at `{}`, but {error}",
+            destination.display()
+        )
+    })?;
+    println!(
+        "verified unsigned Windows development Setup.exe: {}",
+        destination.display()
+    );
+    Ok(())
+}
+
+pub(super) fn build_packaged_project(
+    project: &Path,
+    destination: &Path,
+    resources: &Path,
+) -> Result<(), String> {
+    if env::consts::OS != "windows" || env::consts::ARCH != "x86_64" {
+        return Err("packaged Windows project builds require native Windows x86_64".into());
+    }
+    let parent = validate_project_output(project, destination)?;
+    ensure_real_directory(parent)?;
+    require_missing(destination, "Windows Setup.exe output")?;
+
+    let host = HostLayout::new("windows", "x86_64")?;
+    let template = resources.join("templates").join("windows-x86_64");
+    validate_portable_bundle(&template, host, ShellFlavor::SetupTemplate, None)?;
+    require_setup_template_binding(&host.launcher(&template))?;
+    let nsis_archive = resources.join("tools").join("nsis-3.12.zip");
+    let pin = parse_pin(NSIS_LOCK)?;
+    verify_pinned_archive(&nsis_archive, &pin)?;
+
+    let work = WorkDirectory::new(parent)?;
+    let package = work.path.join("internal-package.luxpkg");
+    luxury_compiler::compile_project(project, &package)
+        .map_err(|error| format!("could not compile installer project: {error}"))?;
+    let package = checked_input(&package, "internal Windows Setup payload")?;
+    let template_backend = host
+        .resources_directory(&template)
+        .join("backend")
+        .join(host.backend_name);
+    let fingerprint = probe_backend(&template_backend, &package, host)?;
+
+    let runner_name = super::artifact_name(host, &fingerprint)?;
+    let runner = work.path.join(runner_name);
+    copy_tree(&template, &runner)?;
+    let launcher = host.launcher(&runner);
+    patch_setup_template_binding(&launcher, &fingerprint)?;
+    let payload = host
+        .resources_directory(&runner)
+        .join("payload")
+        .join("package.luxpkg");
+    fs::create_dir(
+        payload
+            .parent()
+            .ok_or_else(|| "packaged Windows payload has no parent".to_owned())?,
+    )
+    .map_err(|error| format!("could not create packaged Windows payload directory: {error}"))?;
+    copy_file(&package, &payload)?;
+    validate_portable_bundle(&runner, host, ShellFlavor::Setup, None)?;
+    let backend = host
+        .resources_directory(&runner)
+        .join("backend")
+        .join(host.backend_name);
+    if probe_backend(&backend, &payload, host)? != fingerprint {
+        return Err("packaged Windows template inspected a different payload".into());
+    }
+    probe_runner(&launcher)?;
+
+    let nsis = prepare_nsis(&work.path, &nsis_archive, &pin)?;
+    let output = work.path.join("container-output");
+    fs::create_dir(&output)
+        .map_err(|error| format!("could not create container output directory: {error}"))?;
+    let artifact = wrap_runner(
+        &output,
+        &work.path,
+        &runner,
+        &super::artifact_name(host, &fingerprint)?,
+        &sha256_hex(sha256_file(&package)?),
+        None,
+        &nsis,
+        &pin,
+    )?;
+    publish_file_no_clobber(&artifact.join(SETUP_FILENAME), destination)?;
+    work.cleanup().map_err(|error| {
+        format!(
+            "verified Windows Setup.exe was published at `{}`, but {error}",
+            destination.display()
+        )
+    })?;
+    println!(
+        "verified unsigned Windows development Setup.exe: {}",
+        destination.display()
+    );
+    Ok(())
+}
+
+fn validate_project_output<'a>(project: &Path, destination: &'a Path) -> Result<&'a Path, String> {
+    if !project.is_absolute() || !destination.is_absolute() {
+        return Err("project-installer paths must be absolute".into());
+    }
+    if !destination
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("exe"))
+    {
+        return Err("Windows project-installer output must end in .exe".into());
+    }
+    destination
+        .parent()
+        .ok_or_else(|| "Windows Setup.exe output has no parent directory".to_owned())
+}
+
+fn cached_nsis_archive(target: &Path, pin: &NsisPin) -> Result<PathBuf, String> {
+    let cache = target.join("tool-cache");
+    fs::create_dir_all(&cache)
+        .map_err(|error| format!("could not create tool cache directory: {error}"))?;
+    ensure_real_directory(&cache)?;
+    let archive = cache.join(&pin.archive_name);
+    if archive.exists() {
+        verify_pinned_archive(&archive, pin)?;
+        return Ok(archive);
+    }
+
+    let work = WorkDirectory::new(&cache)?;
+    let downloaded = work.path.join(&pin.archive_name);
+    let status = Command::new("curl.exe")
+        .args([
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--ssl-revoke-best-effort",
+            "--http1.1",
+            "--retry",
+            "3",
+            "--retry-all-errors",
+            "--output",
+        ])
+        .arg(&downloaded)
+        .arg(&pin.url)
+        .status()
+        .map_err(|error| format!("could not start the built-in Windows curl client: {error}"))?;
+    if !status.success()
+        && let Err(verification) = verify_pinned_archive(&downloaded, pin)
+    {
+        return Err(format!(
+            "pinned NSIS download exited with {status}; {verification}"
+        ));
+    }
+    verify_pinned_archive(&downloaded, pin)?;
+    if let Err(error) = copy_file(&downloaded, &archive)
+        && (!archive.exists() || verify_pinned_archive(&archive, pin).is_err())
+    {
+        return Err(error);
+    }
+    verify_pinned_archive(&archive, pin)?;
+    work.cleanup()?;
+    Ok(archive)
+}
+
+pub(super) fn cached_studio_nsis(target: &Path) -> Result<PathBuf, String> {
+    cached_nsis_archive(target, &parse_pin(NSIS_LOCK)?)
 }
 
 pub(super) fn build_signed_runner(runner: &Path, nsis_archive: &Path) -> Result<(), String> {
@@ -362,6 +560,7 @@ fn wrap_runner(
     if sha256_hex(sha256_file(&published_setup)?) != setup_sha256 {
         return Err("published Setup bytes changed after verification".into());
     }
+    drop(published_setup_guard);
 
     let provenance = json!({
         "schemaVersion": 1,
@@ -409,10 +608,12 @@ fn wrap_runner(
             final_artifact.display()
         )
     })?;
-    if sha256_hex(sha256_file(&final_artifact.join(published_filename))?) != setup_sha256 {
+    let final_setup = final_artifact.join(published_filename);
+    let final_setup_guard = open_read_guard(&final_setup)?;
+    if sha256_hex(sha256_file(&final_setup)?) != setup_sha256 {
         return Err("published Setup bytes changed during atomic publication".into());
     }
-    drop(published_setup_guard);
+    drop(final_setup_guard);
     Ok(final_artifact)
 }
 
@@ -547,6 +748,7 @@ fn open_read_guard(path: &Path) -> Result<File, String> {
 }
 
 fn verify_pinned_archive(path: &Path, pin: &NsisPin) -> Result<(), String> {
+    require_regular_file(path, "pinned NSIS archive")?;
     let size = fs::metadata(path)
         .map_err(|error| format!("could not inspect pinned NSIS archive: {error}"))?
         .len();
@@ -985,6 +1187,17 @@ mod tests {
 
         let unknown = NSIS_LOCK.replacen("\n}", ",\n  \"unknown\": true\n}", 1);
         assert!(parse_pin(&unknown).is_err());
+    }
+
+    #[test]
+    fn project_output_is_an_absolute_setup_executable() {
+        let project = Path::new(r"C:\projects\demo");
+        assert_eq!(
+            validate_project_output(project, Path::new(r"C:\builds\Demo-Setup.EXE")).unwrap(),
+            Path::new(r"C:\builds")
+        );
+        assert!(validate_project_output(project, Path::new(r"C:\builds\demo.luxpkg")).is_err());
+        assert!(validate_project_output(Path::new("demo"), Path::new("Demo-Setup.exe")).is_err());
     }
 
     #[test]

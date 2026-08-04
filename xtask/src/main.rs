@@ -43,6 +43,14 @@ fn run() -> Result<(), String> {
         [command] if command == OsStr::new("studio-assemble") => {
             runner::studio_assemble()?;
         }
+        [command, project, output] if command == OsStr::new("project-installer") => {
+            runner::project_installer(Path::new(project), Path::new(output))?;
+        }
+        [command, separator, project, output]
+            if command == OsStr::new("project-installer") && separator == OsStr::new("--") =>
+        {
+            runner::project_installer(Path::new(project), Path::new(output))?;
+        }
         [command, package] if command == OsStr::new("assemble") => {
             runner::assemble(Path::new(package))?;
         }
@@ -126,7 +134,7 @@ fn run() -> Result<(), String> {
         _ => {
             usage();
             return Err(
-                "expected ci, gui-check, dist, runner-smoke, studio-assemble, assemble <package.luxpkg>, linux-packages <package.luxpkg>, macos-dmg <signed.app>, windows-setup <package.luxpkg> <nsis.zip>, windows-release-setup <signed-runner> <nsis.zip>, verify-authenticode-pair <launcher.exe> <helper.exe>, verify-windows-release <signed-setup.exe>, verify-macos-release <app.bundle>, verify-macos-dmg <signed.dmg>, or verify-evidence-set <directory>".into(),
+                "expected ci, gui-check, dist, runner-smoke, studio-assemble, project-installer <project> <output>, assemble <package.luxpkg>, linux-packages <package.luxpkg>, macos-dmg <signed.app>, windows-setup <package.luxpkg> <nsis.zip>, windows-release-setup <signed-runner> <nsis.zip>, verify-authenticode-pair <launcher.exe> <helper.exe>, verify-windows-release <signed-setup.exe>, verify-macos-release <app.bundle>, verify-macos-dmg <signed.dmg>, or verify-evidence-set <directory>".into(),
             );
         }
     }
@@ -207,6 +215,7 @@ fn usage() {
   cargo run -p xtask -- dist
   cargo run -p xtask -- runner-smoke
   cargo run -p xtask -- studio-assemble
+  cargo run -p xtask -- project-installer <project> <native-output>
   cargo run -p xtask -- assemble <package.luxpkg>
   cargo run -p xtask -- linux-packages <package.luxpkg>
   cargo run -p xtask -- macos-dmg <signed.app>
@@ -223,6 +232,7 @@ gui-check runs renderer contracts, TypeScript, the frontend build, and the isola
 dist runs the full Rust test gate and builds the host backend plus the checked Tauri frontend.
 runner-smoke verifies the portable Tauri runner lifecycle and writes schema-v2 evidence after cleanup.
 studio-assemble builds and verifies one payload-free portable Tauri Studio without overwriting an artifact; Unix also gets a deterministic mode-preserving tar.gz.
+project-installer keeps the package container internal and publishes one host-native end-user installer without overwriting the selected output.
 assemble builds one unsigned-v1 portable Tauri runner without overwriting an artifact; Unix also gets a deterministic mode-preserving tar.gz.
 linux-packages uses the pinned Tauri bundler to wrap one verified bound Setup as inspected unsigned .deb and RPM development artifacts on native Linux.
 macos-dmg wraps one verified signed/stapled Setup app in an inspected unsigned development DMG on native macOS.

@@ -362,6 +362,23 @@ impl BackendClient {
     }
 }
 
+pub(crate) fn guard_executable(path: &Path) -> Result<fs::File, BackendError> {
+    #[cfg(windows)]
+    {
+        lock_executable(path)
+    }
+    #[cfg(not(windows))]
+    {
+        validate_executable(path)?;
+        fs::File::open(path).map_err(|error| {
+            BackendError::new(
+                "backend_missing",
+                format!("could not open executable `{}`: {error}", path.display()),
+            )
+        })
+    }
+}
+
 impl BackendProcess {
     fn spawn(
         executable: &Path,

@@ -65,6 +65,7 @@ cargo ci
 cargo full-test --locked
 cargo dist
 cargo studio-assemble
+cargo project-installer -- <absolute-project> <absolute-native-output>
 cargo runner-smoke
 ```
 
@@ -77,6 +78,7 @@ What they prove:
 - `cargo full-test`: all root-workspace targets; still excludes the standalone Tauri workspace.
 - `cargo dist`: full root tests, host `luxury` backend, and checked desktop frontend; no runner/signing claim.
 - `cargo studio-assemble`: no-clobber payload-free Studio artifact for this host, including exact `--verify-studio`; Linux/macOS also get the deterministic mode-preserving `.tar.gz` used by CI.
+- `cargo project-installer`: user-facing host-native build. It keeps `.luxpkg` in a temporary work directory and publishes only Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg` without overwrite.
 - `cargo verify-windows-signers -- <launcher.exe> <helper.exe>`: fail-closed embedded Authenticode-chain and exact leaf-certificate comparison for already signed Windows files.
 - `cargo windows-release-setup -- <signed-runner-dir> <nsis.zip>`: verify the same-signer inner pair and emit an unsigned outer NSIS for external signing.
 - `cargo verify-windows-release -- <signed-setup.exe>`: verify the final signed outer parent, authenticated inner runner/helper, UAC transport, and argument rejection.
@@ -219,6 +221,22 @@ Rules:
 - Current JSONL methods are `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, and `cancel`. Add/remove/rename one only with synchronized CLI reference, `llms.txt`, skill, Tauri types, and tests.
 
 Renderer commands and events must stay synchronized with Rust command signatures and strict Zod contracts. A compile pass alone is not proof of wire compatibility; update the focused contract test when the shape changes.
+
+## Build the end-user installer
+
+Studio and agents use one command:
+
+```console
+cargo project-installer -- <absolute-project-directory> <absolute-native-output>
+```
+
+- Windows x86_64 output is a new `.exe` file.
+- Linux x86_64/aarch64 output is a new directory containing `.deb`, `.rpm`, and provenance.
+- macOS x86_64/aarch64 output is a new `.dmg` file.
+
+The compiler package is an internal verified handoff and is removed with the work directory. Released Studio uses its bundled payload-free Setup template and Rust packager, so a user build does not run Cargo, pnpm, TypeScript, or Tauri compilation. Windows also carries the SHA-256-pinned NSIS archive. Linux creates deterministic-layout Debian `ar`/tar and RPM/CPIO containers with narrow Rust libraries, then independently parses their metadata, ownership, modes, scripts, dependencies, paths, and hashes; `dpkg`, `rpm`, and `cpio` are release cross-checks, not user runtime dependencies. The pinned RPM writer buffers its payload, so packaged Studio rejects combined Linux inputs above 256 MiB before allocation pressure; raise that ceiling only with a streaming RPM writer. Template materialization patches exactly one reviewed 64-byte binding slot, then repeats package, runner, container, argument-rejection, and final-byte checks.
+
+Native multi-build means running this command on matching Windows/Linux/macOS runners. Do not claim Apple signing from Windows or publish the blocked Linux desktop graph. Low-level package and runner commands below remain release/security gates, not the Studio result.
 
 ## Assemble a host-native runner
 

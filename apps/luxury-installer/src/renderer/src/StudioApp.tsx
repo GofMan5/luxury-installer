@@ -20,6 +20,7 @@ import { WindowChrome } from './components/WindowChrome'
 import { formatBytes, formatFileCount } from './features/installer/format'
 import type {
   LuxuryBridge,
+  RecentProject,
   StudioBuildResult,
   StudioProject,
   StudioProjectUpdate,
@@ -34,6 +35,8 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
       state={studio.view}
       onCreate={() => void studio.createProject()}
       onOpen={() => void studio.openProject()}
+      recentProjects={studio.recentProjects}
+      onOpenRecent={(index) => void studio.openRecentProject(index)}
       onReload={() => void studio.reloadProject()}
       onReveal={() => void studio.revealProject()}
       onSave={(input) => void studio.updateProject(input)}
@@ -52,6 +55,8 @@ interface StudioViewProps {
   state: StudioState
   onCreate(): void
   onOpen(): void
+  recentProjects: RecentProject[]
+  onOpenRecent(index: number): void
   onReload(): void
   onReveal(): void
   onSave(input: StudioProjectUpdate): void
@@ -68,6 +73,8 @@ export function StudioView({
   state,
   onCreate,
   onOpen,
+  recentProjects,
+  onOpenRecent,
   onReload,
   onReveal,
   onSave,
@@ -144,7 +151,12 @@ export function StudioView({
             title={state.action === 'create' ? 'Создаём проект' : 'Открываем проект'}
           />
         ) : state.kind === 'empty' ? (
-          <EmptyStudioView onCreate={onCreate} onOpen={onOpen} />
+          <EmptyStudioView
+            recentProjects={recentProjects}
+            onCreate={onCreate}
+            onOpen={onOpen}
+            onOpenRecent={onOpenRecent}
+          />
         ) : state.kind === 'error' && !state.project ? (
           <EmptyErrorView message={state.message} onDismiss={onDismissError} />
         ) : project ? (
@@ -165,7 +177,17 @@ export function StudioView({
   )
 }
 
-function EmptyStudioView({ onCreate, onOpen }: { onCreate(): void; onOpen(): void }) {
+function EmptyStudioView({
+  recentProjects,
+  onCreate,
+  onOpen,
+  onOpenRecent,
+}: {
+  recentProjects: RecentProject[]
+  onCreate(): void
+  onOpen(): void
+  onOpenRecent(index: number): void
+}) {
   return (
     <section className="studio-empty" aria-labelledby="studio-empty-title">
       <FileCode2 size={28} strokeWidth={1.6} aria-hidden="true" />
@@ -181,6 +203,29 @@ function EmptyStudioView({ onCreate, onOpen }: { onCreate(): void; onOpen(): voi
           Открыть проект
         </button>
       </div>
+      {recentProjects.length ? (
+        <section className="studio-recent" aria-labelledby="studio-recent-title">
+          <h2 id="studio-recent-title">Недавние проекты</h2>
+          <div className="studio-recent__list">
+            {recentProjects.map((project, index) => (
+              <button
+                key={project.projectPath}
+                type="button"
+                title={project.projectPath}
+                onClick={() => onOpenRecent(index)}
+              >
+                <FolderOpen size={18} aria-hidden="true" />
+                <span>
+                  <strong>{project.name}</strong>
+                  <small>{project.publisher} · {project.version}</small>
+                  <code>{project.projectPath}</code>
+                </span>
+                <small>{targetLabel(project)}</small>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </section>
   )
 }
@@ -300,7 +345,7 @@ function ProjectView({
             onClick={onBuild}
           >
             {building ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Hammer size={17} aria-hidden="true" />}
-            {building ? 'Собираем…' : 'Собрать'}
+            {building ? 'Собираем…' : nativeBuildLabel(project.targetOs)}
           </button>
         </div>
       </header>
@@ -321,14 +366,14 @@ function ProjectView({
       {!buildable ? (
         <p className="studio-build-note" id="studio-signed-build-note">
           <Terminal size={17} aria-hidden="true" />
-          Подписанные пакеты v2/v3 собираются в командной строке; закрытый ключ передаётся только через stdin.
+          Подписанные проекты собираются в командной строке; закрытый ключ передаётся только через stdin.
         </p>
       ) : null}
 
       {building ? (
         <div className="studio-build-progress" role="status" aria-live="polite">
           <SquareDashed className="spin" size={19} aria-hidden="true" />
-          Rust проверяет проект и собирает пакет…
+          Rust проверяет проект и собирает готовый установщик…
         </div>
       ) : null}
 
@@ -359,7 +404,7 @@ function ProjectView({
               <StudioField label="Версия">
                 <input required maxLength={1024} value={draft.version} onChange={(event) => setDraft({ ...draft, version: event.target.value })} placeholder="1.0.0" />
               </StudioField>
-              <StudioField label="ID пакета" wide>
+              <StudioField label="ID приложения" wide>
                 <input required maxLength={128} value={draft.packageId} onChange={(event) => setDraft({ ...draft, packageId: event.target.value })} placeholder="com.company.app" />
               </StudioField>
               <StudioField label="Издатель" wide>
@@ -455,7 +500,7 @@ function ProjectView({
 
           <section className="studio-payload-summary" aria-labelledby="payload-title">
             <div>
-              <h2 id="payload-title">Файлы пакета</h2>
+              <h2 id="payload-title">Файлы приложения</h2>
               <p>{formatFileCount(project.files)} · {formatBytes(project.bytes)}</p>
             </div>
             <div>
@@ -483,8 +528,8 @@ function ReadOnlyProject({ project }: { project: StudioProject }) {
       <section aria-labelledby="manifest-title">
         <h2 id="manifest-title">Манифест</h2>
         <dl className="studio-facts">
-          <Fact label="ID пакета" value={project.packageId} mono />
-          <Fact label="Формат пакета" value={`luxpkg v${project.formatVersion}`} />
+          <Fact label="ID приложения" value={project.packageId} mono />
+          <Fact label="Подпись" value={project.formatVersion === 1 ? 'Не подписан' : 'Подписанный проект'} />
           <Fact label="Лицензия" value={project.hasLicense ? 'Требует принятия' : 'Не задана'} />
           {project.formatVersion === 3 ? <Fact label="Ротация ключа" value="Проверяется при CLI build текущим ключом" /> : null}
           <Fact label="Папка установки" value={project.installDirectory} mono />
@@ -520,7 +565,7 @@ function BuildResult({ result }: { result: StudioBuildResult }) {
     <section className="studio-build-result" aria-labelledby="studio-build-result-title" aria-live="polite">
       <Check size={21} strokeWidth={2.5} aria-hidden="true" />
       <div>
-        <h2 id="studio-build-result-title">Пакет собран</h2>
+        <h2 id="studio-build-result-title">Установщик готов</h2>
         <code tabIndex={0} title={result.outputPath}>{result.outputPath}</code>
       </div>
     </section>
@@ -536,7 +581,15 @@ function Fact({ label, value, mono = false }: { label: string; value: string; mo
   )
 }
 
-function targetLabel(project: StudioProject): string {
+function targetLabel(project: Pick<StudioProject, 'targetOs' | 'targetArch'>): string {
   const os = { windows: 'Windows', linux: 'Linux', macos: 'macOS' }[project.targetOs]
   return `${os} · ${project.targetArch}`
+}
+
+function nativeBuildLabel(target: StudioProject['targetOs']): string {
+  return {
+    windows: 'Собрать .exe',
+    linux: 'Собрать .deb / .rpm',
+    macos: 'Собрать .dmg',
+  }[target]
 }

@@ -98,6 +98,15 @@ export interface StudioProjectUpdate {
   finishLinks: FinishLink[]
 }
 
+export interface RecentProject {
+  projectPath: string
+  name: string
+  publisher: string
+  version: string
+  targetOs: TargetOs
+  targetArch: TargetArch
+}
+
 export interface StudioBuildResult {
   outputPath: string
   project: StudioProject
@@ -177,6 +186,8 @@ export interface LuxuryBridge {
   getBootstrap(): Promise<InstallerReview>
   createProject(): Promise<StudioProject | null>
   openProject(): Promise<StudioProject | null>
+  getRecentProjects(): Promise<RecentProject[]>
+  openRecentProject(index: number): Promise<StudioProject>
   reloadProject(): Promise<StudioProject>
   updateProject(input: StudioProjectUpdate): Promise<StudioProject>
   importProjectFiles(): Promise<StudioProject | null>

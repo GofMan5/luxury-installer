@@ -92,6 +92,88 @@ pub(super) fn copy_file(source: &Path, destination: &Path) -> Result<(), String>
     require_regular_file(destination, "staged file")
 }
 
+pub(super) fn publish_file_no_clobber(source: &Path, destination: &Path) -> Result<(), String> {
+    require_regular_file(source, "verified publication source")?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "publication path has no parent directory".to_owned())?;
+    ensure_real_directory(parent)?;
+    require_missing(destination, "published file")?;
+    let expected = sha256_file(source)?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("system clock is before the Unix epoch: {error}"))?
+        .as_nanos();
+    let name = destination
+        .file_name()
+        .ok_or_else(|| "publication path has no file name".to_owned())?
+        .to_string_lossy();
+
+    for attempt in 0..16_u8 {
+        let staging = parent.join(format!(
+            ".{name}.luxury-publish-{}-{nonce}-{attempt}",
+            std::process::id()
+        ));
+        let mut output = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staging)
+        {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "could not create publication staging file `{}`: {error}",
+                    staging.display()
+                ));
+            }
+        };
+        let result = (|| {
+            let mut input = File::open(source).map_err(|error| {
+                format!("could not reopen verified publication source: {error}")
+            })?;
+            copy(&mut input, &mut output)
+                .map_err(|error| format!("could not stage published file: {error}"))?;
+            output
+                .sync_all()
+                .map_err(|error| format!("could not sync published file: {error}"))?;
+            drop(output);
+            if sha256_file(&staging)? != expected {
+                return Err("publication staging bytes changed".into());
+            }
+            rename_file_no_clobber(&staging, destination)?;
+            if sha256_file(destination)? != expected {
+                let _ = fs::remove_file(destination);
+                return Err("published file bytes changed during atomic publication".into());
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&staging);
+        }
+        return result;
+    }
+    Err("could not allocate a publication staging file".into())
+}
+
+#[cfg(unix)]
+fn rename_file_no_clobber(source: &Path, destination: &Path) -> Result<(), String> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        source,
+        rustix::fs::CWD,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|error| format!("could not publish file without overwriting it: {error}"))
+}
+
+#[cfg(windows)]
+fn rename_file_no_clobber(source: &Path, destination: &Path) -> Result<(), String> {
+    retry_transient_io(|| fs::rename(source, destination))
+        .map_err(|error| format!("could not publish file without overwriting it: {error}"))
+}
+
 pub(super) fn sha256_file(path: &Path) -> Result<[u8; 32], String> {
     let mut file = File::open(path)
         .map_err(|error| format!("could not hash `{}`: {error}", path.display()))?;
@@ -546,6 +628,20 @@ mod tests {
         fs::write(&source, b"second").unwrap();
         assert!(copy_file(&source, &destination).is_err());
         assert_eq!(fs::read(destination).unwrap(), b"first");
+    }
+
+    #[test]
+    fn file_publication_is_atomic_and_never_overwrites() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("Setup.exe");
+        fs::write(&source, b"verified setup").unwrap();
+        publish_file_no_clobber(&source, &destination).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"verified setup");
+
+        fs::write(&source, b"replacement").unwrap();
+        assert!(publish_file_no_clobber(&source, &destination).is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"verified setup");
     }
 
     #[test]

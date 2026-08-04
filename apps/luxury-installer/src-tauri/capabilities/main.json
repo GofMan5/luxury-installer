@@ -11,6 +11,8 @@
     "allow-get-bootstrap",
     "allow-create-project",
     "allow-open-project",
+    "allow-get-recent-projects",
+    "allow-open-recent-project",
     "allow-reload-project",
     "allow-update-project",
     "allow-import-project-files",

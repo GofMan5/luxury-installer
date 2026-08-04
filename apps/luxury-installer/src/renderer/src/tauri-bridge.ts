@@ -10,6 +10,8 @@ import {
   operationStartedSchema,
   portablePath,
   publicErrorSchema,
+  recentProjectIndexSchema,
+  recentProjectsSchema,
   setupEventSchema,
   studioBuildResultSchema,
   studioProjectSchema,
@@ -60,6 +62,11 @@ export function createTauriBridge(): LuxuryBridge {
     getBootstrap: () => parsedInvoke('get_bootstrap', installerReviewSchema),
     createProject: () => parsedInvoke('create_project', studioProjectSchema.nullable()),
     openProject: () => parsedInvoke('open_project', studioProjectSchema.nullable()),
+    getRecentProjects: () => parsedInvoke('get_recent_projects', recentProjectsSchema),
+    openRecentProject: (index) =>
+      parsedInvoke('open_recent_project', studioProjectSchema, {
+        index: recentProjectIndexSchema.parse(index),
+      }),
     reloadProject: () => parsedInvoke('reload_project', studioProjectSchema),
     updateProject: (input) =>
       parsedInvoke('update_project', studioProjectSchema, {

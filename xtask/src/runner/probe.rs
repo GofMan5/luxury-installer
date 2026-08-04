@@ -21,7 +21,7 @@ pub(super) use recovery::{
     probe_crash_recovery, probe_uninstall_precommit_crash_recovery, probe_upgrade_crash_recovery,
 };
 
-const PROTOCOL_VERSION: u64 = 2;
+const PROTOCOL_VERSION: u64 = luxury_spec::JSONL_PROTOCOL_VERSION as u64;
 const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 const MAX_JSONL_LINES: usize = 4_096;
 const MAX_STDOUT_BYTES: usize = 8 * 1024 * 1024;
@@ -2278,7 +2278,7 @@ mod tests {
     #[test]
     fn lifecycle_terminal_parsers_are_strict_and_correlated() {
         let install = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "result",
             "id": "lifecycle_install",
             "result": {
@@ -2295,7 +2295,7 @@ mod tests {
         assert!(parse_install_result(&install, "another_id").is_err());
 
         let uninstall = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "result",
             "id": "lifecycle_uninstall",
             "result": {
@@ -2310,7 +2310,7 @@ mod tests {
         assert_eq!(parsed.removed_files, 1);
 
         let launch = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "result",
             "id": "launch_execute",
             "result": {
@@ -2333,7 +2333,7 @@ mod tests {
         assert!(!error.contains(r"C:\"));
 
         let rejection = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "error",
             "id": "lifecycle_install",
             "error": {
@@ -2347,7 +2347,7 @@ mod tests {
         assert!(!error.contains("modified.txt"));
 
         let mut cancellation = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "result",
             "id": "cancellation_request",
             "result": {"requestId": "cancellation_install", "accepted": true},
@@ -2369,7 +2369,7 @@ mod tests {
         );
 
         let cancelled = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "error",
             "id": "cancellation_install",
             "error": {"code": "cancelled", "message": r"rolled back C:\private\file"},
@@ -2384,7 +2384,7 @@ mod tests {
     fn lifecycle_install_totals_are_bound_to_inspected_payload() {
         let host = HostLayout::new(std::env::consts::OS, std::env::consts::ARCH).unwrap();
         let inspect = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "result",
             "id": "lifecycle_inspect",
             "result": {
@@ -2443,7 +2443,7 @@ mod tests {
     #[test]
     fn lifecycle_event_parsers_reject_paths_and_uninstall_bytes() {
         let action = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "event",
             "id": "lifecycle_install",
             "event": "action",
@@ -2455,7 +2455,7 @@ mod tests {
         ));
 
         let mut leaked = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "event",
             "id": "lifecycle_uninstall",
             "event": "progress",
@@ -2485,7 +2485,7 @@ mod tests {
     #[test]
     fn lifecycle_reader_rejects_any_line_after_terminal() {
         let terminal = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "result",
             "id": "lifecycle_uninstall",
             "result": {
@@ -2509,12 +2509,12 @@ mod tests {
 
     #[test]
     fn crash_reader_ignores_only_a_bounded_invalid_tail() {
-        let partial = r#"{"protocolVersion":2,"type":"event""#;
+        let partial = format!(r#"{{"protocolVersion":{PROTOCOL_VERSION},"type":"event""#);
         let mut reader = BoundedJsonl::new(Cursor::new(partial));
         assert!(reader.next_crash_value().unwrap().is_none());
 
         let terminal = json!({
-            "protocolVersion": 2,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "result",
             "id": "crash_install",
             "result": {},

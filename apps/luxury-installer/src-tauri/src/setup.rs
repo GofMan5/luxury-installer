@@ -26,8 +26,33 @@ use crate::{
     },
 };
 
-const BUILD_BOUND_PACKAGE_FINGERPRINT: Option<&str> =
-    option_env!("LUXURY_BOUND_PACKAGE_FINGERPRINT");
+#[repr(C)]
+struct BuildPackageBinding {
+    prefix: [u8; 16],
+    fingerprint: [u8; 64],
+    suffix: [u8; 16],
+}
+
+const fn build_fingerprint_bytes(value: Option<&str>) -> [u8; 64] {
+    let mut output = [0_u8; 64];
+    let Some(value) = value else {
+        return output;
+    };
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() && index < output.len() {
+        output[index] = bytes[index];
+        index += 1;
+    }
+    output
+}
+
+#[used]
+static BUILD_PACKAGE_BINDING: BuildPackageBinding = BuildPackageBinding {
+    prefix: luxury_spec::SETUP_BINDING_PREFIX,
+    fingerprint: build_fingerprint_bytes(option_env!("LUXURY_BOUND_PACKAGE_FINGERPRINT")),
+    suffix: luxury_spec::SETUP_BINDING_SUFFIX,
+};
 
 const OPERATION_EVENT: &str = "luxury://operation-event";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2 * 60);
@@ -1334,7 +1359,7 @@ impl BoundPackage {
         if cfg!(feature = "setup")
             && !cfg!(debug_assertions)
             && !compiled_binding_matches(
-                BUILD_BOUND_PACKAGE_FINGERPRINT,
+                build_bound_package_fingerprint(),
                 &inspected.package_fingerprint,
             )
         {
@@ -1433,6 +1458,12 @@ impl BoundPackage {
 
 fn compiled_binding_matches(expected: Option<&str>, actual: &str) -> bool {
     expected.is_some_and(|expected| valid_hash(expected) && expected == actual)
+}
+
+fn build_bound_package_fingerprint() -> Option<&'static str> {
+    std::str::from_utf8(&BUILD_PACKAGE_BINDING.fingerprint)
+        .ok()
+        .filter(|value| valid_hash(value))
 }
 
 fn validate_preparation(preparation: &PrepareInstallResult) -> Result<(), PublicError> {
@@ -1826,6 +1857,7 @@ mod tests {
             mode: AppMode::Setup,
             backend: Err(crate::backend::BackendError::new("unused", "unused")),
             package_path: None,
+            packager_path: None,
             studio: Arc::new(crate::studio::StudioState::default()),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(Some(context.clone()))),
@@ -1850,6 +1882,7 @@ mod tests {
             mode: AppMode::Setup,
             backend: Err(crate::backend::BackendError::new("unused", "unused")),
             package_path: None,
+            packager_path: None,
             studio: Arc::new(crate::studio::StudioState::default()),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(None)),
@@ -1880,6 +1913,7 @@ mod tests {
             mode: AppMode::Setup,
             backend: Err(crate::backend::BackendError::new("unused", "unused")),
             package_path: None,
+            packager_path: None,
             studio: Arc::new(crate::studio::StudioState::default()),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(Some(context.clone()))),
@@ -1921,6 +1955,7 @@ mod tests {
             mode: AppMode::Setup,
             backend: Err(crate::backend::BackendError::new("unused", "unused")),
             package_path: None,
+            packager_path: None,
             studio: Arc::new(crate::studio::StudioState::default()),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(Some(context.clone()))),

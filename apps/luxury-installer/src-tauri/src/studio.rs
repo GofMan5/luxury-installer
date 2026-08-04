@@ -1,12 +1,22 @@
 use std::{
+    fs,
+    io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{Mutex, atomic::AtomicBool},
+    process::{Command, Stdio},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
+use tempfile::NamedTempFile;
 
 use crate::{
     app::{
@@ -14,21 +24,68 @@ use crate::{
         valid_package_id, valid_text,
     },
     backend::{
-        FinishLink, InstallScope, MAX_SAFE_INTEGER, ProjectBuildResult, ProjectResult,
-        ResolvedPayloadPath, TargetArch, TargetOs,
+        FinishLink, InstallScope, MAX_SAFE_INTEGER, ProjectResult, ResolvedPayloadPath, TargetArch,
+        TargetOs, guard_executable,
     },
 };
 
-#[derive(Default)]
 pub(crate) struct StudioState {
     busy: AtomicBool,
+    build_active: AtomicBool,
+    build_cancel: AtomicBool,
     active: Mutex<Option<ActiveProject>>,
+    recent_path: Option<PathBuf>,
+    recent: Mutex<Vec<RecentProject>>,
+}
+
+const MAX_RECENT_PROJECTS: usize = 6;
+const MAX_RECENT_FILE_BYTES: u64 = 64 * 1024;
+
+impl StudioState {
+    pub(crate) fn new(recent_path: Option<PathBuf>) -> Self {
+        let recent = recent_path
+            .as_deref()
+            .map(load_recent_projects)
+            .unwrap_or_default();
+        Self {
+            busy: AtomicBool::new(false),
+            build_active: AtomicBool::new(false),
+            build_cancel: AtomicBool::new(false),
+            active: Mutex::new(None),
+            recent_path,
+            recent: Mutex::new(recent),
+        }
+    }
+}
+
+impl Default for StudioState {
+    fn default() -> Self {
+        Self::new(None)
+    }
 }
 
 #[derive(Clone)]
 struct ActiveProject {
     path: PathBuf,
     summary: StudioProject,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RecentProject {
+    project_path: String,
+    name: String,
+    publisher: String,
+    version: String,
+    target_os: TargetOs,
+    target_arch: TargetArch,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecentProjectStore {
+    schema_version: u8,
+    projects: Vec<RecentProject>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -108,6 +165,31 @@ pub(crate) async fn open_project(
     tauri::async_runtime::spawn_blocking(move || open_project_sync(&app, &window, &state))
         .await
         .map_err(|_| PublicError::new("internal_error", "Операция Studio прервана."))?
+}
+
+#[tauri::command]
+pub(crate) fn get_recent_projects(
+    state: State<'_, AppState>,
+) -> Result<Vec<RecentProject>, PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    state
+        .studio
+        .recent
+        .lock()
+        .map(|projects| projects.clone())
+        .map_err(|_| PublicError::new("internal_error", "Недавние проекты недоступны."))
+}
+
+#[tauri::command]
+pub(crate) async fn open_recent_project(
+    index: u8,
+    state: State<'_, AppState>,
+) -> Result<StudioProject, PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || open_recent_project_sync(index, &state))
+        .await
+        .map_err(|_| PublicError::new("internal_error", "Открытие проекта прервано."))?
 }
 
 #[tauri::command]
@@ -205,6 +287,24 @@ pub(crate) fn verify_studio(state: &AppState) -> Result<(), PublicError> {
     Ok(())
 }
 
+pub(crate) fn shutdown(state: &AppState) -> Result<(), PublicError> {
+    if state.mode != AppMode::Studio {
+        return Ok(());
+    }
+    state.studio.build_cancel.store(true, Ordering::Release);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state.studio.build_active.load(Ordering::Acquire) {
+        if Instant::now() >= deadline {
+            return Err(PublicError::new(
+                "project_build_failed",
+                "Native-сборка не завершила отмену вовремя.",
+            ));
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    Ok(())
+}
+
 fn create_project_sync(
     app: &AppHandle,
     window: &WebviewWindow,
@@ -250,6 +350,38 @@ fn open_project_sync(
     let summary = StudioProject::from_backend(&path, project)?;
     set_active_project(state, path, &summary)?;
     Ok(Some(summary))
+}
+
+fn open_recent_project_sync(index: u8, state: &AppState) -> Result<StudioProject, PublicError> {
+    let _busy = ExclusiveGuard::acquire(
+        &state.studio.busy,
+        "busy",
+        "Другая операция Studio уже выполняется.",
+    )?;
+    let path = state
+        .studio
+        .recent
+        .lock()
+        .map_err(|_| PublicError::new("internal_error", "Недавние проекты недоступны."))?
+        .get(usize::from(index))
+        .map(|project| PathBuf::from(&project.project_path))
+        .ok_or_else(|| PublicError::new("project_not_open", "Недавний проект не найден."))?;
+    let backend = state.backend().map_err(PublicError::from)?;
+    let project: ProjectResult = match backend.request_operation(
+        "validateProject",
+        json!({ "projectPath": path_text(&path)? }),
+    ) {
+        Ok(project) => project,
+        Err(error) => {
+            if error.code == "project_validation_failed" {
+                remove_recent_project(state, &path);
+            }
+            return Err(PublicError::from(error));
+        }
+    };
+    let summary = StudioProject::from_backend(&path, project)?;
+    set_active_project(state, path, &summary)?;
+    Ok(summary)
 }
 
 fn reload_project_sync(state: &AppState) -> Result<StudioProject, PublicError> {
@@ -496,10 +628,18 @@ fn build_project_sync(
             "Подписанные пакеты собираются только через CLI.",
         ));
     }
+    let host = state.defaults()?.target;
+    if project.summary.target_os != host.os || project.summary.target_arch != host.arch {
+        return Err(PublicError::new(
+            "project_build_failed",
+            "Соберите проект на выбранной целевой системе или через native build matrix.",
+        ));
+    }
     let version = project
         .summary
         .version
         .chars()
+        .take(48)
         .map(|character| {
             if character.is_ascii_alphanumeric() || matches!(character, '.' | '-') {
                 character
@@ -513,55 +653,272 @@ fn build_project_sync(
         "dialog_busy",
         "Другой системный диалог уже открыт.",
     )?;
-    let output = app
-        .dialog()
-        .file()
-        .set_parent(window)
-        .set_title("Собрать пакет")
-        .set_directory(project.path.parent().unwrap_or(Path::new(".")))
-        .set_file_name(format!("{}-{version}.luxpkg", project.summary.package_id))
-        .add_filter("Luxury package", &["luxpkg"])
-        .blocking_save_file()
-        .map(|path| {
-            path.into_path().map_err(|_| {
-                PublicError::new("invalid_package_path", "Выбран недопустимый путь пакета.")
-            })
-        })
-        .transpose()?;
+    let directory = project.path.parent().unwrap_or(Path::new("."));
+    let output = match host.os {
+        TargetOs::Windows => app
+            .dialog()
+            .file()
+            .set_parent(window)
+            .set_title("Собрать Windows Setup")
+            .set_directory(directory)
+            .set_file_name(format!(
+                "{}-{version}-Setup.exe",
+                project.summary.package_id
+            ))
+            .add_filter("Windows installer", &["exe"])
+            .blocking_save_file()
+            .map(file_path)
+            .transpose()?,
+        TargetOs::Linux => app
+            .dialog()
+            .file()
+            .set_parent(window)
+            .set_title("Выберите папку для Linux installers")
+            .set_directory(directory)
+            .blocking_pick_folder()
+            .map(file_path)
+            .transpose()?
+            .map(|parent| {
+                parent.join(format!(
+                    "{}-{version}-linux-{}",
+                    project.summary.package_id,
+                    match host.arch {
+                        TargetArch::X86_64 => "x86_64",
+                        TargetArch::Aarch64 => "aarch64",
+                    }
+                ))
+            }),
+        TargetOs::Macos => app
+            .dialog()
+            .file()
+            .set_parent(window)
+            .set_title("Собрать macOS DMG")
+            .set_directory(directory)
+            .set_file_name(format!("{}-{version}.dmg", project.summary.package_id))
+            .add_filter("macOS installer", &["dmg"])
+            .blocking_save_file()
+            .map(file_path)
+            .transpose()?,
+    };
     let Some(output) = output else {
         return Ok(None);
     };
-    let backend = state.backend().map_err(PublicError::from)?;
-    let result: ProjectBuildResult = backend
-        .request_operation(
-            "buildProject",
-            json!({
-                "projectPath": path_text(&project.path)?,
-                "outputPath": path_text(&output)?,
-            }),
-        )
-        .map_err(PublicError::from)?;
-    if Path::new(&result.output_path) != output {
+    drop(_dialog);
+    let output_path = path_text(&output)?.to_owned();
+    let packager = state.packager_path.as_deref().ok_or_else(|| {
+        PublicError::new("project_build_failed", "Компонент native-сборки не найден.")
+    })?;
+    if state.close_started.load(Ordering::Acquire) {
         return Err(PublicError::new(
-            "invalid_backend_output",
-            "Компонент Studio вернул другой путь сборки.",
+            "project_build_cancelled",
+            "Сборка отменена при закрытии Studio.",
         ));
     }
-    let project_result = ProjectResult {
-        format_version: result.format_version,
-        schema_version: result.schema_version,
-        package: result.package,
-        target: result.target,
-        install: result.install,
-        payload: result.payload,
-        authoring: result.authoring,
-    };
+    let _build_active = ExclusiveGuard::acquire(
+        &state.studio.build_active,
+        "busy",
+        "Другая native-сборка уже выполняется.",
+    )?;
+    state.studio.build_cancel.store(false, Ordering::Release);
+    if state.close_started.load(Ordering::Acquire) {
+        return Err(PublicError::new(
+            "project_build_cancelled",
+            "Сборка отменена при закрытии Studio.",
+        ));
+    }
+    run_native_packager(packager, &project.path, &output, &state.studio.build_cancel)?;
+    drop(_build_active);
+    let backend = state.backend().map_err(PublicError::from)?;
+    let project_result: ProjectResult = backend
+        .request_operation(
+            "validateProject",
+            json!({ "projectPath": path_text(&project.path)? }),
+        )
+        .map_err(PublicError::from)?;
     let summary = StudioProject::from_backend(&project.path, project_result)?;
     set_active_project(state, project.path, &summary)?;
     Ok(Some(StudioBuildResult {
-        output_path: path_text(&output)?.into(),
+        output_path,
         project: summary,
     }))
+}
+
+fn file_path(path: tauri_plugin_dialog::FilePath) -> Result<PathBuf, PublicError> {
+    path.into_path().map_err(|_| {
+        PublicError::new(
+            "invalid_package_path",
+            "Выбран недопустимый путь установщика.",
+        )
+    })
+}
+
+fn run_native_packager(
+    executable: &Path,
+    project: &Path,
+    output: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), PublicError> {
+    const BUILD_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+    if cancel.load(Ordering::Acquire) {
+        return Err(PublicError::new(
+            "project_build_cancelled",
+            "Сборка отменена.",
+        ));
+    }
+    let _guard = guard_executable(executable).map_err(|_| {
+        PublicError::new(
+            "project_build_failed",
+            "Компонент native-сборки недоступен.",
+        )
+    })?;
+    let mut command = Command::new(executable);
+    command
+        .arg("project-installer")
+        .arg(project)
+        .arg(output)
+        .current_dir(executable.parent().ok_or_else(|| {
+            PublicError::new(
+                "project_build_failed",
+                "Компонент native-сборки расположен неверно.",
+            )
+        })?)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command.spawn().map_err(|_| {
+        PublicError::new(
+            "project_build_failed",
+            "Не удалось запустить native-сборку.",
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        let _ = child.kill();
+        let _ = child.wait();
+        PublicError::new(
+            "project_build_failed",
+            "Native-сборка не открыла защищённый канал диагностики.",
+        )
+    })?;
+    let (diagnostics_tx, diagnostics) = mpsc::sync_channel(1);
+    if thread::Builder::new()
+        .name("native-packager-stderr".into())
+        .spawn(move || {
+            let _ = diagnostics_tx.send(drain_native_diagnostics(stderr));
+        })
+        .is_err()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(PublicError::new(
+            "project_build_failed",
+            "Не удалось запустить защищённый канал диагностики native-сборки.",
+        ));
+    }
+    let deadline = Instant::now() + BUILD_TIMEOUT;
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(PublicError::new(
+                "project_build_cancelled",
+                "Сборка отменена.",
+            ));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                return Ok(());
+            }
+            Ok(Some(_)) => {
+                let diagnostics = diagnostics
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap_or_default();
+                return Err(native_packager_error(
+                    &diagnostics,
+                    "Native-сборка завершилась с ошибкой.",
+                ));
+            }
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(PublicError::new(
+                    "project_build_failed",
+                    "Native-сборка превысила лимит времени.",
+                ));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(PublicError::new(
+                    "project_build_failed",
+                    "Не удалось дождаться native-сборки.",
+                ));
+            }
+        }
+    }
+}
+
+fn drain_native_diagnostics(mut source: impl Read) -> Vec<u8> {
+    const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
+    let mut tail = Vec::with_capacity(MAX_DIAGNOSTIC_BYTES);
+    let mut buffer = [0_u8; 4 * 1024];
+    while let Ok(read) = source.read(&mut buffer) {
+        if read == 0 {
+            break;
+        }
+        if read >= MAX_DIAGNOSTIC_BYTES {
+            tail.clear();
+            tail.extend_from_slice(&buffer[read - MAX_DIAGNOSTIC_BYTES..read]);
+            continue;
+        }
+        let overflow = tail
+            .len()
+            .saturating_add(read)
+            .saturating_sub(MAX_DIAGNOSTIC_BYTES);
+        if overflow != 0 {
+            tail.drain(..overflow);
+        }
+        tail.extend_from_slice(&buffer[..read]);
+    }
+    tail
+}
+
+fn native_packager_error(diagnostics: &[u8], fallback: &str) -> PublicError {
+    let detail = String::from_utf8_lossy(diagnostics)
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| {
+            line.chars()
+                .filter(|character| {
+                    !character.is_control()
+                        && !matches!(
+                            character,
+                            '\u{061c}'
+                                | '\u{200e}'
+                                | '\u{200f}'
+                                | '\u{202a}'..='\u{202e}'
+                                | '\u{2066}'..='\u{2069}'
+                        )
+                })
+                .take(512)
+                .collect::<String>()
+        })
+        .filter(|line| !line.is_empty());
+    PublicError::new(
+        "project_build_failed",
+        detail.map_or_else(
+            || fallback.to_owned(),
+            |detail| format!("{fallback} {detail}"),
+        ),
+    )
 }
 
 fn active_project(state: &AppState) -> Result<ActiveProject, PublicError> {
@@ -579,6 +936,7 @@ fn set_active_project(
     path: PathBuf,
     summary: &StudioProject,
 ) -> Result<(), PublicError> {
+    let recent_path = path.clone();
     *state
         .studio
         .active
@@ -588,6 +946,114 @@ fn set_active_project(
             path,
             summary: summary.clone(),
         });
+    record_recent_project(state, &recent_path, summary);
+    Ok(())
+}
+
+fn record_recent_project(state: &AppState, path: &Path, summary: &StudioProject) {
+    let Ok(mut recent) = state.studio.recent.lock() else {
+        return;
+    };
+    recent.retain(|project| Path::new(&project.project_path) != path);
+    recent.insert(
+        0,
+        RecentProject {
+            project_path: summary.project_path.clone(),
+            name: summary.name.clone(),
+            publisher: summary.publisher.clone(),
+            version: summary.version.clone(),
+            target_os: summary.target_os,
+            target_arch: summary.target_arch,
+        },
+    );
+    recent.truncate(MAX_RECENT_PROJECTS);
+    let snapshot = recent.clone();
+    drop(recent);
+    if let Some(path) = state.studio.recent_path.as_deref() {
+        let _ = persist_recent_projects(path, &snapshot);
+    }
+}
+
+fn remove_recent_project(state: &AppState, path: &Path) {
+    let Ok(mut recent) = state.studio.recent.lock() else {
+        return;
+    };
+    recent.retain(|project| Path::new(&project.project_path) != path);
+    let snapshot = recent.clone();
+    drop(recent);
+    if let Some(path) = state.studio.recent_path.as_deref() {
+        let _ = persist_recent_projects(path, &snapshot);
+    }
+}
+
+fn load_recent_projects(path: &Path) -> Vec<RecentProject> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Vec::new();
+    };
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() == 0
+        || metadata.len() > MAX_RECENT_FILE_BYTES
+    {
+        return Vec::new();
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return Vec::new();
+    };
+    let Ok(store) = serde_json::from_slice::<RecentProjectStore>(&bytes) else {
+        return Vec::new();
+    };
+    if store.schema_version != 1 || store.projects.len() > MAX_RECENT_PROJECTS {
+        return Vec::new();
+    }
+    store
+        .projects
+        .into_iter()
+        .filter(valid_recent_project)
+        .collect()
+}
+
+fn valid_recent_project(project: &RecentProject) -> bool {
+    Path::new(&project.project_path).is_absolute()
+        && !project.project_path.contains('\0')
+        && valid_text(&project.name)
+        && valid_text(&project.publisher)
+        && valid_text(&project.version)
+}
+
+fn persist_recent_projects(path: &Path, projects: &[RecentProject]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "recent project store has no parent".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("could not create recent project directory: {error}"))?;
+    let metadata = fs::symlink_metadata(parent)
+        .map_err(|error| format!("could not inspect recent project directory: {error}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("recent project directory is not a real directory".into());
+    }
+    let mut bytes = serde_json::to_vec_pretty(&RecentProjectStore {
+        schema_version: 1,
+        projects: projects.to_vec(),
+    })
+    .map_err(|error| format!("could not serialize recent projects: {error}"))?;
+    bytes.push(b'\n');
+    let mut temporary = NamedTempFile::new_in(parent)
+        .map_err(|error| format!("could not create recent project staging file: {error}"))?;
+    temporary
+        .write_all(&bytes)
+        .map_err(|error| format!("could not write recent projects: {error}"))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("could not sync recent projects: {error}"))?;
+    temporary
+        .persist(path)
+        .map_err(|error| format!("could not publish recent projects: {}", error.error))?;
+    #[cfg(unix)]
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("could not sync recent project directory: {error}"))?;
     Ok(())
 }
 
@@ -781,5 +1247,65 @@ mod tests {
         assert!(licensed.has_license);
         assert!(StudioProject::from_backend(&path, project(2, Some("Terms"))).is_err());
         assert!(StudioProject::from_backend(&path, project(3, Some("bad\0text"))).is_err());
+    }
+
+    #[test]
+    fn recent_projects_persist_strict_bounded_display_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("recent.json");
+        let recent = RecentProject {
+            project_path: temp.path().join("demo").to_string_lossy().into_owned(),
+            name: "Luxury Demo".into(),
+            publisher: "Luxury Software".into(),
+            version: "1.0.0".into(),
+            target_os: TargetOs::Windows,
+            target_arch: TargetArch::X86_64,
+        };
+        persist_recent_projects(&path, std::slice::from_ref(&recent)).unwrap();
+        assert_eq!(load_recent_projects(&path), vec![recent]);
+
+        let updated = RecentProject {
+            version: "2.0.0".into(),
+            ..load_recent_projects(&path).pop().unwrap()
+        };
+        persist_recent_projects(&path, std::slice::from_ref(&updated)).unwrap();
+        assert_eq!(load_recent_projects(&path), vec![updated]);
+
+        fs::write(
+            &path,
+            br#"{"schemaVersion":1,"projects":[{"projectPath":"relative","name":"Demo","publisher":"Publisher","version":"1.0.0","targetOs":"windows","targetArch":"x86_64"}]}"#,
+        )
+        .unwrap();
+        assert!(load_recent_projects(&path).is_empty());
+    }
+
+    #[test]
+    fn pre_cancelled_native_build_never_opens_the_packager() {
+        let cancel = AtomicBool::new(true);
+        let error = run_native_packager(
+            Path::new("missing-packager"),
+            Path::new("missing-project"),
+            Path::new("missing-output"),
+            &cancel,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "project_build_cancelled");
+    }
+
+    #[test]
+    fn native_build_failure_exposes_only_the_bounded_last_diagnostic() {
+        let source = format!(
+            "{}\nignored\nerror: {}\u{7}\u{202e}\n",
+            "z".repeat(20_000),
+            "x".repeat(800)
+        );
+        let diagnostics = drain_native_diagnostics(source.as_bytes());
+        assert!(diagnostics.len() <= 16 * 1024);
+        let error = native_packager_error(&diagnostics, "build failed");
+        assert_eq!(error.code, "project_build_failed");
+        assert!(error.message.starts_with("build failed error: "));
+        assert!(!error.message.contains('\u{7}'));
+        assert!(!error.message.contains('\u{202e}'));
+        assert!(error.message.chars().count() <= 525);
     }
 }

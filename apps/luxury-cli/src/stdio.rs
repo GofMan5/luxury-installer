@@ -40,7 +40,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-const PROTOCOL_VERSION: u32 = 3;
+const PROTOCOL_VERSION: u32 = luxury_spec::JSONL_PROTOCOL_VERSION;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 32_768;
 const MAX_MESSAGE_BYTES: usize = 1024;

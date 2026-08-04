@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn not_installed_result_is_exact() {
         let message = json!({
-            "protocolVersion": 2,
+            "protocolVersion": luxury_spec::JSONL_PROTOCOL_VERSION,
             "type": "result",
             "id": "uninstall_post_cutover_recovery",
             "result": {

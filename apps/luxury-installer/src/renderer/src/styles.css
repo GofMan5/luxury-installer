@@ -1249,6 +1249,87 @@ code:focus-visible {
   margin-top: 27px;
 }
 
+.studio-recent {
+  width: 100%;
+  margin-top: 34px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+
+.studio-recent h2 {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.studio-recent__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+}
+
+.studio-recent__list > button {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 0 10px;
+  align-items: start;
+  padding: 12px 10px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+
+.studio-recent__list > button:nth-child(even) {
+  border-right: 0;
+}
+
+.studio-recent__list > button:hover,
+.studio-recent__list > button:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.studio-recent__list > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.studio-recent__list strong,
+.studio-recent__list small,
+.studio-recent__list code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-recent__list strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.studio-recent__list small,
+.studio-recent__list code {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.studio-recent__list code {
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+.studio-recent__list > button > small {
+  grid-column: 2;
+  margin-top: 6px;
+}
+
 .studio-error-message {
   padding: 13px 15px;
   border: 1px solid rgb(255 107 107 / 32%);

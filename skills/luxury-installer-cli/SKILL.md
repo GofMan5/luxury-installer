@@ -1,6 +1,6 @@
 ---
 name: luxury-installer-cli
-description: Build, inspect, install, update, repair, uninstall, launch, and automate Luxury Installer projects and .luxpkg packages through the current human CLI or strict JSONL v3 stdio protocol. Use for Luxury Installer repository work, AI-driven package authoring, CI scripts, signed-package flows, Studio backend operations, installer lifecycle automation, or any request involving the luxury command.
+description: Build native Luxury Installer outputs, inspect and sign internal packages, automate install/update/repair/uninstall/launch, and use the strict JSONL v3 protocol. Use for Luxury Installer repository work, AI-driven authoring, CI, Studio backend operations, or any request involving the luxury command or native packager.
 ---
 
 # Luxury Installer CLI
@@ -20,6 +20,7 @@ Use the repository's current binary as authority. Never guess a command or retai
 - Use the human CLI for one-shot local or CI commands.
 - Use `luxury stdio` for a long-lived typed v3 subprocess, Tauri integration, or an AI tool that needs structured results, progress, cancellation, and stable errors.
 - Use Studio for interactive unsigned-v1 authoring. Keep native file and folder selection in the Rust shell; never give the renderer generic filesystem authority.
+- Use `cargo project-installer -- <absolute-project> <absolute-native-output>` for the file a user ships: Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg`. Treat `.luxpkg` as the low-level signing/lifecycle boundary, not the Studio result.
 
 ## Execute safely
 
@@ -29,6 +30,7 @@ Use the repository's current binary as authority. Never guess a command or retai
 - Supply consent flags only when the caller explicitly authorized them. Never infer unsigned, license, downgrade, or publisher-migration consent.
 - Treat stdout from `luxury stdio` as protocol-only. Drain stdout and stderr independently and keep request IDs unique while active.
 - Do not retry collisions, state conflicts, publisher failures, downgrade denial, or reinstall mismatch without changing the proven cause.
+- Native multi-build requires matching Windows/Linux/macOS runners. Never claim that Windows produced a notarized macOS artifact or publish the blocked Linux desktop graph.
 
 ## Verify
 

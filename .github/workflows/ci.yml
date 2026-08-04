@@ -121,6 +121,9 @@ jobs:
       - run: cargo full-test --locked
       - run: cargo tauri-test
       - if: runner.os == 'Linux'
+        name: Test standalone Rust Linux containers
+        run: cargo test --locked -p xtask --features standalone-linux-packager runner::linux_container::tests::standalone_rust_containers_round_trip_without_system_package_tools -- --exact
+      - if: runner.os == 'Linux'
         run: xvfb-run -a cargo studio-assemble
       - if: runner.os != 'Linux'
         run: cargo studio-assemble
@@ -129,6 +132,55 @@ jobs:
         with:
           name: studio-${{ matrix.label }}
           path: ${{ matrix.studio_path }}
+          if-no-files-found: error
+          retention-days: 14
+      - if: runner.os == 'Windows'
+        name: Build a standalone Windows installer with packaged Studio
+        shell: pwsh
+        run: |
+          $project = Join-Path $env:RUNNER_TEMP 'native-project'
+          $outputRoot = Join-Path $env:RUNNER_TEMP 'native-output'
+          New-Item -ItemType Directory -Path $outputRoot | Out-Null
+          cargo run --locked -p luxury -- init $project
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $studio = Get-ChildItem dist -Directory -Filter 'luxury-installer-studio-*-windows-x86_64' | Select-Object -First 1
+          if (-not $studio) { throw 'packaged Windows Studio was not found' }
+          $packager = Join-Path $studio.FullName 'packager\luxury-packager.exe'
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $env:CARGO = 'missing-cargo'
+            $env:PNPM = 'missing-pnpm'
+            $env:RUSTC = 'missing-rustc'
+            & $packager project-installer $project (Join-Path $outputRoot 'Setup.exe')
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+      - if: runner.os != 'Windows'
+        name: Build a native installer with packaged Studio
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="$RUNNER_TEMP/native-project"
+          output_root="$RUNNER_TEMP/native-output"
+          mkdir -p "$output_root"
+          cargo run --locked -p luxury -- init "$project"
+          if [ "$RUNNER_OS" = 'Linux' ]; then
+            packager="$(find dist -type f -path '*/usr/lib/Luxury Installer/packager/luxury-packager' -print -quit)"
+            test -n "$packager"
+            packager="$(cd "$(dirname "$packager")" && pwd -P)/$(basename "$packager")"
+            (cd "$RUNNER_TEMP" && PATH=/missing CARGO=/missing/cargo PNPM=/missing/pnpm RUSTC=/missing/rustc "$packager" project-installer "$project" "$output_root/installers")
+          else
+            packager="$(find dist -type f -path '*/Contents/Resources/packager/luxury-packager' -print -quit)"
+            test -n "$packager"
+            packager="$(cd "$(dirname "$packager")" && pwd -P)/$(basename "$packager")"
+            (cd "$RUNNER_TEMP" && CARGO=/missing/cargo PNPM=/missing/pnpm RUSTC=/missing/rustc "$packager" project-installer "$project" "$output_root/Setup.dmg")
+          fi
+      - name: Upload verified native installer output
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-installer-${{ matrix.label }}
+          path: ${{ runner.temp }}/native-output/**
           if-no-files-found: error
           retention-days: 14
       - if: runner.os == 'Linux'

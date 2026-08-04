@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u64 = 3;
+pub(crate) const PROTOCOL_VERSION: u64 = luxury_spec::JSONL_PROTOCOL_VERSION as u64;
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Deserialize)]
@@ -234,19 +234,6 @@ pub(crate) struct ProjectResult {
     pub(crate) install: InstallPolicy,
     pub(crate) payload: Payload,
     pub(crate) authoring: ProjectAuthoring,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ProjectBuildResult {
-    pub(crate) format_version: u8,
-    pub(crate) schema_version: u8,
-    pub(crate) package: PackageIdentity,
-    pub(crate) target: Target,
-    pub(crate) install: InstallPolicy,
-    pub(crate) payload: Payload,
-    pub(crate) authoring: ProjectAuthoring,
-    pub(crate) output_path: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

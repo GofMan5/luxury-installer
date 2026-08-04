@@ -7,6 +7,9 @@ import {
   installRequestSchema,
   installerReviewSchema,
   packageSummarySchema,
+  recentProjectIndexSchema,
+  recentProjectSchema,
+  recentProjectsSchema,
   setupEventSchema,
   studioProjectSchema,
 } from '../src/renderer/src/bridge-contracts.ts'
@@ -265,6 +268,37 @@ test('Studio paths stay display-only and absolute', () => {
   )
 })
 
+test('Studio publishes native installers and keeps the internal package format hidden', async () => {
+  const [view, shell] = await Promise.all([
+    readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/studio.rs', import.meta.url), 'utf8'),
+  ])
+  assert.equal(view.toLowerCase().includes('luxpkg'), false)
+  assert.match(view, /windows: 'Собрать \.exe'/)
+  assert.match(view, /linux: 'Собрать \.deb \/ \.rpm'/)
+  assert.match(view, /macos: 'Собрать \.dmg'/)
+  assert.match(view, /Установщик готов/)
+  assert.match(shell, /\.arg\("project-installer"\)/)
+  assert.doesNotMatch(shell, /set_file_name\([^)]*luxpkg/i)
+})
+
+test('recent projects stay bounded display data and reopen by index only', () => {
+  const recent = {
+    projectPath: String.raw`C:\projects\demo`,
+    name: 'Luxury Demo',
+    publisher: 'Luxury Software',
+    version: '1.0.0',
+    targetOs: 'windows',
+    targetArch: 'x86_64',
+  }
+  assert.equal(recentProjectSchema.safeParse(recent).success, true)
+  assert.equal(recentProjectSchema.safeParse({ ...recent, projectPath: 'relative' }).success, false)
+  assert.equal(recentProjectIndexSchema.safeParse(5).success, true)
+  assert.equal(recentProjectIndexSchema.safeParse(6).success, false)
+  assert.equal(recentProjectsSchema.safeParse(Array(6).fill(recent)).success, true)
+  assert.equal(recentProjectsSchema.safeParse(Array(7).fill(recent)).success, false)
+})
+
 test('renderer invokes only consent and pathless intents', async () => {
   assert.equal(
     installRequestSchema.safeParse({
@@ -299,6 +333,7 @@ test('renderer invokes only consent and pathless intents', async () => {
     /parsedInvoke\('choose_project_entrypoint', portablePath\.nullable\(\)\)/,
   )
   assert.match(bridge, /revealProject: \(\) => invokeCommand\('reveal_project'\)/)
+  assert.match(bridge, /parsedInvoke\('open_recent_project', studioProjectSchema, \{[\s\S]*?index:/)
   assert.match(bridge, /openFinishLink: \(index\) => invokeCommand\('open_finish_link', \{ index \}\)/)
   assert.equal(bridge.includes('{ url'), false)
 })

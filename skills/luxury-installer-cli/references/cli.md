@@ -49,15 +49,16 @@ Use `build ... --signing-key-stdin` for signed format 2 or 3.
 
 ## Project authoring
 
-Create a project and replace the starter payload through Studio or ordinary filesystem tools:
+Create a project, replace the starter payload through Studio or ordinary filesystem tools, and build the native installer:
 
 ```console
 luxury init C:\work\my-app-installer
-luxury build C:\work\my-app-installer C:\work\my-app-1.0.0.luxpkg
-luxury inspect C:\work\my-app-1.0.0.luxpkg
+cargo project-installer -- C:\work\my-app-installer C:\work\My-App-Setup.exe
 ```
 
-The project contains `luxury.toml` and its configured payload directory. `init` never overwrites different existing files. Studio can edit unsigned format-1 settings, import regular files or one directory without overwrite, select an entrypoint through a native dialog, and build. Imported links, reparse points, special entries, path aliases, empty imports, and payload/project overlap fail closed; partial publication rolls back.
+On Linux, the output argument is a new directory containing `.deb` and `.rpm`; on macOS it is a new `.dmg`. The packager creates and removes the internal `.luxpkg` itself. Use low-level `luxury build` only for signed-package, protocol, or lifecycle automation that explicitly needs that trust boundary.
+
+The project contains `luxury.toml` and its configured payload directory. `init` never overwrites different existing files. Studio can reopen a bounded Rust-owned recent-project entry by index, edit unsigned format-1 settings, import regular files or one directory without overwrite, select an entrypoint through a native dialog, and build the native output. Imported links, reparse points, special entries, path aliases, empty imports, and payload/project overlap fail closed; partial publication rolls back.
 
 Minimal configuration shape:
 
@@ -173,7 +174,7 @@ Keep stdin open, read stdout continuously, drain stderr separately, and correlat
 {"protocolVersion":3,"id":"build-1","method":"buildProject","params":{"projectPath":"C:\\work\\project","outputPath":"C:\\work\\app.luxpkg"}}
 ```
 
-`defaults` returns Rust-owned user roots, host target, and backend version. `initProject`, `validateProject`, `updateProject`, `importPayload`, and `buildProject` return the current project summary. `authoring.executableFiles` is a bounded count, never an unbounded path list. `buildProject` is unsigned format-1 authoring; signed builds remain the human stdin-key command.
+`defaults` returns Rust-owned user roots, host target, and backend version. `initProject`, `validateProject`, `updateProject`, `importPayload`, and low-level `buildProject` return the current project summary. `authoring.executableFiles` is a bounded count, never an unbounded path list. `buildProject` creates the internal unsigned format-1 handoff; Studio then uses the native packager. Signed builds remain the human stdin-key command.
 
 Update unsigned format-1 settings atomically:
 

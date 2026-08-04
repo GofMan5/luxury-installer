@@ -42,7 +42,7 @@ impl From<BackendError> for PublicError {
 }
 
 impl PublicError {
-    pub(crate) fn new(code: &'static str, message: &'static str) -> Self {
+    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -75,6 +75,7 @@ pub(crate) struct AppState {
     pub(crate) mode: AppMode,
     pub(crate) backend: Result<BackendClient, BackendError>,
     pub(crate) package_path: Option<PathBuf>,
+    pub(crate) packager_path: Option<PathBuf>,
     pub(crate) studio: Arc<StudioState>,
     pub(crate) dialog_open: Arc<AtomicBool>,
     pub(crate) setup: Arc<Mutex<Option<crate::setup::SetupContext>>>,
@@ -135,11 +136,40 @@ impl AppState {
             },
             Err,
         );
+        let recent_projects_path = app
+            .path()
+            .app_config_dir()
+            .ok()
+            .map(|directory| directory.join("recent-projects-v1.json"));
+        let packager_path = if mode == AppMode::Studio {
+            if cfg!(debug_assertions) {
+                arguments.packager_path.or_else(|| {
+                    workspace_root().map(|root| {
+                        root.join("target").join("debug").join(if cfg!(windows) {
+                            "xtask.exe"
+                        } else {
+                            "xtask"
+                        })
+                    })
+                })
+            } else {
+                resources.as_ref().map(|resources| {
+                    resources.join("packager").join(if cfg!(windows) {
+                        "luxury-packager.exe"
+                    } else {
+                        "luxury-packager"
+                    })
+                })
+            }
+        } else {
+            None
+        };
         Self {
             mode,
             backend,
             package_path,
-            studio: Arc::new(StudioState::default()),
+            packager_path,
+            studio: Arc::new(StudioState::new(recent_projects_path)),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(None)),
             close_started: Arc::new(AtomicBool::new(false)),
@@ -267,6 +297,7 @@ struct Arguments {
     package_path: Option<PathBuf>,
     trusted_publisher_key: Option<PathBuf>,
     backend_path: Option<PathBuf>,
+    packager_path: Option<PathBuf>,
 }
 
 fn parse_arguments() -> Result<Arguments, BackendError> {
@@ -297,10 +328,25 @@ fn parse_arguments() -> Result<Arguments, BackendError> {
     } else {
         None
     };
+    let packager_path = if cfg!(debug_assertions) {
+        match env::var_os("LUXURY_PACKAGER_PATH").map(PathBuf::from) {
+            Some(path) if path.is_absolute() => Some(path),
+            Some(_) => {
+                return Err(BackendError::new(
+                    "invalid_backend_path",
+                    "LUXURY_PACKAGER_PATH must be absolute",
+                ));
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
     Ok(Arguments {
         package_path,
         trusted_publisher_key,
         backend_path,
+        packager_path,
     })
 }
 

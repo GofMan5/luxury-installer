@@ -143,6 +143,7 @@ async fn close_window_inner(window: WebviewWindow, state: AppState) -> Result<()
     }
     let shutdown_state = state.clone();
     let shutdown = match tauri::async_runtime::spawn_blocking(move || {
+        studio::shutdown(&shutdown_state)?;
         setup::shutdown_operation(&shutdown_state)?;
         if let Ok(backend) = shutdown_state.backend() {
             backend.close();
@@ -322,6 +323,8 @@ pub fn run() {
             get_app_mode,
             studio::create_project,
             studio::open_project,
+            studio::get_recent_projects,
+            studio::open_recent_project,
             studio::reload_project,
             studio::update_project,
             studio::import_project_files,

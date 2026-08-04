@@ -14,7 +14,7 @@ The interface follows the flat dark language of Codex and ChatGPT:
 - no status badges, oversized icon containers, dashboard tiles, or nested cards; status is plain icon + text and content is arranged as open rows;
 - no internal package/runtime terminology in Setup end-user copy; Studio uses only terms needed for authoring.
 
-Setup makes four facts obvious: which application is being installed, where it will be installed, whether its publisher is trusted, and what the installation is doing. Studio keeps project actions in the rail and one flat form for validated identity, target, install policy, license, finish links, payload import, and build.
+Setup makes four facts obvious: which application is being installed, where it will be installed, whether its publisher is trusted, and what the installation is doing. Studio keeps project actions in the rail and one flat form for validated identity, target, install policy, license, finish links, payload import, and build. Its empty surface may show up to six recent projects as a flat two-column list with name, publisher/version, target, and a truncated display-only path; opening one sends only its bounded index.
 
 ## Implementation stack
 

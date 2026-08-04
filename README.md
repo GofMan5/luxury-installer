@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>Build a polished installer without giving up control.</strong><br>
-  A modern Studio, deterministic packages, transactional updates, and one Rust core for Windows, Linux, and macOS.
+  A modern Studio, native installers, transactional updates, and one Rust core for Windows, Linux, and macOS.
 </p>
 
 <p align="center">
@@ -30,12 +30,13 @@
 Open Studio and describe the application instead of hand-writing a setup script:
 
 - edit identity, version, publisher, target, architecture, and install scope;
+- reopen up to six validated recent projects without browsing for their folders again;
 - add files or a complete folder through native dialogs;
 - choose the launch file from the real payload;
 - add a license, optional installation details, and up to four HTTPS finish links;
-- save, revalidate, and build one deterministic `.luxpkg`.
+- save, revalidate, and build a real `.exe`, `.deb` + `.rpm`, or `.dmg` for the selected native target.
 
-Source and output paths stay in the Rust shell. React receives validated portable settings, not generic filesystem access. Imports never overwrite an existing payload entry, and a failed partial import rolls back.
+The internal package container stays between the Rust compiler and packager and is deleted with the build workspace. It is not the file a Studio user ships. Source and output paths stay in the Rust shell; React receives validated portable settings, not generic filesystem access.
 
 ### Setup for the person installing the application
 
@@ -55,7 +56,7 @@ There is no built-in update-download service yet. Updating means launching a new
 
 | | Luxury Installer |
 | --- | --- |
-| Package | Deterministic `.luxpkg` with strict portable paths and exact hashes. |
+| Output | One-click Windows `Setup.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg`; the deterministic package is internal. |
 | Trust | Unsigned development v1, Ed25519-signed v2, authenticated publisher rotation v3. |
 | Lifecycle | Read-only preflight, install, update, repair, explicit downgrade policy, rollback/recovery, uninstall, and receipt-owned launch. |
 | Ownership | Receipts live outside the removable application tree. Unknown or modified data is not claimed. |
@@ -80,19 +81,28 @@ pnpm --dir apps/luxury-installer install --frozen-lockfile
 Start Studio:
 
 ```console
-cargo build -p luxury
+cargo build -p luxury -p xtask
 pnpm --dir apps/luxury-installer run dev:app
 ```
 
-Or create and build directly from the CLI:
+Or create a project and build the host-native installer directly:
 
 ```console
 cargo run -p luxury -- init <project-dir>
-cargo run -p luxury -- build <project-dir> <out.luxpkg>
-cargo run -p luxury -- inspect <out.luxpkg>
+cargo project-installer -- <absolute-project-dir> <absolute-native-output>
 ```
 
-Unsigned v1 installation always needs explicit consent:
+Native output is explicit:
+
+| Host | Output argument |
+| --- | --- |
+| Windows x64 | A new `Setup.exe` file. |
+| Linux x64/arm64 | A new directory containing verified `.deb` and `.rpm` files. |
+| macOS x64/arm64 | A new `.dmg` file. |
+
+The normal Studio build needs no Rust, Node, or Tauri rebuild: released Studio bundles carry a verified host template and Rust packager. The Linux packager writes and independently inspects `.deb` and RPM containers in Rust, so users do not need `dpkg`, `rpm`, Cargo, or pnpm. Its current combined input limit is 256 MiB because the pinned RPM writer buffers payloads; the build fails clearly before exhausting memory. Building all platforms still uses native Windows/Linux/macOS runners because Apple signing and native containers cannot be truthfully produced by one Windows process.
+
+The low-level package/lifecycle CLI remains available for signing, CI, and engine testing. Unsigned package installation always needs explicit consent:
 
 ```console
 cargo run -p luxury -- prepare-install <out.luxpkg> <install-base> <state-root>
@@ -147,7 +157,8 @@ Use the smallest command that proves the work:
 | `cargo quick --locked` | Normal core Rust loop. |
 | `cargo gui-check` | Renderer contracts, strict TypeScript, Vite, and both Tauri flavors. |
 | `cargo studio-assemble` | Payload-free Studio for the current host. |
-| `cargo assemble -- <package.luxpkg>` | One package-bound unsigned development Setup for the current host. |
+| `cargo project-installer -- <project> <native-output>` | User-facing native installer; the package is a temporary internal file. |
+| `cargo assemble -- <package.luxpkg>` | Low-level package-bound runner gate. |
 | `cargo runner-smoke` | Native packaged lifecycle, cancellation, recovery, launch, cleanup, and local evidence. |
 
 Windows, Linux, and macOS have different final container/signing flows. Follow the exact order in the [AI build guide](docs/ai-build.md); Rust release commands do not accept signing credentials.
@@ -156,9 +167,9 @@ Windows, Linux, and macOS have different final container/signing flows. Follow t
 
 | Platform | Implemented | Still required before release |
 | --- | --- | --- |
-| Windows 10/11 | User lifecycle; source-level authenticated one-shot system prepare/install/uninstall/launch; NSIS development and two-phase release flow. | Signed-final native lifecycle and downloaded final-byte verification. |
-| Linux desktop | User lifecycle; fixed root-owned helper/polkit design; deterministic tar plus inspected unsigned `.deb`/RPM development packages. | Installed root-owned lifecycle, distribution signing, and removal of the GTK3 `glib 0.18.5` advisory from the final graph. |
-| macOS 13+ | User lifecycle; signed `SMAppService` helper design; deterministic app transport and DMG verification flow. | Signed/notarized native lifecycle and final downloaded artifact proof. |
+| Windows 10/11 | Standalone Studio template-packager emits and runtime-verifies one NSIS `Setup.exe`; authenticated system lifecycle and two-phase signing flow are implemented. | Authenticode-signed final lifecycle and downloaded final-byte verification. |
+| Linux desktop | Native project build emits inspected `.deb` + `.rpm`; fixed helper/polkit lifecycle exists. | Remove the GTK3 advisory, prove installed root-owned lifecycle, and add distribution signing. |
+| macOS 13+ | Native project build emits an inspected `.dmg`; signed `SMAppService` lifecycle and final DMG verification flows exist. | Developer ID signing, notarization, and downloaded final-byte proof. |
 
 Linux desktop publication remains blocked by `RUSTSEC-2024-0429` in the pinned GTK3/Wry dependency graph. The project does not hide that advisory or call the current Linux desktop artifact release-ready.
 

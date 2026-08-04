@@ -1,6 +1,12 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-import type { LuxuryBridge, StudioBuildResult, StudioProject, StudioProjectUpdate } from './types'
+import type {
+  LuxuryBridge,
+  RecentProject,
+  StudioBuildResult,
+  StudioProject,
+  StudioProjectUpdate,
+} from './types'
 
 export type StudioView =
   | { kind: 'empty' }
@@ -16,9 +22,11 @@ export type StudioView =
 
 export interface StudioController {
   view: StudioView
+  recentProjects: RecentProject[]
   folderPending: boolean
   createProject(): Promise<void>
   openProject(): Promise<void>
+  openRecentProject(index: number): Promise<void>
   reloadProject(): Promise<void>
   updateProject(input: StudioProjectUpdate): Promise<void>
   importProject(kind: 'files' | 'directory'): Promise<void>
@@ -31,7 +39,23 @@ export interface StudioController {
 export function useStudio(bridge: LuxuryBridge): StudioController {
   const [view, setView] = useState<StudioView>({ kind: 'empty' })
   const [folderPending, setFolderPending] = useState(false)
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([])
   const busy = useRef(false)
+  const recentRequest = useRef(0)
+
+  async function refreshRecentProjects() {
+    const request = ++recentRequest.current
+    try {
+      const projects = await bridge.getRecentProjects()
+      if (request === recentRequest.current) setRecentProjects(projects)
+    } catch {
+      if (request === recentRequest.current) setRecentProjects([])
+    }
+  }
+
+  useEffect(() => {
+    void refreshRecentProjects()
+  }, [bridge])
 
   async function loadProject(action: 'create' | 'open') {
     if (busy.current) return
@@ -43,8 +67,26 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
         ? bridge.createProject()
         : bridge.openProject())
       setView(project ? { kind: 'ready', project } : previous)
+      if (project) void refreshRecentProjects()
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project: projectFrom(previous) })
+    } finally {
+      busy.current = false
+    }
+  }
+
+  async function openRecentProject(index: number) {
+    if (busy.current) return
+    const previous = view
+    busy.current = true
+    setView({ kind: 'loading', action: 'open' })
+    try {
+      const project = await bridge.openRecentProject(index)
+      setView({ kind: 'ready', project })
+      void refreshRecentProjects()
+    } catch (error) {
+      setView({ kind: 'error', message: errorMessage(error), project: projectFrom(previous) })
+      void refreshRecentProjects()
     } finally {
       busy.current = false
     }
@@ -58,6 +100,7 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     setView({ kind: 'refreshing', project })
     try {
       setView({ kind: 'ready', project: await bridge.reloadProject() })
+      void refreshRecentProjects()
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project })
     } finally {
@@ -89,6 +132,7 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     setView({ kind: 'saving', project })
     try {
       setView({ kind: 'ready', project: await bridge.updateProject(input) })
+      void refreshRecentProjects()
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project })
     } finally {
@@ -106,6 +150,7 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     try {
       const result = await bridge.buildProject()
       setView(result ? { kind: 'built', result } : previous)
+      if (result) void refreshRecentProjects()
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project })
     } finally {
@@ -159,9 +204,11 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
 
   return {
     view,
+    recentProjects,
     folderPending,
     createProject: () => loadProject('create'),
     openProject: () => loadProject('open'),
+    openRecentProject,
     reloadProject,
     updateProject,
     importProject,

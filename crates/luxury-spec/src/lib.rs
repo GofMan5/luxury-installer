@@ -29,3 +29,13 @@ pub const ENTRYPOINT_SCHEMA_VERSION: u32 = 2;
 pub const LICENSE_SCHEMA_VERSION: u32 = 3;
 /// Latest manifest schema revision. This is independent of the package trust format.
 pub const MANIFEST_SCHEMA_VERSION: u32 = LICENSE_SCHEMA_VERSION;
+
+/// Version of the strict JSONL protocol shared by the CLI, desktop shell, and native packager.
+pub const JSONL_PROTOCOL_VERSION: u32 = 3;
+
+/// Binary marker surrounding the exact package fingerprint in a patchable Setup template.
+pub const SETUP_BINDING_PREFIX: [u8; 16] = *b"LUXBIND:v1:BEGIN";
+/// Binary marker closing the exact package fingerprint in a patchable Setup template.
+pub const SETUP_BINDING_SUFFIX: [u8; 16] = *b"LUXBIND:v1::END!";
+/// Non-hex placeholder used only while producing an unbound Setup template.
+pub const SETUP_BINDING_TEMPLATE: [u8; 64] = [b'X'; 64];

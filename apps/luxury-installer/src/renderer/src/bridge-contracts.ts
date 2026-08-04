@@ -238,6 +238,19 @@ export const studioBuildResultSchema = z
   .object({ outputPath: path, project: studioProjectSchema })
   .strict()
 
+export const recentProjectSchema = z
+  .object({
+    projectPath: path,
+    name: text,
+    publisher: text,
+    version: text,
+    targetOs,
+    targetArch,
+  })
+  .strict()
+export const recentProjectIndexSchema = z.number().int().min(0).max(5)
+export const recentProjectsSchema = z.array(recentProjectSchema).max(6)
+
 export const operationStartedSchema = z.object({ operationId: requestId }).strict()
 export const eventEnvelopeSchema = z.object({ operationId: requestId }).passthrough()
 export const appModeSchema = z.enum(['studio', 'setup'])

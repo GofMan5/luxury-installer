@@ -13,12 +13,15 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Host-native assembly, focused CI gates, and independent Windows/Linux/macOS verification commands.
 - Studio form authoring, native no-overwrite file/folder import, and validated payload entrypoint selection.
 - Safe per-command CLI help plus strict JSONL v3, a validated public AI skill, and a complete CLI/protocol reference.
+- One native project build command that publishes Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg` while keeping the package handoff internal.
+- A bounded recent-project list that revalidates projects before reopening them.
 
 ### Changed
 
 - Desktop windows choose a DPI-aware fixed size from the monitor work area and no longer expose resize or maximize controls.
 - The completion screen separates optional links from the clear `Запустить` and `Готово` actions.
 - Downloaded newer packages keep one receipt-bound install/update/repair flow, and Tauri now rejects a terminal action that disagrees with the prepared plan.
+- Released Studio bundles carry a payload-free Setup template and Rust packager; Windows uses bundled SHA-256-pinned NSIS, while Linux writes and independently parses `.deb`/RPM in Rust without a source checkout or system packaging CLI.
 
 ### Security
 
