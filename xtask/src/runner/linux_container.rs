@@ -1335,17 +1335,8 @@ fn verify_deb(
     )?;
     let mut listed = Vec::new();
     for line in listing.lines().filter(|line| !line.trim().is_empty()) {
-        let marker = line
-            .find(" ./")
-            .ok_or_else(|| "dpkg-deb returned an invalid contents path".to_owned())?;
-        let mut fields = line[..marker].split_whitespace();
-        let mode = fields
-            .next()
-            .ok_or_else(|| "dpkg-deb returned an invalid contents line".to_owned())?;
-        if fields.next() != Some("root/root") {
-            return Err("Debian package contains a non-root-owned entry".into());
-        }
-        listed.push((line[marker + 1..].to_owned(), entry_kind(mode)?));
+        let (mode, path) = parse_dpkg_contents_line(line)?;
+        listed.push((path.to_owned(), entry_kind(mode)?));
     }
     validate_archive_listing(&listed, expected)?;
 
@@ -1376,6 +1367,33 @@ fn verify_deb(
         None,
     )?;
     validate_extracted_tree(&extracted, expected)
+}
+
+fn parse_dpkg_contents_line(line: &str) -> Result<(&str, &str), String> {
+    let mut rest = line;
+    let mode = take_listing_field(&mut rest)?;
+    let owner = take_listing_field(&mut rest)?;
+    let size = take_listing_field(&mut rest)?;
+    let _date = take_listing_field(&mut rest)?;
+    let _time = take_listing_field(&mut rest)?;
+    let path = rest.trim_start();
+    if !matches!(owner, "root/root" | "0/0") {
+        return Err("Debian package contains a non-root-owned entry".into());
+    }
+    if size.parse::<u64>().is_err() || path.is_empty() {
+        return Err("dpkg-deb returned an invalid contents line".into());
+    }
+    Ok((mode, path))
+}
+
+fn take_listing_field<'a>(input: &mut &'a str) -> Result<&'a str, String> {
+    *input = input.trim_start();
+    let end = input
+        .find(char::is_whitespace)
+        .ok_or_else(|| "dpkg-deb returned an invalid contents line".to_owned())?;
+    let field = &input[..end];
+    *input = &input[end..];
+    Ok(field)
 }
 
 fn verify_rpm(
@@ -1946,6 +1964,27 @@ mod tests {
             "luxury-installer-linux-x86_64"
         );
         assert!(safe_name(Path::new("/tmp/not safe"), "runner").is_err());
+    }
+
+    #[test]
+    fn dpkg_contents_accepts_named_or_numeric_root_and_preserves_spaces() {
+        for (line, expected) in [
+            (
+                "-rwxr-xr-x root/root 42 2026-08-04 15:46 ./usr/lib/Luxury Installer/backend/luxury",
+                "./usr/lib/Luxury Installer/backend/luxury",
+            ),
+            (
+                "-rwxr-xr-x 0/0 42 1970-01-01 03:00 usr/lib/Luxury  Installer/backend/luxury",
+                "usr/lib/Luxury  Installer/backend/luxury",
+            ),
+        ] {
+            let (mode, path) = parse_dpkg_contents_line(line).unwrap();
+            assert_eq!(mode, "-rwxr-xr-x");
+            assert_eq!(path, expected);
+        }
+        assert!(parse_dpkg_contents_line("-rw-r--r-- user/user 1 now now usr/file").is_err());
+        assert!(parse_dpkg_contents_line("-rw-r--r-- 0/0 nope now now usr/file").is_err());
+        assert!(parse_dpkg_contents_line("-rw-r--r-- 0/0 1 now now").is_err());
     }
 
     #[test]

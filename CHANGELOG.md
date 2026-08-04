@@ -36,6 +36,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Windows uninstall crash QA now triggers directly from the first rollback-backup filesystem transition instead of racing a delayed coalesced progress frame with full live-state hashing.
 - Headless Linux native verification disables only the unavailable AT-SPI bridge so strict packaged-runner stderr checks are not tripped by the hosted image's missing accessibility D-Bus service.
 - The packaged Linux Studio native-build smoke now supplies Xvfb while keeping Cargo, rustc, and pnpm unavailable to the standalone packager.
+- Debian verification accepts both current numeric-root/no-prefix and legacy named-root/`./` `dpkg-deb --contents` output while preserving exact paths with spaces.
 
 ### Security
 
