@@ -213,6 +213,7 @@ export interface LuxuryBridge {
   launchInstalled(): Promise<void>
   revealInstalled(): Promise<void>
   openFinishLink(index: number): Promise<void>
+  setStudioDraftDirty(dirty: boolean): void
   minimizeWindow(): Promise<void>
   closeWindow(): Promise<void>
 }

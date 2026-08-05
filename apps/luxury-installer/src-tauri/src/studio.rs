@@ -5,7 +5,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -15,8 +15,8 @@ use std::{
 use luxury_process::ChildContainment;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::{AppHandle, State, WebviewWindow};
-use tauri_plugin_dialog::DialogExt;
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tempfile::{Builder, NamedTempFile, TempDir};
 
 use crate::{
@@ -37,10 +37,14 @@ pub(crate) struct StudioState {
     last_output: Mutex<Option<PathBuf>>,
     recent_path: Option<PathBuf>,
     recent: Mutex<Vec<RecentProject>>,
+    close_sequence: AtomicU64,
+    close_query: Mutex<Option<PendingCloseQuery>>,
 }
 
 const MAX_RECENT_PROJECTS: usize = 6;
 const MAX_RECENT_FILE_BYTES: u64 = 64 * 1024;
+const STUDIO_CLOSE_QUERY_EVENT: &str = "luxury://studio-close-query";
+const STUDIO_CLOSE_QUERY_TIMEOUT: Duration = Duration::from_secs(1);
 const BUILD_IDLE: u8 = 0;
 const BUILD_ACTIVE: u8 = 1;
 const BUILD_CANCELLED: u8 = 2;
@@ -92,6 +96,21 @@ impl BuildLifecycle {
 
 struct ActiveBuild(Arc<BuildLifecycle>);
 
+struct PendingCloseQuery {
+    request_id: String,
+    response: mpsc::SyncSender<bool>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioCloseQuery<'a> {
+    request_id: &'a str,
+}
+
+fn close_query_dirty(emitted: bool, response: Option<bool>) -> bool {
+    !emitted || response.unwrap_or(true)
+}
+
 impl Drop for ActiveBuild {
     fn drop(&mut self) {
         self.0.0.store(BUILD_IDLE, Ordering::Release);
@@ -111,6 +130,75 @@ impl StudioState {
             last_output: Mutex::new(None),
             recent_path,
             recent: Mutex::new(recent),
+            close_sequence: AtomicU64::new(0),
+            close_query: Mutex::new(None),
+        }
+    }
+
+    fn begin_close_query(&self) -> Result<(String, mpsc::Receiver<bool>), PublicError> {
+        let sequence = self
+            .close_sequence
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        let request_id = format!("studio-close-{sequence}");
+        let (response, receiver) = mpsc::sync_channel(1);
+        let mut pending = self.close_query.lock().map_err(|_| {
+            PublicError::new("internal_error", "Состояние закрытия Studio недоступно.")
+        })?;
+        if pending.is_some() {
+            return Err(PublicError::new("busy", "Закрытие Studio уже выполняется."));
+        }
+        *pending = Some(PendingCloseQuery {
+            request_id: request_id.clone(),
+            response,
+        });
+        Ok((request_id, receiver))
+    }
+
+    fn respond_close_query(&self, request_id: &str, dirty: bool) -> Result<(), PublicError> {
+        if request_id.len() > 64
+            || !request_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(PublicError::new(
+                "invalid_close_response",
+                "Ответ закрытия Studio недействителен.",
+            ));
+        }
+        let response = {
+            let mut pending = self.close_query.lock().map_err(|_| {
+                PublicError::new("internal_error", "Состояние закрытия Studio недоступно.")
+            })?;
+            if pending
+                .as_ref()
+                .is_none_or(|pending| pending.request_id != request_id)
+            {
+                return Err(PublicError::new(
+                    "stale_close_response",
+                    "Запрос закрытия Studio уже завершён.",
+                ));
+            }
+            pending
+                .take()
+                .expect("matching close query exists")
+                .response
+        };
+        response.send(dirty).map_err(|_| {
+            PublicError::new(
+                "stale_close_response",
+                "Запрос закрытия Studio уже завершён.",
+            )
+        })
+    }
+
+    fn finish_close_query(&self, request_id: &str) {
+        if let Ok(mut pending) = self.close_query.lock()
+            && pending
+                .as_ref()
+                .is_some_and(|pending| pending.request_id == request_id)
+        {
+            pending.take();
         }
     }
 }
@@ -388,6 +476,67 @@ pub(crate) fn cancel_project_build(
     Ok(BuildCancellationResult {
         accepted: state.studio.build.cancel(),
     })
+}
+
+#[tauri::command]
+pub(crate) fn respond_studio_close(
+    request_id: String,
+    dirty: bool,
+    state: State<'_, AppState>,
+) -> Result<(), PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    state.studio.respond_close_query(&request_id, dirty)
+}
+
+pub(crate) fn confirm_close(window: &WebviewWindow, state: &AppState) -> Result<bool, PublicError> {
+    if state.mode != AppMode::Studio {
+        return Ok(true);
+    }
+    let has_active_project = state
+        .studio
+        .active
+        .lock()
+        .map_err(|_| PublicError::new("internal_error", "Состояние Studio недоступно."))?
+        .is_some();
+    if !has_active_project {
+        return Ok(true);
+    }
+
+    let (request_id, receiver) = state.studio.begin_close_query()?;
+    let emitted = window
+        .emit(
+            STUDIO_CLOSE_QUERY_EVENT,
+            StudioCloseQuery {
+                request_id: &request_id,
+            },
+        )
+        .is_ok();
+    let response = emitted
+        .then(|| receiver.recv_timeout(STUDIO_CLOSE_QUERY_TIMEOUT).ok())
+        .flatten();
+    let dirty = close_query_dirty(emitted, response);
+    state.studio.finish_close_query(&request_id);
+    if !dirty {
+        return Ok(true);
+    }
+
+    let _dialog = ExclusiveGuard::acquire(
+        &state.dialog_open,
+        "busy",
+        "Закройте открытый диалог и повторите действие.",
+    )?;
+    Ok(window
+        .app_handle()
+        .dialog()
+        .message("В проекте есть несохранённые изменения. При закрытии они будут потеряны.")
+        .title("Закрыть Studio?")
+        .parent(window)
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Закрыть без сохранения".into(),
+            "Продолжить редактирование".into(),
+        ))
+        .blocking_show())
 }
 
 pub(crate) fn verify_studio(state: &AppState) -> Result<(), PublicError> {
@@ -1447,6 +1596,28 @@ mod tests {
         InstallPolicy, InstallScope, PackageIdentity, Payload, ProjectAuthoring, Target,
         TargetArch, TargetOs,
     };
+
+    #[test]
+    fn studio_close_query_accepts_only_the_correlated_response() {
+        let state = StudioState::default();
+        let (request_id, response) = state.begin_close_query().unwrap();
+        assert!(
+            state
+                .respond_close_query("studio-close-999", false)
+                .is_err()
+        );
+        state.respond_close_query(&request_id, true).unwrap();
+        assert_eq!(response.recv_timeout(Duration::from_millis(10)), Ok(true));
+        assert!(state.respond_close_query(&request_id, false).is_err());
+    }
+
+    #[test]
+    fn missing_or_invalid_close_query_response_fails_dirty() {
+        assert!(close_query_dirty(false, None));
+        assert!(close_query_dirty(true, None));
+        assert!(close_query_dirty(true, Some(true)));
+        assert!(!close_query_dirty(true, Some(false)));
+    }
 
     fn project(schema_version: u8, license: Option<&str>) -> ProjectResult {
         ProjectResult {

@@ -14,6 +14,7 @@ import {
   recentProjectIndexSchema,
   recentProjectsSchema,
   setupEventSchema,
+  studioCloseQuerySchema,
   studioBuildResultSchema,
   studioHostSchema,
   studioProjectSchema,
@@ -22,6 +23,7 @@ import {
 import type { LuxuryBridge, SetupEvent } from './types'
 
 const OPERATION_EVENT = 'luxury://operation-event'
+const STUDIO_CLOSE_QUERY_EVENT = 'luxury://studio-close-query'
 
 class LuxuryInvokeError extends Error {
   constructor(readonly code: string, message: string) {
@@ -33,8 +35,10 @@ class LuxuryInvokeError extends Error {
 export function createTauriBridge(): LuxuryBridge {
   const subscribers = new Set<(event: SetupEvent) => void>()
   let unlisten: UnlistenFn | undefined
+  let unlistenStudioClose: UnlistenFn | undefined
   let disposed = false
   let eventFailure: Error | undefined
+  let studioDraftDirty = false
   const eventReady = listen<unknown>(OPERATION_EVENT, ({ payload }) => {
     const parsed = setupEventSchema.safeParse(payload)
     if (parsed.success) {
@@ -56,12 +60,24 @@ export function createTauriBridge(): LuxuryBridge {
   }).catch(() => {
     eventFailure = new Error('Не удалось запустить защищённый канал событий установщика.')
   })
+  void listen<unknown>(STUDIO_CLOSE_QUERY_EVENT, ({ payload }) => {
+    const parsed = studioCloseQuerySchema.safeParse(payload)
+    if (!parsed.success) return
+    void invokeCommand('respond_studio_close', {
+      requestId: parsed.data.requestId,
+      dirty: studioDraftDirty,
+    }).catch(() => undefined)
+  }).then((dispose) => {
+    if (disposed) dispose()
+    else unlistenStudioClose = dispose
+  }).catch(() => undefined)
 
   window.addEventListener(
     'beforeunload',
     () => {
       disposed = true
       unlisten?.()
+      unlistenStudioClose?.()
     },
     { once: true },
   )
@@ -112,6 +128,9 @@ export function createTauriBridge(): LuxuryBridge {
     launchInstalled: () => invokeCommand('launch_installed'),
     revealInstalled: () => invokeCommand('reveal_installed'),
     openFinishLink: (index) => invokeCommand('open_finish_link', { index }),
+    setStudioDraftDirty: (dirty) => {
+      studioDraftDirty = dirty === true
+    },
     minimizeWindow: () => invokeCommand('minimize_window'),
     closeWindow: () => invokeCommand('close_window'),
   }

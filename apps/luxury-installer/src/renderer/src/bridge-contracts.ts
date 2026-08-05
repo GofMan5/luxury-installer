@@ -259,6 +259,7 @@ export const recentProjectIndexSchema = z.number().int().min(0).max(5)
 export const recentProjectsSchema = z.array(recentProjectSchema).max(6)
 
 export const operationStartedSchema = z.object({ operationId: requestId }).strict()
+export const studioCloseQuerySchema = z.object({ requestId }).strict()
 export const eventEnvelopeSchema = z.object({ operationId: requestId }).passthrough()
 export const appModeSchema = z.enum(['studio', 'setup'])
 export const studioHostSchema = z.object({ os: targetOs, arch: targetArch }).strict()

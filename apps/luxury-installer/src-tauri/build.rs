@@ -16,6 +16,7 @@ fn main() {
         "reveal_build_output",
         "build_project",
         "cancel_project_build",
+        "respond_studio_close",
         "choose_directory",
         "start_install",
         "start_uninstall",

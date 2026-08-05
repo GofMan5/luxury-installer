@@ -12,6 +12,7 @@ import {
   recentProjectSchema,
   recentProjectsSchema,
   setupEventSchema,
+  studioCloseQuerySchema,
   studioHostSchema,
   studioProjectSchema,
 } from '../src/renderer/src/bridge-contracts.ts'
@@ -386,6 +387,53 @@ test('Studio saves a valid dirty draft before starting the native build', async 
     /if \(input\) \{[\s\S]*?await bridge\.updateProject\(input\)[\s\S]*?kind: 'building'[\s\S]*?await bridge\.buildProject\(\)/,
   )
   assert.match(controller, /buildStarted && errorCode\(error\) === 'project_build_cancelled'/)
+})
+
+test('Studio blocks destructive draft actions and Rust owns close confirmation', async () => {
+  assert.equal(studioCloseQuerySchema.safeParse({ requestId: 'studio-close-1' }).success, true)
+  assert.equal(
+    studioCloseQuerySchema.safeParse({ requestId: 'studio-close-1', dirty: false }).success,
+    false,
+  )
+  const [view, chrome, bridge, shell, app, capability, build] = await Promise.all([
+    readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/components/WindowChrome.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/tauri-bridge.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/studio.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/capabilities/main.json', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/build.rs', import.meta.url), 'utf8'),
+  ])
+  assert.equal([...view.matchAll(/disabled=\{busy \|\| draftDirty\}/g)].length, 3)
+  assert.match(view, /bridge\.setStudioDraftDirty\(dirty\)/)
+  assert.match(view, /useLayoutEffect\(\(\) => \{[\s\S]*?onDirtyChange\(dirty\)/)
+  assert.match(view, /onClick=\{\(\) => setDraft\(baseline\)\}[\s\S]*?Отменить изменения/)
+  assert.match(bridge, /listen<unknown>\(STUDIO_CLOSE_QUERY_EVENT/)
+  assert.match(bridge, /requestId: parsed\.data\.requestId,[\s\S]*?dirty: studioDraftDirty/)
+  assert.match(shell, /fn close_query_dirty\([\s\S]*?!emitted \|\| response\.unwrap_or\(true\)/)
+  assert.match(shell, /recv_timeout\(STUDIO_CLOSE_QUERY_TIMEOUT\)/)
+  assert.match(shell, /MessageDialogButtons::OkCancelCustom\([\s\S]*?Закрыть без сохранения/)
+  assert.match(app, /studio::respond_studio_close/)
+  assert.match(
+    app,
+    /studio::confirm_close\(&shutdown_window, &shutdown_state\)[\s\S]*?studio::shutdown\(&shutdown_state\)/,
+  )
+  assert.match(
+    app,
+    /if !close \{[\s\S]*?close_ready[\s\S]*?store\(false,[\s\S]*?close_started[\s\S]*?store\(false,[\s\S]*?return Ok\(\(\)\)/,
+  )
+  assert.match(capability, /allow-respond-studio-close/)
+  assert.equal(
+    JSON.parse(capability).permissions.some((permission) =>
+      /^(?:dialog|fs|opener|process|shell):/.test(permission),
+    ),
+    false,
+  )
+  assert.match(build, /"respond_studio_close"/)
+  assert.match(
+    chrome,
+    /await bridge\.closeWindow\(\)[\s\S]*?finally \{[\s\S]*?closingRef\.current = false/,
+  )
 })
 
 test('Studio uses the Rust-owned host target before offering a native build', async () => {

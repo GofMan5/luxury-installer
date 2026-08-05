@@ -23,6 +23,7 @@
     "allow-reveal-build-output",
     "allow-build-project",
     "allow-cancel-project-build",
+    "allow-respond-studio-close",
     "allow-choose-directory",
     "allow-start-install",
     "allow-start-uninstall",

@@ -317,13 +317,17 @@ async fn close_window_inner(window: WebviewWindow, state: AppState) -> Result<()
         return Ok(());
     }
     let shutdown_state = state.clone();
+    let shutdown_window = window.clone();
     let shutdown = match tauri::async_runtime::spawn_blocking(move || {
+        if !studio::confirm_close(&shutdown_window, &shutdown_state)? {
+            return Ok(false);
+        }
         studio::shutdown(&shutdown_state)?;
         setup::shutdown_operation(&shutdown_state)?;
         if let Ok(backend) = shutdown_state.backend() {
             backend.close();
         }
-        Ok::<_, PublicError>(())
+        Ok::<_, PublicError>(true)
     })
     .await
     {
@@ -333,14 +337,26 @@ async fn close_window_inner(window: WebviewWindow, state: AppState) -> Result<()
             "Не удалось закрыть установщик.",
         )),
     };
-    if let Err(error) = shutdown {
+    let close = match shutdown {
+        Ok(close) => close,
+        Err(error) => {
+            state
+                .close_ready
+                .store(false, std::sync::atomic::Ordering::Release);
+            state
+                .close_started
+                .store(false, std::sync::atomic::Ordering::Release);
+            return Err(error);
+        }
+    };
+    if !close {
         state
             .close_ready
             .store(false, std::sync::atomic::Ordering::Release);
         state
             .close_started
             .store(false, std::sync::atomic::Ordering::Release);
-        return Err(error);
+        return Ok(());
     }
     state
         .close_ready
@@ -527,6 +543,7 @@ pub fn run() {
             studio::reveal_build_output,
             studio::build_project,
             studio::cancel_project_build,
+            studio::respond_studio_close,
             setup::get_bootstrap,
             setup::choose_directory,
             setup::start_install,

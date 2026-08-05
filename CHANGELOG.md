@@ -40,6 +40,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Fixed
 
+- Unsaved Studio settings now block project switching and reload, can be explicitly undone to the last validated baseline, and require a Rust-owned discard confirmation on close or Alt+F4.
 - Studio owns the exact native-build work directory and removes it after descendant reaping, including cancellation, timeout, and failure, instead of leaving a hidden partial assembly tree beside the selected output.
 - Studio native-build cancellation, timeout, and primary exit now contain and reap the complete Cargo/NSIS/Tauri descendant tree through a shared Rust Job Object/process-group adapter instead of killing only the packager PID.
 - Independent Tauri `.deb`/RPM verification now derives the exact launcher hash after the pinned bundler's single `UNK -> DEB/RPM` bundle-type marker patch instead of incorrectly requiring the unpatched source hash.

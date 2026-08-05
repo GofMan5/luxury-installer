@@ -12,9 +12,10 @@ import {
   Terminal,
   Trash2,
   TriangleAlert,
+  Undo2,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { BrandMark } from './components/BrandMark'
 import { WindowChrome } from './components/WindowChrome'
@@ -109,6 +110,11 @@ export function StudioView({
     state.kind === 'building' ||
     folderPending
   const workspace = useRef<HTMLElement>(null)
+  const [draftDirty, setDraftDirty] = useState(false)
+  const onDraftDirtyChange = useCallback((dirty: boolean) => {
+    setDraftDirty(dirty)
+    bridge.setStudioDraftDirty(dirty)
+  }, [bridge])
 
   useEffect(() => {
     workspace.current
@@ -123,11 +129,11 @@ export function StudioView({
         <BrandMark />
         <nav className="studio-rail__actions" aria-label="Действия с проектом">
           <span className="rail-label">Проект</span>
-          <button type="button" disabled={busy} onClick={onCreate}>
+          <button type="button" disabled={busy || draftDirty} onClick={onCreate}>
             <FilePlus2 size={17} aria-hidden="true" />
             Новый проект
           </button>
-          <button type="button" disabled={busy} onClick={onOpen}>
+          <button type="button" disabled={busy || draftDirty} onClick={onOpen}>
             <FolderOpen size={17} aria-hidden="true" />
             Открыть проект
           </button>
@@ -141,7 +147,7 @@ export function StudioView({
                 )}
                 {folderPending ? 'Открываем…' : 'Папка проекта'}
               </button>
-              <button type="button" disabled={busy} onClick={onReload}>
+              <button type="button" disabled={busy || draftDirty} onClick={onReload}>
                 <RefreshCw
                   className={state.kind === 'refreshing' ? 'spin' : undefined}
                   size={17}
@@ -188,6 +194,7 @@ export function StudioView({
             onBuild={onBuild}
             onCancelBuild={onCancelBuild}
             onRevealBuildOutput={bridge.revealBuildOutput}
+            onDirtyChange={onDraftDirtyChange}
             onDismissError={onDismissError}
           />
         ) : null}
@@ -305,6 +312,7 @@ function ProjectView({
   onBuild,
   onCancelBuild,
   onRevealBuildOutput,
+  onDirtyChange,
   onDismissError,
 }: {
   project: StudioProject
@@ -320,6 +328,7 @@ function ProjectView({
   onBuild(input?: StudioProjectUpdate): void
   onCancelBuild(): void
   onRevealBuildOutput(): Promise<void>
+  onDirtyChange(dirty: boolean): void
   onDismissError(): void
 }) {
   const building = state.kind === 'building'
@@ -342,6 +351,10 @@ function ProjectView({
       : 'studio-host-build-note'
 
   useEffect(() => setDraft(baseline), [baseline])
+  useLayoutEffect(() => {
+    onDirtyChange(dirty)
+    return () => onDirtyChange(false)
+  }, [dirty, onDirtyChange])
 
   const updateLink = (index: number, field: 'label' | 'url', value: string) => {
     setDraft((current) => ({
@@ -384,10 +397,16 @@ function ProjectView({
             </button>
           ) : null}
           {buildable && !building ? (
-            <button className="secondary-button" type="submit" disabled={busy || !dirty}>
-              {saving ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Save size={17} aria-hidden="true" />}
-              {saving ? 'Сохраняем…' : 'Сохранить'}
-            </button>
+            <>
+              <button className="secondary-button" type="button" disabled={busy || !dirty} onClick={() => setDraft(baseline)}>
+                <Undo2 size={17} aria-hidden="true" />
+                Отменить изменения
+              </button>
+              <button className="secondary-button" type="submit" disabled={busy || !dirty}>
+                {saving ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Save size={17} aria-hidden="true" />}
+                {saving ? 'Сохраняем…' : 'Сохранить'}
+              </button>
+            </>
           ) : null}
           <button
             className="primary-button"

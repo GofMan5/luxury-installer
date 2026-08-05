@@ -31,6 +31,7 @@ Open Studio and describe the application instead of hand-writing a setup script:
 
 - edit identity, version, publisher, target, architecture, and install scope;
 - reopen up to six validated recent projects without browsing for their folders again;
+- keep unsaved edits visible and protected: project switching and reload stay locked until you save or undo, and closing Studio asks before discarding the draft;
 - add files or a complete folder through native dialogs, or safely replace the whole payload with a staged new build folder;
 - choose the launch file from the real payload;
 - add a license, optional installation details, and up to four HTTPS finish links;
