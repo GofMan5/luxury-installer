@@ -19,6 +19,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - One native project build command that publishes Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg` while keeping the package handoff internal.
 - A bounded recent-project list that revalidates projects before reopening them.
 - Strict windowless install/uninstall on the final bound Setup, with explicit consent flags, idempotent removal, and stable exit codes for deployment tools.
+- Read-only `--info-json` on the bound Setup for one-line AI/MDM inventory without a window, install preparation, native paths, or system authorization.
 
 ### Changed
 

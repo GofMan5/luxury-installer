@@ -111,7 +111,11 @@ fn public_ai_docs_cover_the_live_cli_and_jsonl_methods() {
 
     let tauri_shell =
         fs::read_to_string(root.join("apps/luxury-installer/src-tauri/src/lib.rs")).unwrap();
-    for flag in ["--unattended-install", "--unattended-uninstall"] {
+    for flag in [
+        "--info-json",
+        "--unattended-install",
+        "--unattended-uninstall",
+    ] {
         assert!(tauri_shell.contains(flag), "Tauri Setup misses `{flag}`");
         for (name, document) in [
             ("README.md", readme.as_str()),

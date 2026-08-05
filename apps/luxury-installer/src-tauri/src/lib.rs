@@ -28,7 +28,7 @@ const NO_REQUESTED_EXIT: i32 = i32::MIN;
 const DEFAULT_WINDOW_WIDTH: f64 = 1080.0;
 const DEFAULT_WINDOW_HEIGHT: f64 = 720.0;
 const WINDOW_WORK_AREA_MARGIN: f64 = 32.0;
-const UNATTENDED_HELP: &str = "Usage:\n  Setup --unattended-install [--allow-unsigned] [--accept-license] [--allow-publisher-migration]\n  Setup --unattended-uninstall\n\nThe bound package and host-native default roots are used; paths cannot be supplied.\nExit codes: 0 success (including already absent uninstall), 1 operation failed, 64 invalid arguments.";
+const UNATTENDED_HELP: &str = "Usage:\n  Setup --info-json\n  Setup --unattended-install [--allow-unsigned] [--accept-license] [--allow-publisher-migration]\n  Setup --unattended-uninstall\n\nThe bound package and host-native default roots are used; paths cannot be supplied.\nExit codes: 0 success (including already absent uninstall), 1 inspection or operation failed, 64 invalid arguments.";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct FixedWindowSize {
@@ -123,6 +123,7 @@ fn parse_unattended_command(
     };
     let mut action = None;
     let mut help = false;
+    let mut info_json = false;
     let mut allow_unsigned = false;
     let mut accept_license = false;
     let mut allow_publisher_migration = false;
@@ -142,6 +143,12 @@ fn parse_unattended_command(
             Some("--unattended-uninstall") => {
                 control_requested = true;
                 if action.replace(false).is_some() {
+                    return Err(invalid());
+                }
+            }
+            Some("--info-json") => {
+                control_requested = true;
+                if std::mem::replace(&mut info_json, true) {
                     return Err(invalid());
                 }
             }
@@ -194,12 +201,21 @@ fn parse_unattended_command(
     if (strict_setup && unknown)
         || (control_requested && (unknown || verifier_requested))
         || (help
+            && (action.is_some()
+                || info_json
+                || allow_unsigned
+                || accept_license
+                || allow_publisher_migration))
+        || (info_json
             && (action.is_some() || allow_unsigned || accept_license || allow_publisher_migration))
     {
         return Err(invalid());
     }
     if help {
         return Ok(Some(setup::UnattendedCommand::Help));
+    }
+    if info_json {
+        return Ok(Some(setup::UnattendedCommand::InfoJson));
     }
     if !control_requested {
         return Ok(None);
@@ -217,9 +233,9 @@ fn parse_unattended_command(
     }
 }
 
-fn require_unelevated_runtime() -> Result<(), PublicError> {
+fn require_runtime_privilege(headless_read_only: bool) -> Result<(), PublicError> {
     match privilege::is_elevated() {
-        Ok(elevated) if privilege::desktop_runtime_allowed(elevated, false) => Ok(()),
+        Ok(elevated) if privilege::desktop_runtime_allowed(elevated, headless_read_only) => Ok(()),
         Ok(_) => Err(PublicError::new(
             "elevated_ui_forbidden",
             "Luxury Installer не запускается с повышенными правами; system scope использует отдельный защищённый helper.",
@@ -232,16 +248,34 @@ fn require_unelevated_runtime() -> Result<(), PublicError> {
 }
 
 fn run_unattended_process(command: setup::UnattendedCommand) -> i32 {
-    let result = require_unelevated_runtime().and_then(|()| {
-        let state = AppState::new_headless().map_err(PublicError::from)?;
-        let result = setup::run_unattended(&state, command);
-        if let Ok(backend) = state.backend() {
-            backend.close();
-        }
-        result
-    });
+    let result = require_runtime_privilege(matches!(command, setup::UnattendedCommand::InfoJson))
+        .and_then(|()| {
+            let state = AppState::new_headless().map_err(PublicError::from)?;
+            let result = match command {
+                setup::UnattendedCommand::InfoJson => {
+                    setup::bound_package_info(&state).and_then(|info| {
+                        serde_json::to_string(&info).map(Some).map_err(|_| {
+                            PublicError::new(
+                                "info_serialization_failed",
+                                "Setup metadata could not be serialized.",
+                            )
+                        })
+                    })
+                }
+                _ => setup::run_unattended(&state, command).map(|()| None),
+            };
+            if let Ok(backend) = state.backend() {
+                backend.close();
+            }
+            result
+        });
     match result {
-        Ok(()) => 0,
+        Ok(output) => {
+            if let Some(output) = output {
+                println!("{output}");
+            }
+            0
+        }
         Err(error) => {
             eprintln!("[{}] {}", error.code, error.message);
             1
@@ -370,7 +404,7 @@ pub fn run() {
     let startup_error = if verify_requested {
         None
     } else {
-        require_unelevated_runtime().err()
+        require_runtime_privilege(false).err()
     };
     let mut context = tauri::generate_context!();
     if verify_requested || startup_error.is_some() {
@@ -604,6 +638,18 @@ mod tests {
         assert_eq!(
             parse_unattended_command(&arguments(&["--unattended-uninstall"]), true).unwrap(),
             Some(UnattendedCommand::Uninstall)
+        );
+        assert_eq!(
+            parse_unattended_command(&arguments(&["--info-json"]), true).unwrap(),
+            Some(UnattendedCommand::InfoJson)
+        );
+        assert!(
+            parse_unattended_command(&arguments(&["--info-json", "--unattended-install"]), true,)
+                .is_err()
+        );
+        assert!(
+            parse_unattended_command(&arguments(&["--info-json", "--allow-unsigned"]), true)
+                .is_err()
         );
         assert!(
             parse_unattended_command(

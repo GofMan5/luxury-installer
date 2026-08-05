@@ -64,7 +64,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Debug with one absolute --package starts Setup
 - Default release feature studio uses a fixed backend resource and no payload
 - Release feature setup is mutually exclusive and uses fixed native backend/payload resources
-- Final bound Setup accepts only --unattended-install with explicit consent flags, --unattended-uninstall, or --help for public headless use; it accepts no path/key/downgrade/launch authority and waits for the same terminal Rust lifecycle result
+- Final bound Setup accepts only read-only --info-json, --unattended-install with explicit consent flags, --unattended-uninstall, or --help for public headless use; it accepts no path/key/downgrade/launch authority. Info validates the bound package/backend/host without preparation or authorization and emits one bounded JSON line; Windows final-container verification rechecks its exact schema and stdout/stderr transport; mutations wait for the same terminal Rust lifecycle result
 - --trusted-publisher-key and LUXURY_BACKEND_PATH are debug-only absolute paths
 - Setup is not a .luxpkg browser: no picker, drag-and-drop, file input, or renderer-supplied package/root path
 - Studio renderer sends typed settings plus pathless create/open/import/replace/entrypoint/reveal/reload/build intent; Rust shell owns native dialog results and active project/output/source paths
@@ -95,7 +95,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - luxury launch <package-id> <install-base> <state-root>
 - luxury help [command]; every public command also supports non-mutating --help/-h
 - Source/native packager command: cargo project-installer -- <absolute-project> <absolute-native-output>; luxury build remains the low-level package/signing command
-- Final bound launcher: --unattended-install [--allow-unsigned] [--accept-license] [--allow-publisher-migration], --unattended-uninstall, or --help; exit 0 success/already absent, 1 operation failure, 64 invalid arguments
+- Final bound launcher: --info-json, --unattended-install [--allow-unsigned] [--accept-license] [--allow-publisher-migration], --unattended-uninstall, or --help; exit 0 successful inspection/operation or already absent, 1 inspection/operation failure, 64 invalid arguments
 - Development prefix: cargo run -p luxury -- <command>
 - Keep state-root outside the removable install tree
 

@@ -121,16 +121,19 @@ Signed development QA may append `--trusted-publisher-key="<absolute-public.pem>
 
 ### Unattended native Setup
 
-The shipped Setup can install, update, repair, recover, or remove its bound application without starting Tauri, GTK, or a webview:
+The shipped Setup can inspect its bound metadata or install, update, repair, recover, and remove the application without starting Tauri, GTK, or a webview:
 
 ```console
+My-App-Setup.exe --info-json
 My-App-Setup.exe --unattended-install --allow-unsigned
 My-App-Setup.exe --unattended-uninstall
 ```
 
+`--info-json` validates the bound payload, build fingerprint, backend, and host target, then prints one JSON line for inventory or deployment planning. It is read-only, opens no window or authorization prompt, and exposes bounded display metadata and counts—not license text, finish URLs, internal package paths, or native roots. Windows packaging re-runs this command through the final outer Setup and rejects broken stdout/stderr forwarding.
+
 Current Studio builds are unsigned development artifacts, so they need explicit `--allow-unsigned`. Add `--accept-license` only when the authenticated package contains a license, and `--allow-publisher-migration` only when preflight requires that migration. Unattended removal is idempotent. Paths, keys, downgrade approval, launch, and arbitrary commands are not accepted.
 
-The same flags belong to the bound launcher inside Linux and macOS containers. System-scope operations can still show the OS-native UAC/polkit authorization prompt. Exit `0` means success (including an already absent uninstall), `1` means the verified operation failed, and `64` means invalid arguments. `--help` prints the exact surface.
+The same flags belong to the bound launcher inside Linux and macOS containers. System-scope operations can still show the OS-native UAC/polkit authorization prompt. Exit `0` means successful inspection or operation (including an already absent uninstall), `1` means inspection/operation failed, and `64` means invalid arguments. `--help` prints the exact surface.
 
 ## Signed packages
 

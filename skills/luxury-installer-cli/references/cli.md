@@ -92,6 +92,7 @@ Optional authoring fields include a 1-1024-character plain-text `package.descrip
 Automate the final user-facing artifact without exposing its internal `.luxpkg`:
 
 ```console
+My-App-Setup.exe --info-json
 My-App-Setup.exe --unattended-install --allow-unsigned
 My-App-Setup.exe --unattended-uninstall
 ```
@@ -99,12 +100,21 @@ My-App-Setup.exe --unattended-uninstall
 On Linux invoke the installed bound `luxury-installer` binary. On macOS invoke `Luxury Installer.app/Contents/MacOS/Luxury Installer` directly; `open` does not preserve the operation's exit code. The accepted surface is exact:
 
 ```text
+--info-json
 --unattended-install [--allow-unsigned] [--accept-license] [--allow-publisher-migration]
 --unattended-uninstall
 --help | -h
 ```
 
-No package path, install root, state root, key, downgrade approval, launch, environment, or arbitrary command is accepted. The runner uses its compiled payload binding and host-native default roots, waits for terminal rollback/cleanup, and returns `0` on success, `1` on an operation failure, or `64` on invalid arguments. Unattended uninstall is idempotent; system scope can still require the OS-native UAC/polkit authorization prompt. Supply each consent only when the caller explicitly authorized the currently authenticated request.
+`--info-json` validates the compiled payload binding, backend response, and host target without install preparation or system authorization. Success is exactly one JSON line with schema version, bounded package/trust metadata, target, portable install policy, and payload counts. It omits license text, finish URLs, internal package paths, and native roots:
+
+```json
+{"schemaVersion":1,"package":{"id":"com.example.app","fingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","name":"Example App","publisher":"Example","version":"1.0.0","description":null,"trust":{"kind":"unsigned"},"requiresLicense":false,"publisherRotation":false},"target":{"os":"windows","arch":"x86_64"},"install":{"scope":"user","directory":"Example App","hasEntrypoint":true,"showInstallLog":false,"finishLinks":0},"payload":{"files":1,"bytes":42}}
+```
+
+Query the final shipped Setup path. Windows packaging verifies this contract through the outer `.exe`; probing an extracted inner runner is not equivalent release evidence.
+
+No package path, install root, state root, key, downgrade approval, launch, environment, or arbitrary command is accepted. The runner uses its compiled payload binding and host-native default roots, waits for terminal rollback/cleanup for mutations, and returns `0` on successful inspection/operation, `1` on an inspection/operation failure, or `64` on invalid arguments. Unattended uninstall is idempotent; system scope can still require the OS-native UAC/polkit authorization prompt. Supply each consent only when the caller explicitly authorized the currently authenticated request.
 
 ## Install, update, repair, and removal
 

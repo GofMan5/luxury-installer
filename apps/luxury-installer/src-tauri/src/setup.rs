@@ -22,7 +22,7 @@ use crate::{
         BackendEvent, DefaultsResult, FinishLink, InspectResult, InstallLog, InstallResult,
         InstallResultAction, InstallScope, LaunchResult, MAX_SAFE_INTEGER, OperationKind,
         OperationMessage, PackageTrust, PrepareInstallResult, PreparedAction, PublisherRotation,
-        TargetArch, TargetOs, UninstallResult, strict_value,
+        Target, TargetArch, TargetOs, UninstallResult, strict_value,
     },
 };
 
@@ -188,12 +188,53 @@ pub(crate) struct StartInstallInput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UnattendedCommand {
     Help,
+    InfoJson,
     Install {
         allow_unsigned: bool,
         accept_license: bool,
         allow_publisher_migration: bool,
     },
     Uninstall,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BoundPackageInfo {
+    schema_version: u8,
+    package: BoundPackageInfoPackage,
+    target: Target,
+    install: BoundPackageInfoInstall,
+    payload: BoundPackageInfoPayload,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BoundPackageInfoPackage {
+    id: String,
+    fingerprint: String,
+    name: String,
+    publisher: String,
+    version: String,
+    description: Option<String>,
+    trust: PackageTrust,
+    requires_license: bool,
+    publisher_rotation: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BoundPackageInfoInstall {
+    scope: InstallScope,
+    directory: String,
+    has_entrypoint: bool,
+    show_install_log: bool,
+    finish_links: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct BoundPackageInfoPayload {
+    files: u64,
+    bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -640,6 +681,47 @@ fn load_bound_package(state: &AppState) -> Result<(BoundPackage, DefaultsResult)
     ))
 }
 
+pub(crate) fn bound_package_info(state: &AppState) -> Result<BoundPackageInfo, PublicError> {
+    state.require_mode(AppMode::Setup)?;
+    let (package, defaults) = load_bound_package(state)?;
+    Ok(package_info(package, defaults.target))
+}
+
+fn package_info(package: BoundPackage, target: Target) -> BoundPackageInfo {
+    let BoundPackage {
+        path: _,
+        fingerprint,
+        id,
+        summary,
+    } = package;
+    BoundPackageInfo {
+        schema_version: 1,
+        package: BoundPackageInfoPackage {
+            id,
+            fingerprint,
+            name: summary.name,
+            publisher: summary.publisher,
+            version: summary.version,
+            description: summary.description,
+            requires_license: summary.license.is_some(),
+            trust: summary.trust,
+            publisher_rotation: summary.publisher_rotation.is_some(),
+        },
+        target,
+        install: BoundPackageInfoInstall {
+            scope: summary.scope,
+            directory: summary.install_directory,
+            has_entrypoint: summary.has_entrypoint,
+            show_install_log: summary.install_log.is_some(),
+            finish_links: summary.finish_links.len(),
+        },
+        payload: BoundPackageInfoPayload {
+            files: summary.files,
+            bytes: summary.bytes,
+        },
+    }
+}
+
 fn start_install_sync(
     input: StartInstallInput,
     app: AppHandle,
@@ -870,11 +952,16 @@ pub(crate) fn run_unattended(
     command: UnattendedCommand,
 ) -> Result<(), PublicError> {
     state.require_mode(AppMode::Setup)?;
+    match command {
+        UnattendedCommand::Help => return Ok(()),
+        UnattendedCommand::InfoJson => return bound_package_info(state).map(drop),
+        UnattendedCommand::Install { .. } | UnattendedCommand::Uninstall => {}
+    }
     let context = setup_context(state)?;
     let starting = acquire_idle(state, &context)?;
     let selection = selection(&context)?;
     match command {
-        UnattendedCommand::Help => Ok(()),
+        UnattendedCommand::Help | UnattendedCommand::InfoJson => Ok(()),
         UnattendedCommand::Install {
             allow_unsigned,
             accept_license,
@@ -1830,6 +1917,59 @@ mod tests {
                 "totalBytes": 4
             })
         );
+    }
+
+    #[test]
+    fn bound_package_info_is_one_line_and_omits_authority_and_private_content() {
+        let mut inspected = inspected();
+        inspected.schema_version = 3;
+        inspected.package.description = Some("Desktop application".into());
+        inspected.package.license = Some("private license body".into());
+        inspected.install.has_entrypoint = true;
+        inspected.install.show_install_log = true;
+        inspected.install.finish_links = vec![FinishLink {
+            label: "Support".into(),
+            url: "https://example.com/private".into(),
+        }];
+        inspected.payload.install_log = Some(InstallLog {
+            files: vec!["hello.txt".into()],
+            omitted_files: 0,
+        });
+        let target = inspected.target.clone();
+        let package =
+            BoundPackage::from_backend("private/package.luxpkg".into(), inspected).unwrap();
+        let output = serde_json::to_string(&package_info(package, target)).unwrap();
+
+        assert!(!output.contains('\n'));
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap(),
+            json!({
+                "schemaVersion": 1,
+                "package": {
+                    "id": "dev.luxury.demo",
+                    "fingerprint": "a".repeat(64),
+                    "name": "Luxury Demo",
+                    "publisher": "Luxury Software",
+                    "version": "1.0.0",
+                    "description": "Desktop application",
+                    "trust": {"kind": "unsigned"},
+                    "requiresLicense": true,
+                    "publisherRotation": false
+                },
+                "target": {"os": "windows", "arch": "x86_64"},
+                "install": {
+                    "scope": "user",
+                    "directory": "Luxury Demo",
+                    "hasEntrypoint": true,
+                    "showInstallLog": true,
+                    "finishLinks": 1
+                },
+                "payload": {"files": 1, "bytes": 29}
+            })
+        );
+        assert!(!output.contains("private license body"));
+        assert!(!output.contains("example.com"));
+        assert!(!output.contains("package.luxpkg"));
     }
 
     #[test]

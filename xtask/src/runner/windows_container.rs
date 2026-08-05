@@ -3,7 +3,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write, copy},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     time::Duration,
 };
 
@@ -17,7 +17,8 @@ use super::{
         probe_authenticated_container_runner, probe_authenticated_runner, probe_backend,
         probe_container_runner, probe_runner,
     },
-    require_setup_template_binding, required_hash, required_string, required_u64, sha256_hex,
+    require_setup_template_binding, required, required_hash, required_string, required_u64,
+    sha256_hex,
     staging::{
         WorkDirectory, checked_input, copy_file, ensure_real_directory, publish_file_no_clobber,
         require_missing, require_only_file, require_regular_file, retry_transient_io, sha256_file,
@@ -332,6 +333,7 @@ pub(super) fn verify_signed_setup(setup: &Path) -> Result<(), String> {
     let work = WorkDirectory::new(&verification)?;
     let result = (|| {
         probe_authenticated_container_runner(&setup, &work.path)?;
+        require_info_json(&setup, &work.path, None)?;
         require_argument_rejection(&setup, &work.path)?;
         require_empty_directory(&work.path, "signed Setup probe temp")?;
         if sha256_file(&setup)? != before {
@@ -520,6 +522,7 @@ fn wrap_runner(
         return Err("NSIS compilation changed the verified runner tree".into());
     }
     probe_container_runner(&setup, &setup_probe_temp)?;
+    require_info_json(&setup, &setup_probe_temp, Some(runner_artifact))?;
     require_argument_rejection(&setup, &setup_probe_temp)?;
     require_empty_directory(&setup_probe_temp, "Setup probe temp")?;
     if sha256_hex(sha256_file(&setup)?) != setup_sha256 {
@@ -1097,36 +1100,190 @@ fn require_pe(path: &Path) -> Result<(), String> {
 }
 
 fn require_argument_rejection(setup: &Path, private_temp: &Path) -> Result<(), String> {
-    let mut command = Command::new(setup);
-    command
-        .arg("--unexpected-argument")
-        .env("TEMP", private_temp)
-        .env("TMP", private_temp)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let (mut child, mut containment) =
-        super::containment::ChildContainment::spawn(&mut command, Duration::from_secs(10))
-            .map_err(|error| {
-                format!("could not run Windows Setup argument rejection probe: {error}")
-            })?;
-    containment
-        .wait_for_primary_exit(&child)
-        .map_err(|error| format!("could not wait for Setup argument rejection probe: {error}"))?;
-    let status = child
-        .wait()
-        .map_err(|error| format!("could not reap Setup argument rejection probe: {error}"))?;
-    let timed_out = containment.timed_out();
-    containment.disarm();
-    if timed_out {
-        return Err("Windows Setup argument rejection probe timed out".into());
-    }
-    if status.code() != Some(64) {
+    let output = run_setup_probe(
+        setup,
+        private_temp,
+        &["--unexpected-argument"],
+        "argument rejection",
+        Duration::from_secs(10),
+    )?;
+    if output.status.code() != Some(64) {
         return Err(format!(
-            "Windows Setup accepted an unexpected argument or returned {status}"
+            "Windows Setup accepted an unexpected argument or returned {}",
+            output.status
+        ));
+    }
+    if !output.stdout.is_empty()
+        || output.stderr.is_empty()
+        || output
+            .stderr
+            .windows(b"unexpected-argument".len())
+            .any(|window| window == b"unexpected-argument")
+    {
+        return Err(format!(
+            "Windows Setup argument rejection used invalid output channels; stdout: {}; stderr: {}",
+            bounded_output(&output.stdout),
+            bounded_output(&output.stderr)
         ));
     }
     Ok(())
+}
+
+fn require_info_json(
+    setup: &Path,
+    private_temp: &Path,
+    runner_artifact: Option<&str>,
+) -> Result<(), String> {
+    let output = run_setup_probe(
+        setup,
+        private_temp,
+        &["--info-json"],
+        "info-json",
+        Duration::from_secs(5 * 60),
+    )?;
+    if !output.status.success() || !output.stderr.is_empty() {
+        return Err(format!(
+            "Windows Setup info-json failed with {}; stdout: {}; stderr: {}",
+            output.status,
+            bounded_output(&output.stdout),
+            bounded_output(&output.stderr)
+        ));
+    }
+    let line = output
+        .stdout
+        .strip_suffix(b"\n")
+        .ok_or_else(|| "Windows Setup info-json was not exactly one line".to_owned())?;
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    if line.is_empty() || line.contains(&b'\n') || line.contains(&b'\r') {
+        return Err("Windows Setup info-json was not exactly one line".into());
+    }
+    let value: Value = serde_json::from_slice(line)
+        .map_err(|error| format!("Windows Setup info-json is invalid JSON: {error}"))?;
+    let root = exact_object(
+        &value,
+        "Setup info-json",
+        &["schemaVersion", "package", "target", "install", "payload"],
+    )?;
+    if required_u64(root, "schemaVersion")? != 1 {
+        return Err("Windows Setup info-json has an unsupported schema".into());
+    }
+
+    let package = exact_object(
+        required(root, "package")?,
+        "Setup info-json package",
+        &[
+            "id",
+            "fingerprint",
+            "name",
+            "publisher",
+            "version",
+            "description",
+            "trust",
+            "requiresLicense",
+            "publisherRotation",
+        ],
+    )?;
+    for field in ["id", "name", "publisher", "version"] {
+        if required_string(package, field)?.is_empty() {
+            return Err(format!("Setup info-json `{field}` is empty"));
+        }
+    }
+    let fingerprint = required_hash(package, "fingerprint")?;
+    if runner_artifact.is_some_and(|artifact| !artifact.ends_with(&fingerprint[..12])) {
+        return Err("Setup info-json fingerprint does not match its runner".into());
+    }
+    let description = required(package, "description")?;
+    if !description.is_null() && description.as_str().is_none() {
+        return Err("Setup info-json description must be text or null".into());
+    }
+    let trust_value = required(package, "trust")?;
+    let trust = trust_value
+        .as_object()
+        .ok_or_else(|| "Setup info-json trust must be an object".to_owned())?;
+    match required_string(trust, "kind")? {
+        "unsigned" => {
+            exact_object(trust_value, "Setup info-json unsigned trust", &["kind"])?;
+        }
+        "trustedPublisher" => {
+            exact_object(
+                trust_value,
+                "Setup info-json trusted publisher",
+                &["kind", "keyId"],
+            )?;
+            required_hash(trust, "keyId")?;
+        }
+        _ => return Err("Setup info-json trust kind is invalid".into()),
+    }
+    for field in ["requiresLicense", "publisherRotation"] {
+        if required(package, field)?.as_bool().is_none() {
+            return Err(format!("Setup info-json `{field}` must be boolean"));
+        }
+    }
+
+    let target = exact_object(
+        required(root, "target")?,
+        "Setup info-json target",
+        &["os", "arch"],
+    )?;
+    if required_string(target, "os")? != "windows" || required_string(target, "arch")? != "x86_64" {
+        return Err("Setup info-json target does not match the Windows runner".into());
+    }
+    let install = exact_object(
+        required(root, "install")?,
+        "Setup info-json install",
+        &[
+            "scope",
+            "directory",
+            "hasEntrypoint",
+            "showInstallLog",
+            "finishLinks",
+        ],
+    )?;
+    if !matches!(required_string(install, "scope")?, "user" | "system")
+        || required_string(install, "directory")?.is_empty()
+        || required(install, "hasEntrypoint")?.as_bool().is_none()
+        || required(install, "showInstallLog")?.as_bool().is_none()
+        || required_u64(install, "finishLinks")? > 4
+    {
+        return Err("Setup info-json install metadata is invalid".into());
+    }
+    let payload = exact_object(
+        required(root, "payload")?,
+        "Setup info-json payload",
+        &["files", "bytes"],
+    )?;
+    required_u64(payload, "files")?;
+    required_u64(payload, "bytes")?;
+    Ok(())
+}
+
+fn run_setup_probe(
+    setup: &Path,
+    private_temp: &Path,
+    arguments: &[&str],
+    label: &str,
+    timeout: Duration,
+) -> Result<Output, String> {
+    let mut command = Command::new(setup);
+    command
+        .args(arguments)
+        .env("TEMP", private_temp)
+        .env("TMP", private_temp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (child, mut containment) =
+        super::containment::ChildContainment::spawn(&mut command, timeout)
+            .map_err(|error| format!("could not run Windows Setup {label} probe: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("could not collect Windows Setup {label} probe: {error}"))?;
+    let timed_out = containment.timed_out();
+    containment.disarm();
+    if timed_out {
+        return Err(format!("Windows Setup {label} probe timed out"));
+    }
+    Ok(output)
 }
 
 fn require_empty_directory(directory: &Path, label: &str) -> Result<(), String> {
@@ -1217,6 +1374,13 @@ mod tests {
         let source = std::str::from_utf8(NSIS_SCRIPT).unwrap();
         assert!(source.contains("normal_with_parameters:"));
         assert!(source.contains("Luxury Installer.exe\" $Parameters"));
+        assert!(source.contains("CreateProcessW"));
+        assert!(source.contains("GetStdHandle"));
+        assert!(source.contains("StrCpy $StartupFlags 0"));
+        assert!(source.contains("StrCpy $StartupFlags 256"));
+        assert!(!source.contains("StrCpy $StartupFlags 257"));
+        assert!(!source.contains("ExecWait"));
+        assert!(!source.contains("cmd.exe"));
         assert!(!source.contains("invalid_parameters:"));
     }
 

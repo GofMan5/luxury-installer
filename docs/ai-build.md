@@ -1,4 +1,4 @@
-# AI build guide
+﻿# AI build guide
 
 This is the shortest reliable workflow for coding agents and human contributors. It keeps core Rust policy, platform mutation, the standalone Tauri shell, the React renderer, and native release evidence in separate gates.
 
@@ -107,11 +107,14 @@ Every public subcommand supports non-mutating `--help`/`-h`. The complete agent 
 For deployment automation, invoke the already-built bound Setup instead of extracting its internal package:
 
 ```console
+My-App-Setup.exe --info-json
 My-App-Setup.exe --unattended-install --allow-unsigned
 My-App-Setup.exe --unattended-uninstall
 ```
 
-Linux uses the installed bound `luxury-installer` launcher. On macOS invoke `Luxury Installer.app/Contents/MacOS/Luxury Installer` directly so the caller receives the real exit code. The runner accepts no path, key, downgrade, launch, or command authority. Add `--accept-license` only for a package that offers a license and `--allow-publisher-migration` only for an offered migration. Exit codes are `0` success/already absent, `1` operation failure, and `64` invalid arguments.
+Use `--info-json` before deployment when an agent or MDM needs bound-package inventory. It performs the same bound-package/backend/host validation but no install preparation or system authorization, emits exactly one JSON line, and omits license text, finish URLs, package paths, and native roots. The Windows project/release verifier executes this against the outer Setup, not only the extracted runner, and rejects wrong channels or schema drift.
+
+Linux uses the installed bound `luxury-installer` launcher. On macOS invoke `Luxury Installer.app/Contents/MacOS/Luxury Installer` directly so the caller receives the real exit code. The runner accepts no path, key, downgrade, launch, or command authority. Add `--accept-license` only for a package that offers a license and `--allow-publisher-migration` only for an offered migration. Exit codes are `0` successful inspection/operation or already absent, `1` inspection/operation failure, and `64` invalid arguments.
 
 Create, build, and inspect from the human CLI:
 
