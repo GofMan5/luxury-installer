@@ -581,6 +581,147 @@ pub(super) fn project_installer(project: &Path, output: &Path) -> Result<(), Str
     project_installer_with_work(project, output, None)
 }
 
+pub(super) fn workspace_project_installer(
+    relative_project: &Path,
+    output: &Path,
+) -> Result<(), String> {
+    let project = checked_workspace_project(&workspace_root(), relative_project)?;
+    project_installer(&project, output)?;
+    write_native_output_checksums(output)
+}
+
+fn checked_workspace_project(root: &Path, relative_project: &Path) -> Result<PathBuf, String> {
+    if relative_project.as_os_str().is_empty()
+        || relative_project.is_absolute()
+        || relative_project.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err("native matrix project path must be repository-relative without `..`".into());
+    }
+    let root = fs::canonicalize(root)
+        .map_err(|error| format!("could not resolve workspace root: {error}"))?;
+    let project = fs::canonicalize(root.join(relative_project))
+        .map_err(|error| format!("could not resolve native matrix project: {error}"))?;
+    if !project.starts_with(&root) || !project.is_dir() {
+        return Err("native matrix project escaped the repository or is not a directory".into());
+    }
+    let config = project.join("luxury.toml");
+    let metadata = fs::symlink_metadata(&config)
+        .map_err(|error| format!("native matrix project has no readable luxury.toml: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("native matrix luxury.toml must be a regular non-link file".into());
+    }
+    Ok(project)
+}
+
+fn write_native_output_checksums(output: &Path) -> Result<(), String> {
+    let root = output
+        .parent()
+        .ok_or_else(|| "native matrix output has no parent directory".to_owned())?;
+    let mut files = Vec::new();
+    collect_native_output_files(output, &mut files)?;
+    if files.is_empty() {
+        return Err("native matrix output contained no files".into());
+    }
+    files.sort();
+    let mut entries = Vec::with_capacity(files.len());
+    let mut contents = String::new();
+    for file in files {
+        let relative = portable_checksum_path(root, &file)?;
+        let hash = sha256_file(&file)?;
+        contents.push_str(&sha256_hex(hash));
+        contents.push_str("  ");
+        contents.push_str(&relative);
+        contents.push('\n');
+        entries.push((file, hash));
+    }
+    let manifest = root.join("SHA256SUMS.txt");
+    let mut destination = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&manifest)
+        .map_err(|error| format!("could not create `{}`: {error}", manifest.display()))?;
+    destination
+        .write_all(contents.as_bytes())
+        .map_err(|error| format!("could not write `{}`: {error}", manifest.display()))?;
+    destination
+        .sync_all()
+        .map_err(|error| format!("could not sync `{}`: {error}", manifest.display()))?;
+    drop(destination);
+    if fs::read(&manifest)
+        .map_err(|error| format!("could not reopen `{}`: {error}", manifest.display()))?
+        != contents.as_bytes()
+    {
+        return Err("native matrix checksum manifest changed after publication".into());
+    }
+    for (file, expected) in entries {
+        if sha256_file(&file)? != expected {
+            return Err(format!(
+                "native matrix output changed after hashing: {}",
+                file.display()
+            ));
+        }
+    }
+    println!("wrote native matrix checksums: {}", manifest.display());
+    Ok(())
+}
+
+fn collect_native_output_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("could not inspect native matrix output: {error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("native matrix output contains a link".into());
+    }
+    if metadata.is_file() {
+        files.push(path.to_owned());
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Err("native matrix output contains a special entry".into());
+    }
+    let mut entries = fs::read_dir(path)
+        .map_err(|error| format!("could not read native matrix output: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("could not read native matrix output entry: {error}"))?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        collect_native_output_files(&entry.path(), files)?;
+    }
+    Ok(())
+}
+
+fn portable_checksum_path(root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "native matrix output escaped its root".to_owned())?;
+    let mut output = String::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err("native matrix output path was not portable".into());
+        };
+        let component = component
+            .to_str()
+            .filter(|value| !value.contains('\\') && !value.chars().any(char::is_control))
+            .ok_or_else(|| {
+                "native matrix output path component was not portable text".to_owned()
+            })?;
+        if !output.is_empty() {
+            output.push('/');
+        }
+        output.push_str(component);
+    }
+    if output.is_empty() {
+        return Err("native matrix output path was empty".into());
+    }
+    Ok(output)
+}
+
 pub(super) fn managed_project_installer(
     project: &Path,
     output: &Path,
@@ -2562,6 +2703,55 @@ fn bounded_output(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_matrix_project_path_stays_inside_the_repository() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("projects").join("windows");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("luxury.toml"), b"format_version = 1\n").unwrap();
+
+        assert_eq!(
+            checked_workspace_project(root.path(), Path::new("projects/windows")).unwrap(),
+            project.canonicalize().unwrap()
+        );
+        assert!(checked_workspace_project(root.path(), Path::new("../outside")).is_err());
+        assert!(checked_workspace_project(root.path(), &project).is_err());
+        assert!(checked_workspace_project(root.path(), Path::new("missing")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_matrix_project_rejects_a_link_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("luxury.toml"), b"format_version = 1\n").unwrap();
+        symlink(outside.path(), root.path().join("escaped")).unwrap();
+        assert!(checked_workspace_project(root.path(), Path::new("escaped")).is_err());
+    }
+
+    #[test]
+    fn native_matrix_checksums_are_sorted_relative_and_no_clobber() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("installers");
+        fs::create_dir(&output).unwrap();
+        fs::write(output.join("z.rpm"), b"rpm").unwrap();
+        fs::write(output.join("a.deb"), b"deb").unwrap();
+
+        write_native_output_checksums(&output).unwrap();
+        let manifest = fs::read_to_string(temp.path().join("SHA256SUMS.txt")).unwrap();
+        assert_eq!(
+            manifest,
+            format!(
+                "{}  installers/a.deb\n{}  installers/z.rpm\n",
+                sha256_hex(sha256_file(&output.join("a.deb")).unwrap()),
+                sha256_hex(sha256_file(&output.join("z.rpm")).unwrap())
+            )
+        );
+        assert!(write_native_output_checksums(&output).is_err());
+    }
 
     fn sample_evidence() -> RunnerEvidence {
         RunnerEvidence {

@@ -61,6 +61,19 @@ On Linux, the output argument is a new directory containing `.deb` and `.rpm`; o
 
 The project contains `luxury.toml` and its configured payload directory. `init` never overwrites different existing files. Studio can reopen a bounded Rust-owned recent-project entry by index, edit unsigned format-1 settings, import regular files or one directory without overwrite, replace the complete payload through same-project staging with one directory's contents, select an entrypoint through a native dialog, build the native output, and reveal that retained output through a pathless Rust action. Imported links, reparse points, special entries, path aliases, empty imports, and payload/project overlap fail closed. Ordinary partial publication or replacement failures roll back; a rollback failure reports `rollback_failed` and keeps the staging backup. Replacement also refreshes executable intent and clears an entrypoint missing from the new tree with exact-case comparison.
 
+### Native build matrix for agents
+
+Use three checked-in target projects instead of attempting a false cross-build:
+
+```console
+gh workflow run native-project.yml --ref <branch> \
+  -f windows_project=installer/windows \
+  -f linux_project=installer/linux \
+  -f macos_project=installer/macos
+```
+
+Each input is a repository-relative directory containing a regular `luxury.toml`; absolute paths, `..`, link escape, missing projects, and target/host mismatch fail. The workflow does not mutate target or entrypoint. Download `native-project-development-Windows-X64`, `native-project-development-Linux-X64`, and `native-project-development-macOS-ARM64`, then verify every file against the included sorted `SHA256SUMS.txt`. These 14-day Actions artifacts are unsigned development outputs, not release or signing evidence. See `examples/matrix` for the expected layout.
+
 Minimal configuration shape:
 
 ```toml

@@ -233,6 +233,7 @@ The exact combined set is currently Linux/Windows x86_64 plus macOS ARM64. `veri
 - Windows release order is fixed: externally sign the inner Tauri launcher/backend with one leaf certificate, run `cargo windows-release-setup -- <signed-runner-dir> <nsis.zip>`, externally sign the emitted outer NSIS with that certificate, then run `cargo verify-windows-release -- <signed-setup.exe>`. Rust never receives signing credentials.
 - Routine pull-request/main CI runs format, quick, desktop, and focused Windows `luxury-windows-trust + luxury-platform + luxury-system-roots + luxury-process` jobs separately.
 - Manual CI runs full root tests, standalone Tauri tests, inspected unsigned Linux `.deb`/RPM generation, and host-native runner smoke on Linux/Windows x86_64 plus macOS ARM64, then verifies the exact schema-v2 set.
+- Manual **Native project build** is a distinct user workflow: three checked-in target projects are canonicalized under checkout by a narrow Rust xtask wrapper, built on matching hosts in parallel, and uploaded with no-clobber Rust-generated SHA-256 manifests. It is development delivery, not release evidence.
 
 One gate has one purpose. Do not repeat the same broad check without new code or evidence.
 

@@ -102,6 +102,23 @@ Native output is explicit:
 
 The normal Studio build needs no Rust, Node, or Tauri rebuild: released Studio bundles carry a verified host template and Rust packager. The Linux packager writes and independently inspects `.deb` and RPM containers in Rust, so users do not need `dpkg`, `rpm`, Cargo, or pnpm. Its current combined input limit is 256 MiB because the pinned RPM writer buffers payloads; the build fails clearly before exhausting memory. When the form has edits, the primary action first uses the existing Rust update flow to save and revalidate them; native build starts only after that succeeds. The Rust shell suggests `Product-1.0-Setup.exe`, the Linux output folder `Product-1.0-linux-x86_64`, or `Product-1.0.dmg` instead of exposing the technical package ID, while the native dialog keeps final output authority. The build surface then shows monotonic elapsed time, including hours, so a long native toolchain run does not look frozen. A visible **Cancel** button stops the active native build without closing Studio and returns to the validated project. Studio runs the packager in a bounded Windows Job Object or Unix process group, so manual cancel, timeout, window close, and primary-process exit terminate the complete descendant build tree before a result is reported. Studio owns and removes the exact temporary build folder after success, cancellation, timeout, or failure, so an ordinary cancelled build does not leave a hidden assembly tree beside the selected output. Building all platforms still uses native Windows/Linux/macOS runners because Apple signing and native containers cannot be truthfully produced by one Windows process.
 
+### Build all three desktop targets
+
+The repository includes a manual **Native project build** GitHub Actions workflow. Give it three repository-relative project directories—one Windows x64, one Linux x64, and one macOS ARM64—and it runs the same `project-installer` use case on matching native runners in parallel. Each downloaded Actions artifact contains only the host-native output plus a sorted Rust-generated `SHA256SUMS.txt`.
+
+Use separate target projects because target, architecture, payload binaries, and entrypoint are authenticated package data; the workflow never rewrites a manifest to fake portability. [`examples/matrix`](examples/matrix) is a minimal three-project layout. In the GitHub UI, choose **Actions → Native project build → Run workflow**, select the branch containing your projects, and enter their relative directories.
+
+For agents or scripts:
+
+```console
+gh workflow run native-project.yml --ref <branch> \
+  -f windows_project=installer/windows \
+  -f linux_project=installer/linux \
+  -f macos_project=installer/macos
+```
+
+Inputs are canonicalized by Rust and must remain inside the checked-out repository with a regular `luxury.toml`. These are explicitly unsigned development artifacts retained for 14 days—not a GitHub Release. Production publishing still requires the platform signing, notarization, final-byte, and Linux advisory gates below.
+
 The low-level package/lifecycle CLI remains available for signing, CI, and engine testing. Unsigned package installation always needs explicit consent:
 
 ```console

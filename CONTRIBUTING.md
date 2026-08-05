@@ -81,6 +81,8 @@ Then run one gate with a clear purpose:
 
 `cargo gui-check` runs renderer contracts, strict TypeScript, the Vite production build, and both locked Tauri feature checks; it does not install dependencies. `cargo dist` builds host Rust plus the checked desktop frontend only. `cargo studio-assemble` publishes payload-free authoring Studio; `cargo runner-smoke` verifies packaged recovery/cancellation/install/uninstall, receipt-owned launch, and the Tauri entrypoint, cleans QA state, and publishes only ignored deterministic schema-v2 evidence; `cargo assemble` publishes a verified unsigned-v1 bound Setup runner. Native Linux may run `cargo linux-packages -- <package.luxpkg>` for inspected unsigned `.deb`/RPM containers. Native macOS may run `cargo macos-dmg -- <signed.app>` and, after external signing/notarization, `cargo verify-macos-dmg -- <signed.dmg>`. Evidence is not attestation, and build commands do not own signing credentials.
 
+Changes to the user-facing native matrix keep `.github/workflows/native-project.yml`, `examples/matrix`, README, AI guide, `llms.txt`, and the CLI skill synchronized. Matrix inputs stay repository-relative and Rust-confined; shell code does not duplicate path policy or silently rewrite target-specific manifests.
+
 Do not rerun the same broad check without new code or new evidence. A Windows pass does not prove Linux or macOS runtime behavior; report unverified targets explicitly.
 
 ## Submit

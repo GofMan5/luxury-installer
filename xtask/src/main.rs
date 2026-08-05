@@ -56,6 +56,12 @@ fn run() -> Result<(), String> {
             runner::project_installer(Path::new(project), Path::new(output))?;
         }
         [command, separator, project, output]
+            if command == OsStr::new("__workspace-project-installer")
+                && separator == OsStr::new("--") =>
+        {
+            runner::workspace_project_installer(Path::new(project), Path::new(output))?;
+        }
+        [command, separator, project, output]
             if command == OsStr::new("project-installer") && separator == OsStr::new("--") =>
         {
             runner::project_installer(Path::new(project), Path::new(output))?;

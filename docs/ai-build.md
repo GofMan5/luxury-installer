@@ -259,7 +259,9 @@ cargo project-installer -- <absolute-project-directory> <absolute-native-output>
 
 The compiler package is an internal verified handoff and is removed with the work directory. Released Studio uses its bundled payload-free Setup template and Rust packager, so a user build does not run Cargo, pnpm, TypeScript, or Tauri compilation. Windows also carries the SHA-256-pinned NSIS archive. Linux creates deterministic-layout Debian `ar`/tar and RPM/CPIO containers with narrow Rust libraries, then independently parses their metadata, ownership, modes, scripts, dependencies, paths, and hashes; `dpkg`, `rpm`, and `cpio` are release cross-checks, not user runtime dependencies. The pinned RPM writer buffers its payload, so packaged Studio rejects combined Linux inputs above 256 MiB before allocation pressure; raise that ceiling only with a streaming RPM writer. Studio contains the packager and every child tool in one bounded native process tree and treats cleanup failure as build failure. Template materialization patches exactly one reviewed 64-byte binding slot, then repeats package, runner, container, argument-rejection, and final-byte checks.
 
-Native multi-build means running this command on matching Windows/Linux/macOS runners. Do not claim Apple signing from Windows or publish the blocked Linux desktop graph. Low-level package and runner commands below remain release/security gates, not the Studio result.
+Native multi-build means running this command on matching Windows/Linux/macOS runners. The manual `.github/workflows/native-project.yml` accepts three repository-relative target-project directories and invokes the same use case in parallel on Windows x64, Linux x64, and macOS ARM64. Rust canonicalizes every path under checkout, requires a regular non-link `luxury.toml`, preserves each authenticated target/entrypoint instead of rewriting it, and writes a sorted output-relative `SHA256SUMS.txt`. Use `examples/matrix` as the minimal layout.
+
+The workflow uploads clearly named unsigned development artifacts for 14 days. It does not create a Release, sign, notarize, or turn the blocked Linux graph into a publishable artifact. Do not claim Apple signing from Windows or publish the blocked Linux desktop graph. Low-level package and runner commands below remain release/security gates, not the Studio result.
 
 ## Assemble a host-native runner
 
@@ -389,6 +391,8 @@ Manual `workflow_dispatch`:
 - payload-free Studio assembly and `--verify-studio` on each native host;
 - inspected unsigned `.deb`/RPM development packaging on Linux, plus native runner smoke on Linux/Windows x86_64 and macOS ARM64;
 - exact schema-v2 evidence-set verification.
+
+That existing CI dispatch is the repository lifecycle/release gate. **Native project build** is the separate user-facing build matrix for checked-in target projects; neither substitutes for production release signing.
 
 Before a public release, still require native container signing, signer provenance, installer install/uninstall behavior, platform privilege review, recovery/cancellation on final bytes, and downloaded artifact verification. Current configuration is not release readiness.
 
