@@ -46,7 +46,7 @@ Each Setup is bound to one reviewed payload. It shows the application descriptio
 - a newer downloaded version becomes an update;
 - the same version with the exact file set becomes repair;
 - downgrade is never silently approved;
-- cancellation and failure restore the previous installation;
+- cancellation and failure restore the previous installation; if Setup cannot confirm the cancel request, it explains that inline and keeps **Cancel** available for an idempotent retry while the operation continues;
 - unknown files and modified obsolete files are preserved;
 - successful progress waits for an explicit **Next** before showing launch, folder, and finish-link actions; **Show in folder** works for user and system installs without giving React a native path;
 - package authors decide whether the bounded installation-details panel is available during and after the operation.

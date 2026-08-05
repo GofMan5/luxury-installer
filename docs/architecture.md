@@ -36,6 +36,8 @@ Windows system authorization transfers file authority, not a path. The Tauri she
 
 Closing Setup is part of the transaction contract. Every Setup action acquires one startup gate and then rechecks close-state, so close cannot pass an operation that has not yet published `active`. Rust waits for `starting -> active`, requests cooperative cancellation for the active user or system install/uninstall, waits for its correlated terminal rollback/cleanup signal, and only then closes the backend and window. Repeated native close requests remain prevented while shutdown is active; a separate `close_ready` gate permits only the final Rust-initiated close after cleanup. One bounded budget starts before the bootstrap-state mutex and also bounds the user-operation cancel request; timeout leaves the window/process alive for a later retry instead of abandoning a mutation.
 
+Interactive Setup cancellation remains a running-state request until Rust emits the correlated terminal event. A Tauri cancel transport failure clears only the pending-cancel UI flag, preserves the active install/uninstall state, renders the bounded public error inline, and permits another request; it never fabricates cancellation or rollback completion.
+
 ## Workspace and dependency rule
 
 The core workspace is rooted at [`Cargo.toml`](../Cargo.toml):

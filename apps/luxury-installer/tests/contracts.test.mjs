@@ -192,6 +192,29 @@ test('opt-in install details remain expandable while installation is running', a
   assert.match(progress, /finished \? 'Детали установки' : 'Что устанавливается'/)
 })
 
+test('Setup cancellation transport errors stay inline and retryable', async () => {
+  const [app, controller, progress] = await Promise.all([
+    readFile(new URL('../src/renderer/src/SetupApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/use-installer.ts', import.meta.url), 'utf8'),
+    readFile(
+      new URL('../src/renderer/src/features/installer/ProgressView.tsx', import.meta.url),
+      'utf8',
+    ),
+  ])
+  assert.equal([...app.matchAll(/cancellationError=\{view\.cancellationError\}/g)].length, 2)
+  assert.match(
+    controller,
+    /catch \(error\) \{[\s\S]*?cancelPending\.current = false[\s\S]*?cancellationRequested: false,[\s\S]*?cancellationError: errorMessage\(error\)/,
+  )
+  assert.match(
+    controller,
+    /cancellationRequested: true, cancellationError: null/,
+  )
+  assert.match(progress, /props\.cancellationError \?[\s\S]*?role="alert"/)
+  assert.match(progress, /rollingBack \? 'Отменяем…' : 'Отменить'/)
+  assert.doesNotMatch(progress, /cancellationError[^\n]*cancellationDisabled/)
+})
+
 test('publisher rotation is bound to the verified signer', () => {
   const signer = 'a'.repeat(64)
   const next = 'b'.repeat(64)

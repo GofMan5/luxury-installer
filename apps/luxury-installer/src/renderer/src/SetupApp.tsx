@@ -100,6 +100,7 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
             completedBytes={view.completedBytes}
             totalBytes={view.totalBytes}
             cancellationRequested={view.cancellationRequested}
+            cancellationError={view.cancellationError}
             installLog={summary.installLog}
             destination={destination}
             onCancel={() => void installer.cancelOperation()}
@@ -112,6 +113,7 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
             processedFiles={view.processedFiles}
             totalFiles={view.totalFiles}
             cancellationRequested={view.cancellationRequested}
+            cancellationError={view.cancellationError}
             onCancel={() => void installer.cancelOperation()}
           />
         ) : view.kind === 'installFinished' && summary ? (

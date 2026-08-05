@@ -106,7 +106,7 @@ No font download is required at runtime.
 
 - Show percentage, file/byte counters, and four user-facing stages.
 - Do not expose `manifest`, `objects`, `recovery`, `receipt`, `commit`, or `rollback` in visible copy.
-- Disable cancellation after cancellation begins or while the terminal state is being saved.
+- Disable cancellation after cancellation begins or while the terminal state is being saved. While cooperative cancellation is pending, label the action **Отменяем…**. If the Tauri cancel request fails, keep the operation active, show the bounded public error inline with `role="alert"`, and restore **Отменить** for retry; never render a false cancelled/rollback state.
 - Uninstall progress shows file counters only; do not invent byte progress. Its rail/heading say `Удаление`, not installation.
 - Successful install/update/repair stays on the completed progress surface and enables one primary `Далее`; it does not jump directly to the finish screen.
 - When the authenticated package opts into `show_install_log`, keep one native square `<details>` disclosure available throughout installation and on the completed step. Before completion it shows the authenticated manifest plan plus factual progress counters; after completion it labels the same counters as the result. Include destination, up to 128 relative manifest paths, and the omitted count. Keep it collapsed by default and never render raw backend/stderr text.

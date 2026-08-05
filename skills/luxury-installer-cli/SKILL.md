@@ -31,6 +31,7 @@ Use the repository's current binary as authority. Never guess a command or retai
 - Supply consent flags only when the caller explicitly authorized them. Never infer unsigned, license, downgrade, or publisher-migration consent.
 - Treat `install.show_install_log` as presentation policy only: Setup shows the bounded authenticated manifest projection during and after installation, never raw backend output or privileged paths.
 - Treat stdout from `luxury stdio` as protocol-only. Drain stdout and stderr independently and keep request IDs unique while active.
+- Treat a cancel transport error as an active operation, not a cancelled result. Keep reading the original request, show the bounded error, and retry only the pathless cancel intent; terminal cancellation requires the original correlated result/error after rollback.
 - Do not retry collisions, state conflicts, publisher failures, downgrade denial, or reinstall mismatch without changing the proven cause.
 - Native multi-build requires matching Windows/Linux/macOS runners. Never claim that Windows produced a notarized macOS artifact or publish the blocked Linux desktop graph.
 - Studio/native packager supervision must use `luxury-process`; cancellation and timeout are incomplete until the complete descendant tree is terminated and reaped.

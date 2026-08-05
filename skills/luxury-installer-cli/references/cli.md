@@ -289,7 +289,7 @@ Cancel an active request with a new request ID:
 {"protocolVersion":3,"id":"cancel-1","method":"cancel","params":{"requestId":"install-1"}}
 ```
 
-The result contains `accepted`. Cancellation is cooperative; wait for the original request's terminal result/error and rollback completion. Launch is no longer cancellable after successful spawn.
+The result contains `accepted`. Cancellation is cooperative; wait for the original request's terminal result/error and rollback completion. A transport error from the cancel request does not terminate the original operation: keep its event stream active and retry cancellation without inventing rollback or completion. Setup follows the same rule and keeps a failed pathless cancel request inline and retryable. Launch is no longer cancellable after successful spawn.
 
 Handle stable error codes by cause. Examples include `invalid_request`, `invalid_params`, `busy`, `cancelled`, `permission_denied`, `insufficient_space`, `collision`, `state_conflict`, `recovery_required`, `downgrade_denied`, `reinstall_mismatch`, `publisher_mismatch`, `publisher_migration_required`, `publisher_rotation_denied`, `license_not_accepted`, `unsigned_not_allowed`, and integrity/signature failures. Do not parse human messages for control flow.
 

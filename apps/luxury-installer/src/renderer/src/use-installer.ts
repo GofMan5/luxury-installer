@@ -20,6 +20,7 @@ type RunningInstall = {
   completedBytes: number
   totalBytes: number
   cancellationRequested: boolean
+  cancellationError: string | null
   action: InstallResultAction | null
 }
 
@@ -30,6 +31,7 @@ type RunningUninstall = {
   processedFiles: number
   totalFiles: number
   cancellationRequested: boolean
+  cancellationError: string | null
 }
 
 export type InstallerView =
@@ -257,11 +259,15 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
   const sendCancellation = useCallback(async () => {
     try {
       await bridge.cancelOperation()
-    } catch {
+    } catch (error) {
       cancelPending.current = false
       setView((current) =>
         current.kind === 'running'
-          ? { ...current, cancellationRequested: false }
+          ? {
+              ...current,
+              cancellationRequested: false,
+              cancellationError: errorMessage(error),
+            }
           : current,
       )
     }
@@ -286,6 +292,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
       completedBytes: 0,
       totalBytes: review.package.bytes,
       cancellationRequested: false,
+      cancellationError: null,
       action: null,
     })
     operationId.current = null
@@ -347,6 +354,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
       processedFiles: 0,
       totalFiles: 0,
       cancellationRequested: false,
+      cancellationError: null,
     })
     operationId.current = null
     operationPending.current = true
@@ -374,7 +382,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
     cancelPending.current = true
     setView((current) =>
       current.kind === 'running'
-        ? { ...current, cancellationRequested: true }
+        ? { ...current, cancellationRequested: true, cancellationError: null }
         : current,
     )
     if (!operationId.current) return

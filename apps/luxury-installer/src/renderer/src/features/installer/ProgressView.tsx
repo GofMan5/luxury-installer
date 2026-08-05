@@ -20,6 +20,7 @@ type ProgressViewProps =
       completedBytes: number
       totalBytes: number
       cancellationRequested: boolean
+      cancellationError?: string | null
       installLog?: InstallLog | null
       destination?: InstallerDestination | null
       onCancel?(): void
@@ -32,6 +33,7 @@ type ProgressViewProps =
       processedFiles: number
       totalFiles: number
       cancellationRequested: boolean
+      cancellationError: string | null
       onCancel(): void
     }
 
@@ -164,6 +166,12 @@ export function ProgressView(props: ProgressViewProps) {
         />
       ) : null}
 
+      {props.cancellationError ? (
+        <div className="error-message" role="alert">
+          <strong>Не удалось подтвердить отмену.</strong> {props.cancellationError}
+        </div>
+      ) : null}
+
       <footer className="screen__actions screen__actions--end">
         {finished ? (
           <button className="primary-button" type="button" onClick={onContinue}>
@@ -177,8 +185,8 @@ export function ProgressView(props: ProgressViewProps) {
             disabled={cancellationDisabled}
             onClick={props.onCancel}
           >
-            <X size={16} />
-            Отменить
+            {rollingBack ? <SquareDashed className="spin" size={16} /> : <X size={16} />}
+            {rollingBack ? 'Отменяем…' : 'Отменить'}
           </button>
         )}
       </footer>
