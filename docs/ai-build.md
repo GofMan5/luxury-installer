@@ -215,6 +215,7 @@ Rules:
 - `luxury-system-roots` is the one narrow source for Windows Known Folders and fixed Linux/macOS system roots. `luxury-platform` uses it for privileged mutation; the Tauri shell uses only its install root after a verified completed operation for pathless reveal.
 - `luxury-process` is the shared narrow OS adapter for suspended Job Object / process-group containment. The pathless Studio Cancel button, window close, timeout, setup failure, and primary exit share one Rust `idle -> active -> cancelled` lifecycle and must terminate/reap the complete packager descendant tree before returning; renderer cancellation carries no project/output/process identifier.
 - React owns presentation state and accessibility only.
+- Studio's elapsed build clock uses monotonic `performance.now()`, resets outside `building`, clears its interval on every transition/unmount, and is hidden from the polite live region; it must not invent backend phases or progress percentages.
 - The exact Tauri ACL grants no generic renderer shell/fs/dialog/opener/process access.
 - The standalone `src-tauri` workspace must remain excluded from the root workspace.
 - Do not add Tauri/web dependencies to product crates or duplicate Rust rules in TypeScript.

@@ -15,7 +15,7 @@ import {
   studioProjectSchema,
 } from '../src/renderer/src/bridge-contracts.ts'
 import { projectFrom } from '../src/renderer/src/use-studio.ts'
-import { shortenPath } from '../src/renderer/src/features/installer/format.ts'
+import { formatElapsedTime, shortenPath } from '../src/renderer/src/features/installer/format.ts'
 
 const packageSummary = {
   name: 'Luxury Demo',
@@ -352,6 +352,21 @@ test('Studio native build has one pathless race-free cancellation action', async
   assert.match(capability, /allow-cancel-project-build/)
   assert.match(build, /"cancel_project_build"/)
   assert.doesNotMatch(bridge, /cancel_project_build[^\n]*\{[^\n]*(path|project|output)/i)
+})
+
+test('Studio build elapsed time is monotonic, bounded, and silent to live regions', async () => {
+  assert.equal(formatElapsedTime(-1), '0:00')
+  assert.equal(formatElapsedTime(65.9), '1:05')
+  assert.equal(formatElapsedTime(3661), '1:01:01')
+  assert.equal(formatElapsedTime(Number.POSITIVE_INFINITY), '0:00')
+  const [view, styles] = await Promise.all([
+    readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8'),
+  ])
+  assert.match(view, /const started = performance\.now\(\)/)
+  assert.match(view, /return \(\) => window\.clearInterval\(timer\)/)
+  assert.match(view, /className="studio-build-progress__elapsed"[\s\S]*?aria-hidden="true"/)
+  assert.match(styles, /\.studio-build-progress__elapsed\s*\{[\s\S]*?font-variant-numeric: tabular-nums;/)
 })
 
 test('recent projects stay bounded display data and reopen by index only', () => {

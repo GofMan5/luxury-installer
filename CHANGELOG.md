@@ -22,6 +22,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Read-only `--info-json` on the bound Setup for one-line AI/MDM inventory without a window, install preparation, native paths, or system authorization.
 - Pathless **Show in folder** on the completed Setup screen for both user and system installations; system paths come only from shared fixed Rust roots.
 - A visible Studio **Cancel** action for native builds; cancellation returns to the validated project after Rust reaps the complete process tree and cleans temporary build files.
+- A monotonic elapsed-time clock on the Studio build surface, including hour-long builds, without announcing every second to assistive technology.
 
 ### Changed
 

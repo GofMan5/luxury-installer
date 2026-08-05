@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { BrandMark } from './components/BrandMark'
 import { WindowChrome } from './components/WindowChrome'
-import { formatBytes, formatFileCount } from './features/installer/format'
+import { formatBytes, formatElapsedTime, formatFileCount } from './features/installer/format'
 import type {
   LuxuryBridge,
   RecentProject,
@@ -310,6 +310,7 @@ function ProjectView({
   onDismissError(): void
 }) {
   const building = state.kind === 'building'
+  const buildElapsed = useBuildElapsed(building)
   const saving = state.kind === 'saving'
   const importing = state.kind === 'importing'
   const choosingEntrypoint = state.kind === 'choosingEntrypoint'
@@ -410,6 +411,13 @@ function ProjectView({
                 ? 'Останавливаем native-сборку и очищаем временные файлы…'
                 : 'Rust проверяет проект и собирает готовый установщик…'}
             </span>
+            <time
+              className="studio-build-progress__elapsed"
+              dateTime={`PT${buildElapsed}S`}
+              aria-hidden="true"
+            >
+              Прошло {formatElapsedTime(buildElapsed)}
+            </time>
             {state.cancellationError ? <small role="alert">{state.cancellationError}</small> : null}
           </div>
         </div>
@@ -569,6 +577,25 @@ function ProjectView({
       ) : <ReadOnlyProject project={project} />}
     </form>
   )
+}
+
+function useBuildElapsed(active: boolean): number {
+  const [seconds, setSeconds] = useState(0)
+
+  useEffect(() => {
+    if (!active) {
+      setSeconds(0)
+      return
+    }
+    const started = performance.now()
+    setSeconds(0)
+    const timer = window.setInterval(() => {
+      setSeconds(Math.max(0, Math.floor((performance.now() - started) / 1000)))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [active])
+
+  return seconds
 }
 
 function ReadOnlyProject({ project }: { project: StudioProject }) {

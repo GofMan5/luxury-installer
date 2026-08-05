@@ -21,6 +21,15 @@ export function formatFileCount(files: number): string {
   return `${files.toLocaleString('ru-RU')} ${noun}`
 }
 
+export function formatElapsedTime(seconds: number): string {
+  const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const remainder = total % 60
+  const clock = `${minutes.toString().padStart(hours ? 2 : 1, '0')}:${remainder.toString().padStart(2, '0')}`
+  return hours ? `${hours}:${clock}` : clock
+}
+
 export function shortenPath(path: string): string {
   if (path.length <= 58) return path
   const separator = path.includes('\\') ? '\\' : '/'
