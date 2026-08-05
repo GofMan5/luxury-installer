@@ -12,6 +12,7 @@ Luxury Installer combines hexagonal Rust boundaries with small vertical slices a
 │ Rust Tauri shell                                                  │
 │   ├─ native dialogs + window lifecycle                            │
 │   ├─ bound project/package/path authority                         │
+│   ├─ luxury-system-roots ── completed system reveal               │
 │   ├─ strict public error mapping                                  │
 │   └─ bounded backend client                                       │
 └───────────────────────────────┬────────────────────────────────────┘
@@ -20,7 +21,7 @@ Luxury Installer combines hexagonal Rust boundaries with small vertical slices a
 ┌───────────────────────────────▼────────────────────────────────────┐
 │ luxury stdio / human CLI composition root                         │
 │   ├─ luxury-bundle ── luxury-compiler                             │
-│   └─ luxury-engine ── ports ── luxury-platform                    │
+│   └─ luxury-engine ── ports ── luxury-platform ── system-roots    │
 │              └──────────── luxury-spec ───────────────┘            │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -43,8 +44,10 @@ The core workspace is rooted at [`Cargo.toml`](../Cargo.toml):
 luxury-bundle   ─→ luxury-spec
 luxury-engine   ─→ luxury-spec
 luxury-compiler ─→ luxury-bundle + luxury-spec
-luxury-platform ─→ luxury-bundle + luxury-engine + luxury-spec
+luxury-system-roots ─→ fixed host OS roots only
+luxury-platform ─→ luxury-bundle + luxury-engine + luxury-spec + luxury-system-roots
 xtask + standalone Tauri shell ─→ luxury-process
+standalone Tauri shell ─→ luxury-system-roots
 luxury (CLI / stdio) ─→ compiler + bundle + platform + engine + spec
 ```
 
@@ -52,6 +55,7 @@ luxury (CLI / stdio) ─→ compiler + bundle + platform + engine + spec
 - `luxury-bundle` owns deterministic package layout and the archive trust boundary.
 - `luxury-engine` owns commands, events, outcomes, use-case order, and ports.
 - `luxury-platform` owns filesystem/OS adapters, transactional state, recovery, and native launch.
+- `luxury-system-roots` owns only fixed system install/state roots: Known Folders on Windows and constants on Linux/macOS. It has two real consumers—`luxury-platform` and the standalone Tauri shell—so reveal and privileged mutation cannot drift to different roots.
 - `luxury-compiler` owns safe project scanning, validation, and `.luxpkg` assembly; its `authoring` vertical slice owns atomic settings updates, bounded additive import, staged whole-payload replacement with rollback, and payload-path resolution instead of growing the crate root. Bundle output is written and synced through a same-directory `NamedTempFile`, rejects an existing link/reparse/non-file target, and uses the dependency's platform-native atomic replace instead of a check-then-rename backup namespace.
 - `luxury-process` owns only bounded descendant-process containment: suspended Windows Job Object attachment and Unix process groups. It contains no package, UI, or build policy and is shared by `xtask` and the standalone Tauri shell.
 - `luxury` is the human CLI and machine-facing `luxury stdio` composition root.
@@ -97,7 +101,7 @@ Studio dialogs run in Rust. The renderer requests pathless create/open/import/re
 
 Project summaries return an executable-file count instead of every path, keeping one JSONL frame bounded at the maximum manifest size. When Studio omits `updateProject.executable`, the compiler preserves explicit executable intent, adds a changed Unix entrypoint, and removes the previous marker only if that old file is gone; an AI client may still provide the full array to replace it deliberately.
 
-Setup is not a package browser. The shell binds one package path, fingerprint, package ID, state root, selected install base, latest Rust preparation, and authenticated finish links. Renderer calls for destination, install, uninstall, cancel, reveal, launch, and finish-link opening do not carry package/root/entrypoint/URL authority; a finish link is selected only by bounded index. A chooser or drag-and-drop replacement would violate the product boundary.
+Setup is not a package browser. The shell binds one package path, fingerprint, package ID, state root, selected install base, latest Rust preparation, and authenticated finish links. Renderer calls for destination, install, uninstall, cancel, reveal, launch, and finish-link opening do not carry package/root/entrypoint/URL authority; a finish link is selected only by bounded index. After a verified terminal install/update/repair, user reveal uses the Rust-retained selected path and system reveal derives the same fixed install root used by the privileged adapter through `luxury-system-roots`; both remain disabled before completion and while another Setup action is active. A chooser or drag-and-drop replacement would violate the product boundary.
 
 The final bound launcher also exposes one windowless deployment surface: read-only `--info-json`, `--unattended-install` with explicit unsigned/license/publisher-migration consents, idempotent `--unattended-uninstall`, and `--help`. Argument parsing and the existing Rust backend/helper composition run before Tauri is constructed, so Linux needs neither `DISPLAY` nor GTK initialization. Info mode calls only bound-package loading: it verifies the compiled fingerprint, backend output, and host target without constructing `SetupContext`, preparing an installation, or requesting system authorization, then emits one bounded JSON line without license text, finish URLs, package paths, or native roots. It may run inside an already elevated MDM context but never requests elevation; mutating unattended commands remain unelevated and use the authenticated helper for system scope. Every mode uses the compiled payload binding and host-native defaults; argv cannot supply paths, keys, downgrade approval, launch intent, environment, or commands. Windows NSIS starts the inner Rust runner directly without a command shell, forwards raw arguments without interpreting authority, preserves inherited stdout/stderr for automation, waits for cleanup, and returns the exact child exit code. Project assembly and final signed-container verification execute `--info-json` through that outer NSIS boundary and reject channel/schema/fingerprint drift.
 
@@ -227,14 +231,14 @@ The exact combined set is currently Linux/Windows x86_64 plus macOS ARM64. `veri
 - `cargo macos-dmg -- <signed.app>` and `cargo verify-macos-dmg -- <signed.dmg>` are native-macOS-only container gates; they require already signed/notarized input and never own credentials.
 - `cargo verify-windows-signers -- <launcher.exe> <helper.exe>` requires two embedded Authenticode chains and one exact leaf certificate; it does not sign either file.
 - Windows release order is fixed: externally sign the inner Tauri launcher/backend with one leaf certificate, run `cargo windows-release-setup -- <signed-runner-dir> <nsis.zip>`, externally sign the emitted outer NSIS with that certificate, then run `cargo verify-windows-release -- <signed-setup.exe>`. Rust never receives signing credentials.
-- Routine pull-request/main CI runs format, quick, desktop, and focused Windows `luxury-windows-trust + luxury-platform + luxury-process` jobs separately.
+- Routine pull-request/main CI runs format, quick, desktop, and focused Windows `luxury-windows-trust + luxury-platform + luxury-system-roots + luxury-process` jobs separately.
 - Manual CI runs full root tests, standalone Tauri tests, inspected unsigned Linux `.deb`/RPM generation, and host-native runner smoke on Linux/Windows x86_64 plus macOS ARM64, then verifies the exact schema-v2 set.
 
 One gate has one purpose. Do not repeat the same broad check without new code or evidence.
 
 ## Explicit ceilings
 
-User and source-level system scope are implemented on all three hosts; renderer/Tauri invoke and generic JSONL never receive system roots, package file authority or entrypoint paths. Windows uses the Authenticode-bound one-shot helper. Linux uses an installed root-owned helper, exact polkit policy, kernel credential-bound Unix datagrams and one passed package FD. macOS uses an SMAppService LaunchDaemon, audit-token designated requirements, socket-activated seqpacket and a package FD tied to the strictly validated signed app resource. Signed-final Windows proof, installed/distribution-signed Linux proof, and signed/notarized native macOS lifecycle proof remain unverified.
+User and source-level system scope are implemented on all three hosts; renderer/Tauri invoke and generic JSONL never receive system roots, package file authority or entrypoint paths. The Rust shell may consume `luxury-system-roots` only for a pathless completed-install reveal. Windows uses the Authenticode-bound one-shot helper. Linux uses an installed root-owned helper, exact polkit policy, kernel credential-bound Unix datagrams and one passed package FD. macOS uses an SMAppService LaunchDaemon, audit-token designated requirements, socket-activated seqpacket and a package FD tied to the strictly validated signed app resource. Signed-final Windows proof, installed/distribution-signed Linux proof, and signed/notarized native macOS lifecycle proof remain unverified.
 
 Windows pathname/reparse parent binding and general create/delete directory durability remain incomplete. Unix still has pre-open/source-leaf ABA. Mapped writers and hostile same-user namespace races remain. Native macOS/APFS power-cut behavior is not proven. Process containment is not a sandbox. Signed native containers, platform signing/notarization, and published native recovery/signature matrices remain release blockers.
 

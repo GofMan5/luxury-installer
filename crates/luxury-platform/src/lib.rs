@@ -5,8 +5,6 @@
 use std::{env, io, path::PathBuf};
 
 mod local;
-#[allow(unsafe_code)]
-mod system_roots;
 
 #[cfg(target_os = "linux")]
 pub use local::LinuxSystemLaunchAdapter;
@@ -18,7 +16,7 @@ pub use local::{LocalInstallAdapter, LocalLaunchAdapter, LocalUninstallAdapter};
 
 /// Return host-native fixed system install and private state roots.
 pub fn default_system_roots() -> io::Result<(PathBuf, PathBuf)> {
-    system_roots::get()
+    luxury_system_roots::get()
 }
 
 /// Return host-native user install and external state roots.
@@ -83,7 +81,7 @@ fn absolute_env_path(name: &str, path: PathBuf) -> io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_system_roots, default_user_roots};
+    use super::default_user_roots;
 
     #[test]
     fn user_roots_are_absolute_separate_and_versioned() {
@@ -97,33 +95,5 @@ mod tests {
         assert!(state.ends_with("State-v1"));
         #[cfg(all(unix, not(target_os = "macos")))]
         assert!(state.ends_with("luxury-installer-v1"));
-    }
-
-    #[test]
-    fn system_roots_are_absolute_separate_and_fixed() {
-        let (install, state) = default_system_roots().unwrap();
-        assert!(install.is_absolute());
-        assert!(state.is_absolute());
-        assert!(!install.starts_with(&state));
-        assert!(!state.starts_with(&install));
-
-        #[cfg(windows)]
-        {
-            assert!(install.ends_with(r"Luxury Installer\Apps"));
-            assert!(state.ends_with(r"Luxury Installer\State"));
-        }
-        #[cfg(target_os = "linux")]
-        {
-            assert_eq!(install, std::path::Path::new("/opt/luxury-installer/apps"));
-            assert_eq!(state, std::path::Path::new("/var/lib/luxury-installer"));
-        }
-        #[cfg(target_os = "macos")]
-        {
-            assert_eq!(install, std::path::Path::new("/Applications"));
-            assert_eq!(
-                state,
-                std::path::Path::new("/Library/Application Support/Luxury Installer/State")
-            );
-        }
     }
 }

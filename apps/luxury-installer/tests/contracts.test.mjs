@@ -447,6 +447,24 @@ test('completion screen separates optional links from primary completion actions
   assert.match(styles, /\.result-links\s*\{[\s\S]*?grid-template-columns:/)
 })
 
+test('system completion reveal is pathless and derives fixed roots in Rust', async () => {
+  const [app, bridge, shell, roots] = await Promise.all([
+    readFile(new URL('../src/renderer/src/SetupApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/tauri-bridge.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/setup.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../../../crates/luxury-system-roots/src/lib.rs', import.meta.url), 'utf8'),
+  ])
+  assert.match(app, /canReveal\s*\n/)
+  assert.doesNotMatch(app, /canReveal=\{summary\.scope === 'user'\}/)
+  assert.match(bridge, /revealInstalled: \(\) => invokeCommand\('reveal_installed'\)/)
+  assert.match(shell, /let _starting = acquire_idle\(state\.inner\(\), &context\)\?;[\s\S]*?installed_reveal_path\(&context\)\?/)
+  assert.match(shell, /let \(install_base, _\) = luxury_system_roots::get\(\)/)
+  assert.match(shell, /if !context\.install_completed\.load\(Ordering::Acquire\)/)
+  assert.match(roots, /PathBuf::from\("\/opt\/luxury-installer\/apps"\)/)
+  assert.match(roots, /PathBuf::from\("\/Applications"\)/)
+  assert.doesNotMatch(app, /systemInstallBase|installPath/)
+})
+
 test('renderer keeps flat square Codex geometry', async () => {
   const [styles, emptyView] = await Promise.all([
     readFile(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8'),

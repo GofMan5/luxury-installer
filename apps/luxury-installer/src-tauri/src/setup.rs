@@ -576,14 +576,42 @@ pub(crate) async fn launch_installed(state: State<'_, AppState>) -> Result<(), P
 pub(crate) fn reveal_installed(state: State<'_, AppState>) -> Result<(), PublicError> {
     state.require_mode(AppMode::Setup)?;
     let context = setup_context(state.inner())?;
-    let path = context
-        .last_install_path
-        .lock()
-        .map_err(|_| PublicError::new("internal_error", "Путь приложения недоступен."))?
-        .clone()
-        .ok_or_else(|| PublicError::new("nothing_to_reveal", "Папка приложения недоступна."))?;
+    let _starting = acquire_idle(state.inner(), &context)?;
+    let path = installed_reveal_path(&context)?;
     tauri_plugin_opener::open_path(path, None::<&str>)
         .map_err(|_| PublicError::new("reveal_failed", "Не удалось открыть папку приложения."))
+}
+
+fn installed_reveal_path(context: &SetupContext) -> Result<PathBuf, PublicError> {
+    if !context.install_completed.load(Ordering::Acquire) {
+        return Err(PublicError::new(
+            "nothing_to_reveal",
+            "Папка приложения станет доступна после установки.",
+        ));
+    }
+    if context.package.summary.scope == InstallScope::User {
+        return context
+            .last_install_path
+            .lock()
+            .map_err(|_| PublicError::new("internal_error", "Путь приложения недоступен."))?
+            .clone()
+            .ok_or_else(|| PublicError::new("nothing_to_reveal", "Папка приложения недоступна."));
+    }
+
+    let (install_base, _) = luxury_system_roots::get().map_err(|_| {
+        PublicError::new(
+            "nothing_to_reveal",
+            "Системная папка приложения недоступна.",
+        )
+    })?;
+    let path = install_base.join(&context.package.summary.install_directory);
+    if path.parent() != Some(install_base.as_path()) {
+        return Err(PublicError::new(
+            "nothing_to_reveal",
+            "Системная папка приложения недоступна.",
+        ));
+    }
+    Ok(path)
 }
 
 #[tauri::command]
@@ -2337,6 +2365,7 @@ mod tests {
                 publisher_migration_required: false,
             },
         };
+        let untrusted_selection_base = selection.install_base.clone();
         let context = SetupContext {
             package,
             selection: Arc::new(Mutex::new(Some(selection))),
@@ -2349,5 +2378,18 @@ mod tests {
         let review = review(&context).unwrap();
         assert!(review.destination.is_none());
         assert!(review.can_uninstall);
+        assert_eq!(
+            installed_reveal_path(&context).unwrap_err().code,
+            "nothing_to_reveal"
+        );
+
+        context.install_completed.store(true, Ordering::Release);
+        let path = installed_reveal_path(&context).unwrap();
+        let (system_base, _) = luxury_system_roots::get().unwrap();
+        assert_eq!(
+            path,
+            system_base.join(&context.package.summary.install_directory)
+        );
+        assert!(!path.starts_with(untrusted_selection_base));
     }
 }

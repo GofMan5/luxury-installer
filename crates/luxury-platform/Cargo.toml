@@ -10,6 +10,7 @@ publish.workspace = true
 luxury-bundle.workspace = true
 luxury-engine.workspace = true
 luxury-spec.workspace = true
+luxury-system-roots.workspace = true
 hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

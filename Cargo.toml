@@ -5,6 +5,7 @@ members = [
     "crates/luxury-bundle",
     "crates/luxury-engine",
     "crates/luxury-platform",
+    "crates/luxury-system-roots",
     "crates/luxury-compiler",
     "crates/luxury-macos-trust",
     "crates/luxury-process",
@@ -17,6 +18,7 @@ default-members = [
     "crates/luxury-bundle",
     "crates/luxury-engine",
     "crates/luxury-platform",
+    "crates/luxury-system-roots",
     "crates/luxury-compiler",
     "apps/luxury-cli",
 ]
@@ -34,6 +36,7 @@ luxury-spec = { path = "crates/luxury-spec" }
 luxury-bundle = { path = "crates/luxury-bundle" }
 luxury-engine = { path = "crates/luxury-engine" }
 luxury-platform = { path = "crates/luxury-platform" }
+luxury-system-roots = { path = "crates/luxury-system-roots" }
 luxury-compiler = { path = "crates/luxury-compiler" }
 luxury-macos-trust = { path = "crates/luxury-macos-trust" }
 luxury-process = { path = "crates/luxury-process" }

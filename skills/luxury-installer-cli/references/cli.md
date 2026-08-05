@@ -87,6 +87,8 @@ executable = []
 
 Optional authoring fields include a 1-1024-character plain-text `package.description`, `package.license`, `install.allow_downgrade`, `install.entrypoint`, `install.show_install_log`, and up to four `[[install.finish_links]]` HTTPS links. Windows entrypoints must end in `.exe`; Linux/macOS entrypoints must also appear in `payload.executable`. When enabled, Setup keeps the collapsed bounded manifest projection available during installation as a plan with factual counters and after completion as the result; it never exposes raw backend logs.
 
+After interactive Setup reaches terminal success and the user presses **Next**, **Show in folder** is available for both scopes. The renderer sends no path: user scope uses the retained validated selection, while system scope derives its install base from the shared Rust `luxury-system-roots` boundary. This is a GUI action, not a new CLI/JSONL method.
+
 ## Bound Setup unattended mode
 
 Automate the final user-facing artifact without exposing its internal `.luxpkg`:

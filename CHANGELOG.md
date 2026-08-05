@@ -20,6 +20,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - A bounded recent-project list that revalidates projects before reopening them.
 - Strict windowless install/uninstall on the final bound Setup, with explicit consent flags, idempotent removal, and stable exit codes for deployment tools.
 - Read-only `--info-json` on the bound Setup for one-line AI/MDM inventory without a window, install preparation, native paths, or system authorization.
+- Pathless **Show in folder** on the completed Setup screen for both user and system installations; system paths come only from shared fixed Rust roots.
 
 ### Changed
 

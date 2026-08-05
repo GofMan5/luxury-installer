@@ -134,7 +134,7 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
             name={summary.name}
             action={view.action}
             canLaunch={summary.hasEntrypoint}
-            canReveal={summary.scope === 'user'}
+            canReveal
             launchPending={installer.launchPending}
             actionPending={resultPending}
             actionError={resultError}

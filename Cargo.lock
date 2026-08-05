@@ -453,6 +453,7 @@ dependencies = [
  "luxury-bundle",
  "luxury-engine",
  "luxury-spec",
+ "luxury-system-roots",
  "rustix",
  "semver",
  "serde",
@@ -481,6 +482,13 @@ dependencies = [
  "thiserror",
  "toml",
  "unicode-normalization",
+]
+
+[[package]]
+name = "luxury-system-roots"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
 ]
 
 [[package]]

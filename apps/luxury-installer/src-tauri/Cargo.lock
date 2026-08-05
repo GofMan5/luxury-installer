@@ -1983,6 +1983,7 @@ dependencies = [
  "luxury-macos-trust",
  "luxury-process",
  "luxury-spec",
+ "luxury-system-roots",
  "luxury-windows-trust",
  "rustix",
  "serde",
@@ -2023,6 +2024,13 @@ dependencies = [
  "thiserror 2.0.19",
  "toml 1.1.4+spec-1.1.0",
  "unicode-normalization",
+]
+
+[[package]]
+name = "luxury-system-roots"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -53,7 +53,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Renderer owns presentation/accessibility only
 - Rust Tauri shell owns native dialogs, bound project/package/path authority, backend lifecycle, transport validation, event correlation, and public error mapping
 - luxury stdio owns machine-facing composition
-- luxury-engine owns use cases/ports; luxury-platform owns mutations; luxury-bundle owns archive trust; luxury-compiler owns project/package assembly; luxury-process owns bounded descendant-process containment; luxury-spec owns portable values
+- luxury-engine owns use cases/ports; luxury-platform owns mutations; luxury-system-roots owns fixed Windows/Linux/macOS system roots shared by platform and Tauri; luxury-bundle owns archive trust; luxury-compiler owns project/package assembly; luxury-process owns bounded descendant-process containment; luxury-spec owns portable values
 - Compiler output uses same-directory `tempfile` atomic replacement and rejects link/reparse/non-file targets; do not reintroduce deterministic backup names or `exists -> rename` publication.
 - No business policy in renderer or shell composition
 - No common/utils dump, one-implementation factory, or speculative feature flag
@@ -70,7 +70,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Studio renderer sends typed settings plus pathless create/open/import/replace/entrypoint/reveal/reload/build intent; Rust shell owns native dialog results and active project/output/source paths
 - Recent projects are a bounded six-item Rust-owned display list persisted atomically under app config; renderer reopens by validated index and Rust repeats validateProject before activation
 - Studio authoring loop is create/open -> edit validated settings -> native additive import or staged whole-payload replacement -> native entrypoint selection -> save/reload -> build/reveal output. Renderer never receives source paths or generic filesystem authority
-- Setup renderer receives display review + hasEntrypoint and sends pathless destination/install/uninstall/cancel/reveal/launch intent
+- Setup renderer receives display review + hasEntrypoint and sends pathless destination/install/uninstall/cancel/reveal/launch intent; completed user reveal uses the retained selection and completed system reveal uses luxury-system-roots, never renderer/helper path input
 - Exact capability grants event listen/unlisten, window dragging, and named app commands only
 - Renderer has no generic shell/fs/dialog/opener/process permission
 - Production CSP is local-only; loopback Vite/WebSocket origins exist only in devCsp
@@ -78,7 +78,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Normal desktop bootstrap must reject an elevated process before creating a webview; only windowless --verify-* may run elevated
 - Windows --verify-* must complete the strict one-shot packaged-backend named-pipe probe with mutual kernel PID binding; this is transport proof, not UAC/token/Authenticode/system authority
 - Before authenticated Windows runas, pin the exact helper without write/delete sharing, match its embedded signer to the process-image-bound running Tauri signer, and retain the guard through ShellExecuteExW
-- Routine CI keeps format, quick, GUI, and focused Windows luxury-windows-trust + luxury-platform + luxury-process jobs separate
+- Routine CI keeps format, quick, GUI, and focused Windows luxury-windows-trust + luxury-platform + luxury-system-roots + luxury-process jobs separate
 - Routine CI jobs are explicitly time-boxed; the manual native matrix is capped per host. Do not combine them into one long serial gate.
 
 ## CLI surface

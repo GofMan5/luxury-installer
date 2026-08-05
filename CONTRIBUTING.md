@@ -21,12 +21,13 @@ spec → use case → adapter → CLI/GUI
 
 - Keep `luxury-spec` free of filesystem, archive, GUI, and OS APIs.
 - Keep orchestration and port contracts in `luxury-engine`.
-- Keep real filesystem and native mutations in `luxury-platform`.
+- Keep real filesystem and native mutations in `luxury-platform`; keep fixed system install/state roots in the narrow shared `luxury-system-roots` boundary.
 - Keep archive verification in `luxury-bundle` and project scanning/assembly in `luxury-compiler`.
 - Keep `luxury` as the human CLI and machine-facing stdio composition root.
 - Keep the Rust Tauri shell focused on lifecycle, exact commands/events, native dialogs, schema validation, and backend transport.
 - Keep the React renderer presentation-only; do not duplicate Rust package or mutation policy in TypeScript.
 - Keep Setup package path/fingerprint, state root, native-dialog install base, and latest preparation authoritative in the Rust shell; renderer commands return consent/intent, not roots or package identity.
+- Keep completed-install reveal pathless. The Rust shell derives system paths from `luxury-system-roots`; renderer and helper frames never provide a reveal path.
 - Keep maintenance uninstall pathless in renderer and aggregate-only across JSONL/Tauri events; receipt-owned preserved paths remain inside Rust diagnostics.
 - Keep launch pathless in renderer: expose only `hasEntrypoint`, let the Rust shell supply bound ID/roots, and keep entrypoint path/verification/direct spawn in the backend. No args, package-supplied environment, shell, or automatic run.
 - Keep `src-tauri` as a standalone Cargo workspace with its own lockfile and line-table-only dev/test profiles; it does not inherit root profiles and must not enter the root `cargo quick` graph.
@@ -71,7 +72,7 @@ Then run one gate with a clear purpose:
 | Renderer, styles, Tauri commands/events, or protocol types | `cargo gui-check`; add `cargo tauri-test` for Rust-shell logic |
 | Tauri Rust transport/security boundary | `cargo tauri-test` + `cargo tauri-clippy` |
 | Native child-process containment | `cargo test --locked -p luxury-process` |
-| Windows signer/filesystem boundary | `cargo test --locked -p luxury-windows-trust -p luxury-platform` on Windows |
+| Windows signer/filesystem/root boundary | `cargo test --locked -p luxury-windows-trust -p luxury-platform -p luxury-system-roots -p luxury-process` on Windows |
 | Native runner/lifecycle evidence | `cargo test --locked -p xtask`, `cargo runner-smoke`, then `cargo run --locked -p xtask -- verify-evidence-set <downloaded-dir>` for a three-OS set |
 | CI parity | `cargo ci` |
 | Release candidate | `cargo full-test --locked` + `cargo runner-smoke` per OS, followed by native install/recovery/uninstall/signature gates |

@@ -47,7 +47,7 @@ Each Setup is bound to one reviewed payload. It shows the application descriptio
 - downgrade is never silently approved;
 - cancellation and failure restore the previous installation;
 - unknown files and modified obsolete files are preserved;
-- successful progress waits for an explicit **Next** before showing launch, folder, and finish-link actions;
+- successful progress waits for an explicit **Next** before showing launch, folder, and finish-link actions; **Show in folder** works for user and system installs without giving React a native path;
 - package authors decide whether the bounded installation-details panel is available during and after the operation.
 
 There is no built-in update-download service yet. Updating means launching a newer Setup for the same package ID and roots; the transactional upgrade itself is implemented.

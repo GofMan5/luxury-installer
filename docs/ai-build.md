@@ -44,6 +44,7 @@ sudo apt-get install --no-install-recommends libwebkit2gtk-4.1-dev libayatana-ap
 | Package/archive verification | `cargo test -p luxury-bundle` |
 | Use case/port | `cargo test -p luxury-engine` |
 | Filesystem or OS adapter | focused `cargo test -p luxury-platform <test-name>` on the native host |
+| Fixed system roots or system reveal | `cargo test -p luxury-system-roots` plus `cargo tauri-test <reveal-test>` on the native host |
 | Descendant process containment | `cargo test -p luxury-process` on the native host |
 | Compiler/project scanning | `cargo test -p luxury-compiler` |
 | Human CLI or JSONL backend | focused `cargo test -p luxury <test-name>` |
@@ -193,12 +194,14 @@ React renderer
     │ exact Tauri invoke/events
     ▼
 Rust Tauri shell
+    ├─ luxury-system-roots → pathless system reveal
     │ JSONL v3 over child stdin/stdout
     ▼
 luxury stdio
     │
     ├─ luxury-engine → ports
     ├─ luxury-platform → real mutation
+    ├─ luxury-system-roots → fixed system install/state roots
     ├─ luxury-bundle → archive trust
     ├─ luxury-compiler → project assembly
     ├─ luxury-process → native descendant containment
@@ -209,6 +212,7 @@ Rules:
 
 - Rust owns package policy, transition classification, rollback, receipts, recovery, and OS mutation.
 - The Tauri shell owns native dialogs, bound paths/identity, backend process lifecycle, JSONL validation, public errors, and renderer command/event correlation.
+- `luxury-system-roots` is the one narrow source for Windows Known Folders and fixed Linux/macOS system roots. `luxury-platform` uses it for privileged mutation; the Tauri shell uses only its install root after a verified completed operation for pathless reveal.
 - `luxury-process` is the shared narrow OS adapter for suspended Job Object / process-group containment. Native-build cancellation, timeout, setup failure, and primary exit must terminate and reap the complete packager descendant tree before returning.
 - React owns presentation state and accessibility only.
 - The exact Tauri ACL grants no generic renderer shell/fs/dialog/opener/process access.
@@ -224,6 +228,7 @@ Rules:
 - Keep absolute paths at the Rust shell/backend boundary. Setup renderer intents stay pathless.
 - Studio renderer never submits project/output/source paths. Its native import, whole-payload replacement, and entrypoint commands are pathless; Rust shell owns dialog results and active project state, while `luxury-compiler` validates/copies/rolls back authoring mutations.
 - Setup shell owns package path/fingerprint/ID, state root, install base, latest preparation, and entrypoint authority.
+- Completed-install reveal accepts no renderer path. User scope uses the retained validated selection; system scope joins the authenticated one-component install directory to `luxury-system-roots` only after terminal success and while Setup is idle.
 - Optional `install.show_install_log` stays default-off and exposes only a bounded display projection of authenticated manifest paths. The collapsed panel is available during installation as a plan with factual counters and after completion as the result; it never displays raw backend output. `install.finish_links` accepts at most four HTTPS URLs; renderer sends only an index to the Rust-owned opener command.
 - System-scope initial/retry preparation goes through the authenticated privileged helper and calls Rust `prepare_system_install`; never fabricate a fresh-install state when the protected receipt is unreadable from the desktop process.
 - `prepareInstall` remains read-only and advisory, including native destination write-access and capacity checks. Real install independently reopens, authenticates, recovers, reassesses, and rechecks.
@@ -370,7 +375,7 @@ Routine pull-request/main CI:
 - root and standalone-Tauri formatting;
 - `cargo quick --locked`;
 - isolated renderer + Tauri check;
-- focused Windows `cargo test --locked -p luxury-windows-trust -p luxury-platform -p luxury-process` trust/filesystem/process-tree boundary check.
+- focused Windows `cargo test --locked -p luxury-windows-trust -p luxury-platform -p luxury-system-roots -p luxury-process` trust/filesystem/root/process-tree boundary check.
 
 Every routine job has an explicit 10-60 minute timeout; the manual native matrix remains capped at 60 minutes per host and its evidence merge at 20 minutes. Do not remove these caps or replace the separated jobs with one serial mega-gate.
 
