@@ -23,6 +23,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Changed
 
+- Opt-in installation details can be expanded while files are being applied and remain available on the completed step; the panel still exposes only bounded authenticated relative paths and factual counters.
 - Desktop windows choose a DPI-aware fixed size from the monitor work area and no longer expose resize or maximize controls.
 - The completion screen separates optional links from the clear `Запустить` and `Готово` actions.
 - Downloaded newer packages keep one receipt-bound install/update/repair flow, and Tauri now rejects a terminal action that disagrees with the prepared plan.

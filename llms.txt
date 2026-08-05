@@ -106,6 +106,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - format_version 3: A signs completed manifest/payload; B signs domain-separated package/version/A/B rotation proof
 - schema_version is independent; schema 2 adds exact-file install.entrypoint; schema 3 adds bounded authenticated plain-text package.license
 - Optional package.description is bounded plain text in luxury-spec, not only a Studio validation rule
+- Optional install.show_install_log keeps one collapsed bounded manifest projection available during installation and after completion; running labels it as a plan with factual counters, never raw backend logs
 - Windows entrypoint requires .exe; Linux/macOS requires executable=true
 - No entrypoint args, package environment, auto-run, scripts, or generic actions framework
 - luxury.toml is untrusted and capped at 1 MiB before parsing

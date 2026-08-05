@@ -85,7 +85,7 @@ directory = "payload"
 executable = []
 ```
 
-Optional authoring fields include a 1-1024-character plain-text `package.description`, `package.license`, `install.allow_downgrade`, `install.entrypoint`, `install.show_install_log`, and up to four `[[install.finish_links]]` HTTPS links. Windows entrypoints must end in `.exe`; Linux/macOS entrypoints must also appear in `payload.executable`.
+Optional authoring fields include a 1-1024-character plain-text `package.description`, `package.license`, `install.allow_downgrade`, `install.entrypoint`, `install.show_install_log`, and up to four `[[install.finish_links]]` HTTPS links. Windows entrypoints must end in `.exe`; Linux/macOS entrypoints must also appear in `payload.executable`. When enabled, Setup keeps the collapsed bounded manifest projection available during installation as a plan with factual counters and after completion as the result; it never exposes raw backend logs.
 
 ## Bound Setup unattended mode
 

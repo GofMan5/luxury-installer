@@ -153,12 +153,14 @@ export function ProgressView(props: ProgressViewProps) {
         })}
       </div>
 
-      {finished && installLog ? (
+      {installLog ? (
         <InstallDetails
           log={installLog}
           destination={destination ?? null}
-          installedFiles={completedFiles}
-          installedBytes={completedBytes}
+          processedFiles={completedFiles}
+          processedBytes={completedBytes}
+          totalBytes={totalBytes}
+          finished={finished}
         />
       ) : null}
 
@@ -187,20 +189,29 @@ export function ProgressView(props: ProgressViewProps) {
 function InstallDetails({
   log,
   destination,
-  installedFiles,
-  installedBytes,
+  processedFiles,
+  processedBytes,
+  totalBytes,
+  finished,
 }: {
   log: InstallLog
   destination: InstallerDestination | null
-  installedFiles: number
-  installedBytes: number
+  processedFiles: number
+  processedBytes: number
+  totalBytes: number
+  finished: boolean
 }) {
+  const plannedFiles = log.files.length + log.omittedFiles
   return (
     <details className="install-details">
       <summary>
         <span>
-          <strong>Детали установки</strong>
-          <small>{formatFileCount(installedFiles)} · {formatBytes(installedBytes)}</small>
+          <strong>{finished ? 'Детали установки' : 'Что устанавливается'}</strong>
+          <small>
+            {finished
+              ? `${formatFileCount(processedFiles)} · ${formatBytes(processedBytes)}`
+              : `${formatFileCount(plannedFiles)} · ${formatBytes(totalBytes)}`}
+          </small>
         </span>
       </summary>
       <dl className="install-details__summary">
@@ -209,8 +220,8 @@ function InstallDetails({
           <dd title={destination?.installPath}>{destination?.installPath ?? 'Системная папка приложений'}</dd>
         </div>
         <div>
-          <dt>Результат</dt>
-          <dd>{formatFileCount(installedFiles)}, {formatBytes(installedBytes)}</dd>
+          <dt>{finished ? 'Результат' : 'Обработано'}</dt>
+          <dd>{formatFileCount(processedFiles)}, {formatBytes(processedBytes)}</dd>
         </div>
       </dl>
       <div className="install-details__files" aria-label="Файлы пакета">

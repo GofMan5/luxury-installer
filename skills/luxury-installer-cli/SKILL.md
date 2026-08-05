@@ -29,6 +29,7 @@ Use the repository's current binary as authority. Never guess a command or retai
 - Keep `state-root` outside the removable install tree and reuse the same roots for update, repair, uninstall, and launch.
 - Pass a private signing key only through the documented stdin flag. Never put it in argv, JSONL, environment variables, project files, logs, fixtures, or chat output.
 - Supply consent flags only when the caller explicitly authorized them. Never infer unsigned, license, downgrade, or publisher-migration consent.
+- Treat `install.show_install_log` as presentation policy only: Setup shows the bounded authenticated manifest projection during and after installation, never raw backend output or privileged paths.
 - Treat stdout from `luxury stdio` as protocol-only. Drain stdout and stderr independently and keep request IDs unique while active.
 - Do not retry collisions, state conflicts, publisher failures, downgrade denial, or reinstall mismatch without changing the proven cause.
 - Native multi-build requires matching Windows/Linux/macOS runners. Never claim that Windows produced a notarized macOS artifact or publish the blocked Linux desktop graph.

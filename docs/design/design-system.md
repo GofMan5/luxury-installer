@@ -109,7 +109,7 @@ No font download is required at runtime.
 - Disable cancellation after cancellation begins or while the terminal state is being saved.
 - Uninstall progress shows file counters only; do not invent byte progress. Its rail/heading say `Удаление`, not installation.
 - Successful install/update/repair stays on the completed progress surface and enables one primary `Далее`; it does not jump directly to the finish screen.
-- When the authenticated package opts into `show_install_log`, use one native square `<details>` disclosure for destination, factual counts, up to 128 relative manifest paths, and the omitted count. Keep it collapsed by default and never render raw backend/stderr text.
+- When the authenticated package opts into `show_install_log`, keep one native square `<details>` disclosure available throughout installation and on the completed step. Before completion it shows the authenticated manifest plan plus factual progress counters; after completion it labels the same counters as the result. Include destination, up to 128 relative manifest paths, and the omitted count. Keep it collapsed by default and never render raw backend/stderr text.
 
 ### Setup complete and error
 

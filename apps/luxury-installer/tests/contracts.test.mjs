@@ -170,6 +170,25 @@ test('install details and finish links stay bounded and safe', () => {
   )
 })
 
+test('opt-in install details remain expandable while installation is running', async () => {
+  const [setup, progress] = await Promise.all([
+    readFile(new URL('../src/renderer/src/SetupApp.tsx', import.meta.url), 'utf8'),
+    readFile(
+      new URL('../src/renderer/src/features/installer/ProgressView.tsx', import.meta.url),
+      'utf8',
+    ),
+  ])
+  const runningInstall = setup.match(
+    /view\.kind === 'running' && view\.operation === 'install' && summary \? \(\s*<ProgressView([\s\S]*?)\/>/,
+  )
+  assert.ok(runningInstall)
+  assert.match(runningInstall[1], /installLog=\{summary\.installLog\}/)
+  assert.match(runningInstall[1], /destination=\{destination\}/)
+  assert.match(progress, /\{installLog \? \([\s\S]*?<InstallDetails/)
+  assert.doesNotMatch(progress, /finished && installLog/)
+  assert.match(progress, /finished \? 'Детали установки' : 'Что устанавливается'/)
+})
+
 test('publisher rotation is bound to the verified signer', () => {
   const signer = 'a'.repeat(64)
   const next = 'b'.repeat(64)
