@@ -548,6 +548,7 @@ fn start_launch_reaper(path: &Path) -> Result<mpsc::SyncSender<std::process::Chi
 
 #[cfg(windows)]
 struct LaunchGuards {
+    _parent_guards: Vec<File>,
     _write_guard: File,
     _delete_guard: File,
 }
@@ -565,18 +566,20 @@ struct LaunchGuards {
 fn verify_entrypoint(path: &Path, expected: &FileEntry) -> Result<LaunchGuards, PortError> {
     #[cfg(windows)]
     {
-        let (mut write_guard, delete_guard) = super::windows::open_launch_guards_nofollow(path)
-            .map_err(|source| io_error("opening launch entrypoint", path, source))?;
-        validate_open_regular(path, &write_guard, false)?;
-        validate_open_regular(path, &delete_guard, false)?;
+        let (path, parent_guards) = super::windows::open_real_parent_chain(path)
+            .map_err(|source| io_error("opening launch parent directories", path, source))?;
+        let (mut write_guard, delete_guard) = super::windows::open_launch_guards_nofollow(&path)
+            .map_err(|source| io_error("opening launch entrypoint", &path, source))?;
+        validate_open_regular(&path, &write_guard, false)?;
+        validate_open_regular(&path, &delete_guard, false)?;
         let write_identity = super::windows::file_identity(&write_guard)
-            .map_err(|source| io_error("reading launch entrypoint identity", path, source))?;
+            .map_err(|source| io_error("reading launch entrypoint identity", &path, source))?;
         let delete_identity = super::windows::file_identity(&delete_guard)
-            .map_err(|source| io_error("reading launch entrypoint identity", path, source))?;
+            .map_err(|source| io_error("reading launch entrypoint identity", &path, source))?;
         if write_identity != delete_identity {
             return Err(state_error("launch entrypoint changed while it was opened"));
         }
-        let (size, sha256) = hash_opened_file(path, &mut write_guard, false)?;
+        let (size, sha256) = hash_opened_file(&path, &mut write_guard, false)?;
         if size != expected.size || sha256 != expected.sha256 {
             return Err(PortError::with_kind(
                 PortErrorKind::Integrity,
@@ -584,6 +587,7 @@ fn verify_entrypoint(path: &Path, expected: &FileEntry) -> Result<LaunchGuards, 
             ));
         }
         Ok(LaunchGuards {
+            _parent_guards: parent_guards,
             _write_guard: write_guard,
             _delete_guard: delete_guard,
         })
@@ -918,6 +922,45 @@ mod tests {
                 .is_err()
         );
         assert!(fs::remove_file(&fixture.installed).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_launch_rejects_an_intermediate_reparse_after_validation() {
+        let fixture = LaunchFixture::new();
+        let parent = fixture.installed.parent().unwrap();
+        validate_directory_chain(parent).unwrap();
+        let external = fixture._temp.path().join("external-bin");
+        fs::create_dir(&external).unwrap();
+        fs::copy(&fixture.installed, external.join("app.exe")).unwrap();
+        let original = parent.with_extension("original");
+        fs::rename(parent, &original).unwrap();
+        let status = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(parent)
+            .arg(&external)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "creating directory junction failed");
+
+        let rejection = match verify_entrypoint(&fixture.installed, &fixture.file) {
+            Ok(guards) => {
+                drop(guards);
+                None
+            }
+            Err(error) => Some(error),
+        };
+        fs::remove_dir(parent).unwrap();
+        fs::rename(original, parent).unwrap();
+        let error = rejection.unwrap_or_else(|| panic!("replaced parent reparse point accepted"));
+        assert_eq!(error.kind(), PortErrorKind::Io);
+        assert!(
+            error
+                .to_string()
+                .contains("opening launch parent directories")
+        );
     }
 
     #[cfg(windows)]
