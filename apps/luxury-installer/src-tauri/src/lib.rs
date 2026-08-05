@@ -515,6 +515,7 @@ pub fn run() {
             get_app_mode,
             studio::create_project,
             studio::open_project,
+            studio::get_studio_host,
             studio::get_recent_projects,
             studio::open_recent_project,
             studio::reload_project,

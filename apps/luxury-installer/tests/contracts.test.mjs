@@ -12,6 +12,7 @@ import {
   recentProjectSchema,
   recentProjectsSchema,
   setupEventSchema,
+  studioHostSchema,
   studioProjectSchema,
 } from '../src/renderer/src/bridge-contracts.ts'
 import { projectFrom } from '../src/renderer/src/use-studio.ts'
@@ -374,7 +375,7 @@ test('Studio saves a valid dirty draft before starting the native build', async 
     readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/renderer/src/use-studio.ts', import.meta.url), 'utf8'),
   ])
-  assert.match(view, /disabled=\{busy \|\| !buildable\}/)
+  assert.match(view, /disabled=\{busy \|\| !buildable \|\| !hostCompatible\}/)
   assert.doesNotMatch(view, /disabled=\{busy \|\| !buildable \|\| dirty\}/)
   assert.match(view, /form\?\.reportValidity\(\)/)
   assert.match(view, /onBuild\(dirty \? draft : undefined\)/)
@@ -385,6 +386,33 @@ test('Studio saves a valid dirty draft before starting the native build', async 
     /if \(input\) \{[\s\S]*?await bridge\.updateProject\(input\)[\s\S]*?kind: 'building'[\s\S]*?await bridge\.buildProject\(\)/,
   )
   assert.match(controller, /buildStarted && errorCode\(error\) === 'project_build_cancelled'/)
+})
+
+test('Studio uses the Rust-owned host target before offering a native build', async () => {
+  assert.equal(studioHostSchema.safeParse({ os: 'windows', arch: 'x86_64' }).success, true)
+  assert.equal(
+    studioHostSchema.safeParse({ os: 'windows', arch: 'x86_64', path: 'C:\\host' }).success,
+    false,
+  )
+  const [view, controller, bridge, shell, app, capability, build] = await Promise.all([
+    readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/use-studio.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/tauri-bridge.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/studio.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/capabilities/main.json', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/build.rs', import.meta.url), 'utf8'),
+  ])
+  assert.match(view, /disabled=\{busy \|\| !buildable \|\| !hostCompatible\}/)
+  assert.match(view, /Native project build в GitHub Actions/)
+  assert.doesNotMatch(view, /navigator\.(?:platform|userAgent)/)
+  assert.match(controller, /bridge\s*\.getStudioHost\(\)/)
+  assert.match(bridge, /getStudioHost: \(\) => parsedInvoke\('get_studio_host', studioHostSchema\)/)
+  assert.doesNotMatch(bridge, /get_studio_host[^\n]*\{/)
+  assert.match(shell, /fn get_studio_host[\s\S]*?spawn_blocking[\s\S]*?state\.defaults\(\)\?\.target/)
+  assert.match(app, /studio::get_studio_host/)
+  assert.match(capability, /allow-get-studio-host/)
+  assert.match(build, /"get_studio_host"/)
 })
 
 test('recent projects stay bounded display data and reopen by index only', () => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type {
   LuxuryBridge,
+  NativeTarget,
   RecentProject,
   StudioBuildResult,
   StudioProject,
@@ -27,6 +28,8 @@ export type StudioView =
 
 export interface StudioController {
   view: StudioView
+  hostTarget: NativeTarget | null
+  hostTargetError: boolean
   recentProjects: RecentProject[]
   folderPending: boolean
   createProject(): Promise<void>
@@ -44,6 +47,8 @@ export interface StudioController {
 
 export function useStudio(bridge: LuxuryBridge): StudioController {
   const [view, setView] = useState<StudioView>({ kind: 'empty' })
+  const [hostTarget, setHostTarget] = useState<NativeTarget | null>(null)
+  const [hostTargetError, setHostTargetError] = useState(false)
   const [folderPending, setFolderPending] = useState(false)
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([])
   const busy = useRef(false)
@@ -61,6 +66,23 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
 
   useEffect(() => {
     void refreshRecentProjects()
+  }, [bridge])
+
+  useEffect(() => {
+    let active = true
+    setHostTarget(null)
+    setHostTargetError(false)
+    void bridge
+      .getStudioHost()
+      .then((target) => {
+        if (active) setHostTarget(target)
+      })
+      .catch(() => {
+        if (active) setHostTargetError(true)
+      })
+    return () => {
+      active = false
+    }
   }, [bridge])
 
   async function loadProject(action: 'create' | 'open') {
@@ -260,6 +282,8 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
 
   return {
     view,
+    hostTarget,
+    hostTargetError,
     recentProjects,
     folderPending,
     createProject: () => loadProject('create'),

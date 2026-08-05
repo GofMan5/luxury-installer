@@ -2,6 +2,11 @@ export type AppMode = 'studio' | 'setup'
 export type TargetOs = 'windows' | 'linux' | 'macos'
 export type TargetArch = 'x86_64' | 'aarch64'
 export type InstallScope = 'user' | 'system'
+
+export interface NativeTarget {
+  os: TargetOs
+  arch: TargetArch
+}
 export type SetupAction = 'install' | 'update' | 'repair' | 'recover'
 export type InstallResultAction = Exclude<SetupAction, 'recover'>
 export type PackageTrust =
@@ -184,6 +189,7 @@ export type SetupEvent =
 
 export interface LuxuryBridge {
   getAppMode(): Promise<AppMode>
+  getStudioHost(): Promise<NativeTarget>
   getBootstrap(): Promise<InstallerReview>
   createProject(): Promise<StudioProject | null>
   openProject(): Promise<StudioProject | null>

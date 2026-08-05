@@ -21,6 +21,7 @@ import { WindowChrome } from './components/WindowChrome'
 import { formatBytes, formatElapsedTime, formatFileCount } from './features/installer/format'
 import type {
   LuxuryBridge,
+  NativeTarget,
   RecentProject,
   StudioBuildResult,
   StudioProject,
@@ -34,6 +35,8 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
     <StudioView
       bridge={bridge}
       state={studio.view}
+      hostTarget={studio.hostTarget}
+      hostTargetError={studio.hostTargetError}
       onCreate={() => void studio.createProject()}
       onOpen={() => void studio.openProject()}
       recentProjects={studio.recentProjects}
@@ -56,6 +59,8 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
 interface StudioViewProps {
   bridge: LuxuryBridge
   state: StudioState
+  hostTarget: NativeTarget | null
+  hostTargetError: boolean
   onCreate(): void
   onOpen(): void
   recentProjects: RecentProject[]
@@ -76,6 +81,8 @@ interface StudioViewProps {
 export function StudioView({
   bridge,
   state,
+  hostTarget,
+  hostTargetError,
   onCreate,
   onOpen,
   recentProjects,
@@ -170,6 +177,8 @@ export function StudioView({
           <ProjectView
             project={project}
             state={state}
+            hostTarget={hostTarget}
+            hostTargetError={hostTargetError}
             busy={busy}
             onSave={onSave}
             onImportFiles={onImportFiles}
@@ -285,6 +294,8 @@ function projectUpdateFrom(project: StudioProject): StudioProjectUpdate {
 function ProjectView({
   project,
   state,
+  hostTarget,
+  hostTargetError,
   busy,
   onSave,
   onImportFiles,
@@ -298,6 +309,8 @@ function ProjectView({
 }: {
   project: StudioProject
   state: StudioState
+  hostTarget: NativeTarget | null
+  hostTargetError: boolean
   busy: boolean
   onSave(input: StudioProjectUpdate): void
   onImportFiles(): void
@@ -320,6 +333,13 @@ function ProjectView({
   const baseline = useMemo(() => projectUpdateFrom(project), [project])
   const [draft, setDraft] = useState(baseline)
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline)
+  const hostCompatible =
+    hostTarget?.os === draft.targetOs && hostTarget.arch === draft.targetArch
+  const buildNote = !buildable
+    ? 'studio-signed-build-note'
+    : hostCompatible
+      ? undefined
+      : 'studio-host-build-note'
 
   useEffect(() => setDraft(baseline), [baseline])
 
@@ -372,8 +392,8 @@ function ProjectView({
           <button
             className="primary-button"
             type="button"
-            disabled={busy || !buildable}
-            aria-describedby={buildable ? undefined : 'studio-signed-build-note'}
+            disabled={busy || !buildable || !hostCompatible}
+            aria-describedby={buildNote}
             onClick={(event) => {
               if (!event.currentTarget.form?.reportValidity()) return
               onBuild(dirty ? draft : undefined)
@@ -408,6 +428,17 @@ function ProjectView({
         <p className="studio-build-note" id="studio-signed-build-note">
           <Terminal size={17} aria-hidden="true" />
           Подписанные проекты собираются в командной строке; закрытый ключ передаётся только через stdin.
+        </p>
+      ) : null}
+
+      {buildable && !hostCompatible ? (
+        <p className="studio-build-note" id="studio-host-build-note">
+          <Terminal size={17} aria-hidden="true" />
+          {hostTargetError
+            ? 'Локальная система не определена. Перезапустите Studio перед сборкой.'
+            : hostTarget
+              ? `Проект: ${nativeTargetLabel(draft.targetOs, draft.targetArch)}. Этот Studio: ${nativeTargetLabel(hostTarget.os, hostTarget.arch)}. Откройте проект на подходящем runner или запустите Native project build в GitHub Actions.`
+              : 'Определяем локальную систему…'}
         </p>
       ) : null}
 
@@ -691,8 +722,11 @@ function Fact({ label, value, mono = false }: { label: string; value: string; mo
 }
 
 function targetLabel(project: Pick<StudioProject, 'targetOs' | 'targetArch'>): string {
-  const os = { windows: 'Windows', linux: 'Linux', macos: 'macOS' }[project.targetOs]
-  return `${os} · ${project.targetArch}`
+  return nativeTargetLabel(project.targetOs, project.targetArch)
+}
+
+function nativeTargetLabel(os: NativeTarget['os'], arch: NativeTarget['arch']): string {
+  return `${{ windows: 'Windows', linux: 'Linux', macos: 'macOS' }[os]} · ${arch}`
 }
 
 function nativeBuildLabel(target: StudioProject['targetOs']): string {

@@ -26,6 +26,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - One-click Studio save-and-build: a valid dirty form is saved and revalidated by Rust before the pathless native build starts.
 - Human-readable native output suggestions derived from the validated application name, with bounded cross-platform sanitization and package-ID fallback.
 - A manual **Native project build** workflow that builds repository-owned Windows x64, Linux x64, and macOS ARM64 projects in parallel and uploads Rust-generated `SHA256SUMS.txt` with each unsigned development artifact.
+- Rust-owned Studio host detection that disables impossible local target builds before opening a dialog and points users to the matching runner or Native project build workflow.
 
 ### Changed
 

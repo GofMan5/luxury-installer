@@ -25,8 +25,8 @@ use crate::{
         valid_package_id, valid_text,
     },
     backend::{
-        FinishLink, InstallScope, MAX_SAFE_INTEGER, ProjectResult, ResolvedPayloadPath, TargetArch,
-        TargetOs, guard_executable,
+        FinishLink, InstallScope, MAX_SAFE_INTEGER, ProjectResult, ResolvedPayloadPath, Target,
+        TargetArch, TargetOs, guard_executable,
     },
 };
 
@@ -235,6 +235,15 @@ pub(crate) fn get_recent_projects(
         .lock()
         .map(|projects| projects.clone())
         .map_err(|_| PublicError::new("internal_error", "Недавние проекты недоступны."))
+}
+
+#[tauri::command]
+pub(crate) async fn get_studio_host(state: State<'_, AppState>) -> Result<Target, PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || Ok(state.defaults()?.target))
+        .await
+        .map_err(|_| PublicError::new("internal_error", "Локальная система недоступна."))?
 }
 
 #[tauri::command]

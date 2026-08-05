@@ -261,6 +261,7 @@ export const recentProjectsSchema = z.array(recentProjectSchema).max(6)
 export const operationStartedSchema = z.object({ operationId: requestId }).strict()
 export const eventEnvelopeSchema = z.object({ operationId: requestId }).passthrough()
 export const appModeSchema = z.enum(['studio', 'setup'])
+export const studioHostSchema = z.object({ os: targetOs, arch: targetArch }).strict()
 export const installRequestSchema = z
   .object({
     allowUnsigned: z.boolean(),

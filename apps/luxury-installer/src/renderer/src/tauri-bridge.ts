@@ -15,6 +15,7 @@ import {
   recentProjectsSchema,
   setupEventSchema,
   studioBuildResultSchema,
+  studioHostSchema,
   studioProjectSchema,
   studioProjectUpdateSchema,
 } from './bridge-contracts'
@@ -67,6 +68,7 @@ export function createTauriBridge(): LuxuryBridge {
 
   const bridge: LuxuryBridge = {
     getAppMode: () => parsedInvoke('get_app_mode', appModeSchema),
+    getStudioHost: () => parsedInvoke('get_studio_host', studioHostSchema),
     getBootstrap: () => parsedInvoke('get_bootstrap', installerReviewSchema),
     createProject: () => parsedInvoke('create_project', studioProjectSchema.nullable()),
     openProject: () => parsedInvoke('open_project', studioProjectSchema.nullable()),

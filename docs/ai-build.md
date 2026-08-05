@@ -217,6 +217,7 @@ Rules:
 - React owns presentation state and accessibility only.
 - The Studio primary build action runs native HTML validity first; for a dirty draft it awaits the existing typed `updateProject` Rust validation and only then sends the separate pathless `buildProject` intent. Save failure must not open an output dialog or start a packager.
 - Native output suggestions are Rust-owned and use the validated product name, a 96-byte alphanumeric/hyphen component, and package ID only when the name has no usable letters or digits. Renderer never submits an output name/path, and packager no-clobber validation remains authoritative.
+- Studio obtains its local OS/architecture through the exact pathless `get_studio_host` Tauri command backed by validated Rust defaults. Renderer must not infer it from browser APIs. A mismatched draft target disables local build and points to the matching runner/native-project workflow; `build_project` still repeats the host check.
 - Studio's elapsed build clock uses monotonic `performance.now()`, resets outside `building`, clears its interval on every transition/unmount, and is hidden from the polite live region; it must not invent backend phases or progress percentages.
 - The exact Tauri ACL grants no generic renderer shell/fs/dialog/opener/process access.
 - The standalone `src-tauri` workspace must remain excluded from the root workspace.
