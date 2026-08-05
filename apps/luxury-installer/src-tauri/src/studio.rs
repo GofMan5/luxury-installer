@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
-use tempfile::NamedTempFile;
+use tempfile::{Builder, NamedTempFile, TempDir};
 
 use crate::{
     app::{
@@ -827,18 +827,69 @@ fn run_native_packager(
             "Компонент native-сборки недоступен.",
         )
     })?;
+    let output_parent = output.parent().ok_or_else(|| {
+        PublicError::new(
+            "project_build_failed",
+            "Папка для native-сборки недоступна.",
+        )
+    })?;
+    let work = Builder::new()
+        .prefix(".luxury-studio-build-")
+        .tempdir_in(output_parent)
+        .map_err(|_| {
+            PublicError::new(
+                "project_build_failed",
+                "Не удалось подготовить временную папку native-сборки.",
+            )
+        })?;
     let mut command = Command::new(executable);
     command
-        .arg("project-installer")
+        .arg("__managed-project-installer")
         .arg(project)
         .arg(output)
+        .arg(work.path())
         .current_dir(executable.parent().ok_or_else(|| {
             PublicError::new(
                 "project_build_failed",
                 "Компонент native-сборки расположен неверно.",
             )
         })?);
-    supervise_native_packager(command, cancel, BUILD_TIMEOUT)
+    let result = supervise_native_packager(command, cancel, BUILD_TIMEOUT);
+    finish_managed_native_build(result, work)
+}
+
+fn finish_managed_native_build(
+    result: Result<(), PublicError>,
+    work: TempDir,
+) -> Result<(), PublicError> {
+    let cleanup = cleanup_native_build_work(work);
+    match (result, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (_, Err(error)) => Err(error),
+    }
+}
+
+fn cleanup_native_build_work(work: TempDir) -> Result<(), PublicError> {
+    const ATTEMPTS: usize = 20;
+    for attempt in 0..ATTEMPTS {
+        match fs::remove_dir_all(work.path()) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error)
+                if cfg!(windows)
+                    && error.kind() == std::io::ErrorKind::PermissionDenied
+                    && attempt + 1 < ATTEMPTS =>
+            {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(_) => break,
+        }
+    }
+    Err(PublicError::new(
+        "project_build_failed",
+        "Не удалось очистить временные файлы native-сборки.",
+    ))
 }
 
 fn supervise_native_packager(
@@ -1377,6 +1428,30 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, "project_build_cancelled");
+    }
+
+    #[test]
+    fn managed_native_work_is_removed_after_build_cancellation() {
+        let parent = tempfile::tempdir().unwrap();
+        let work = Builder::new()
+            .prefix(".luxury-studio-build-")
+            .tempdir_in(parent.path())
+            .unwrap();
+        let path = work.path().to_owned();
+        let nested = path.join(".luxury-assemble-child");
+        fs::create_dir(&nested).unwrap();
+        fs::write(nested.join("partial"), b"partial").unwrap();
+
+        let error = finish_managed_native_build(
+            Err(PublicError::new(
+                "project_build_cancelled",
+                "Сборка отменена.",
+            )),
+            work,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "project_build_cancelled");
+        assert!(!path.exists());
     }
 
     #[test]

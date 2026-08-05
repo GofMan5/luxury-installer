@@ -101,14 +101,18 @@ pub(super) fn build_dmg(app: &Path) -> Result<(), String> {
     }
 }
 
-pub(super) fn build_project(project: &Path, destination: &Path) -> Result<(), String> {
+pub(super) fn build_project(
+    project: &Path,
+    destination: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        build_project_native(project, destination)
+        build_project_native(project, destination, managed_work)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (project, destination);
+        let _ = (project, destination, managed_work);
         Err("macOS project builds require a native macOS host".into())
     }
 }
@@ -117,14 +121,15 @@ pub(super) fn build_packaged_project(
     project: &Path,
     destination: &Path,
     resources: &Path,
+    managed_work: Option<&Path>,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        build_packaged_project_native(project, destination, resources)
+        build_packaged_project_native(project, destination, resources, managed_work)
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (project, destination, resources);
+        let _ = (project, destination, resources, managed_work);
         Err("packaged macOS project builds require a native macOS host".into())
     }
 }
@@ -188,7 +193,11 @@ fn build_dmg_native(app: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn build_project_native(project: &Path, destination: &Path) -> Result<(), String> {
+fn build_project_native(
+    project: &Path,
+    destination: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
     validate_project_output(project, destination)?;
     let parent = destination
         .parent()
@@ -197,7 +206,7 @@ fn build_project_native(project: &Path, destination: &Path) -> Result<(), String
     require_missing(destination, "macOS installer output")?;
 
     let host = HostLayout::new("macos", std::env::consts::ARCH)?;
-    let work = WorkDirectory::new(parent)?;
+    let work = WorkDirectory::project(parent, managed_work)?;
     let package = work.path.join("internal-package.luxpkg");
     luxury_compiler::compile_project(project, &package)
         .map_err(|error| format!("could not compile installer project: {error}"))?;
@@ -237,6 +246,7 @@ fn build_packaged_project_native(
     project: &Path,
     destination: &Path,
     resources: &Path,
+    managed_work: Option<&Path>,
 ) -> Result<(), String> {
     let host = HostLayout::new("macos", std::env::consts::ARCH)?;
     validate_project_output(project, destination)?;
@@ -263,7 +273,7 @@ fn build_packaged_project_native(
     )?;
     require_setup_template_binding(&host.launcher(&template))?;
 
-    let work = WorkDirectory::new(parent)?;
+    let work = WorkDirectory::project(parent, managed_work)?;
     let package = work.path.join("internal-package.luxpkg");
     luxury_compiler::compile_project(project, &package)
         .map_err(|error| format!("could not compile installer project: {error}"))?;

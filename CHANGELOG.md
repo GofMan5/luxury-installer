@@ -33,6 +33,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Fixed
 
+- Studio owns the exact native-build work directory and removes it after descendant reaping, including cancellation, timeout, and failure, instead of leaving a hidden partial assembly tree beside the selected output.
 - Studio native-build cancellation, timeout, and primary exit now contain and reap the complete Cargo/NSIS/Tauri descendant tree through a shared Rust Job Object/process-group adapter instead of killing only the packager PID.
 - Independent Tauri `.deb`/RPM verification now derives the exact launcher hash after the pinned bundler's single `UNK -> DEB/RPM` bundle-type marker patch instead of incorrectly requiring the unpatched source hash.
 - RPM cross-checking accepts the observed `rpm2cpio 4.18` empty-stderr exit `1` only when `cpio` completed successfully; exact paths, modes, ownership, and SHA-256 verification still run afterward.

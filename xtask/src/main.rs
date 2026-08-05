@@ -43,6 +43,15 @@ fn run() -> Result<(), String> {
         [command] if command == OsStr::new("studio-assemble") => {
             runner::studio_assemble()?;
         }
+        [command, project, output, work]
+            if command == OsStr::new("__managed-project-installer") =>
+        {
+            runner::managed_project_installer(
+                Path::new(project),
+                Path::new(output),
+                Path::new(work),
+            )?;
+        }
         [command, project, output] if command == OsStr::new("project-installer") => {
             runner::project_installer(Path::new(project), Path::new(output))?;
         }

@@ -309,17 +309,23 @@ test('Studio paths stay display-only and absolute', () => {
   )
 })
 
-test('Studio publishes native installers and keeps the internal package format hidden', async () => {
-  const [view, shell] = await Promise.all([
+test('Studio publishes native installers from one parent-owned work directory', async () => {
+  const [view, shell, staging] = await Promise.all([
     readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../src-tauri/src/studio.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../../../xtask/src/runner/staging.rs', import.meta.url), 'utf8'),
   ])
   assert.equal(view.toLowerCase().includes('luxpkg'), false)
   assert.match(view, /windows: 'Собрать \.exe'/)
   assert.match(view, /linux: 'Собрать \.deb \/ \.rpm'/)
   assert.match(view, /macos: 'Собрать \.dmg'/)
   assert.match(view, /Установщик готов/)
-  assert.match(shell, /\.arg\("project-installer"\)/)
+  assert.match(shell, /\.arg\("__managed-project-installer"\)/)
+  assert.match(shell, /\.prefix\("\.luxury-studio-build-"\)/)
+  assert.match(shell, /\.tempdir_in\(output_parent\)/)
+  assert.match(shell, /finish_managed_native_build\(result, work\)/)
+  assert.match(staging, /canonical_path\.parent\(\) != Some\(canonical_parent\.as_path\(\)\)/)
+  assert.match(staging, /managed Studio assembly directory is not empty/)
   assert.doesNotMatch(shell, /set_file_name\([^)]*luxpkg/i)
 })
 

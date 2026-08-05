@@ -152,7 +152,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 ## Native runner and evidence v2
 
 - End-user build is host-native and no-clobber; .luxpkg is a temporary compiler-to-packager handoff, not the Studio result
-- Studio native builds use luxury-process: suspended kill-on-close Job Object on Windows, dedicated process group on Linux/macOS; cancel, timeout, failure, and primary exit terminate/reap all descendants before reporting
+- Studio native builds use luxury-process: suspended kill-on-close Job Object on Windows, dedicated process group on Linux/macOS; cancel, timeout, failure, and primary exit terminate/reap all descendants before reporting, then Rust removes the exact parent-owned empty-sibling work directory without prefix scanning
 - Released Studio carries a payload-free Setup template with one exact patchable fingerprint slot plus a Rust native packager; Windows also carries SHA-256-pinned NSIS, and Linux creates plus independently parses deb/RPM in Rust; no user Cargo/pnpm/Tauri or system package CLI is required
 - Builds dist backend, checks frontend/Tauri, builds standalone locked Tauri release shell, stages fixed backend/payload resources, rejects trust resource, verifies hashes/identity, runs --verify-runner, publishes under ignored dist/
 - Windows layout: launcher + backend/ + payload/

@@ -79,7 +79,7 @@ What they prove:
 - `cargo full-test`: all root-workspace targets; still excludes the standalone Tauri workspace.
 - `cargo dist`: full root tests, host `luxury` backend, and checked desktop frontend; no runner/signing claim.
 - `cargo studio-assemble`: no-clobber payload-free Studio artifact for this host, including exact `--verify-studio`; Linux/macOS also get the deterministic mode-preserving `.tar.gz` used by CI.
-- `cargo project-installer`: user-facing host-native build. It keeps `.luxpkg` in a temporary work directory and publishes only Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg` without overwrite.
+- `cargo project-installer`: user-facing host-native build. It keeps `.luxpkg` in a temporary work directory and publishes only Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg` without overwrite. Studio supplies one exact empty sibling work directory and removes it only after the contained descendant tree is reaped; xtask rejects links, prefilled directories, wrong names, and paths outside the selected output parent.
 - `cargo verify-windows-signers -- <launcher.exe> <helper.exe>`: fail-closed embedded Authenticode-chain and exact leaf-certificate comparison for already signed Windows files.
 - `cargo windows-release-setup -- <signed-runner-dir> <nsis.zip>`: verify the same-signer inner pair and emit an unsigned outer NSIS for external signing.
 - `cargo verify-windows-release -- <signed-setup.exe>`: verify the final signed outer parent, authenticated inner runner/helper, UAC transport, and argument rejection.

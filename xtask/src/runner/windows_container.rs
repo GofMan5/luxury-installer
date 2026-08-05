@@ -86,7 +86,11 @@ pub(super) fn build(package: &Path, nsis_archive: &Path) -> Result<(), String> {
     }
 }
 
-pub(super) fn build_project(project: &Path, destination: &Path) -> Result<(), String> {
+pub(super) fn build_project(
+    project: &Path,
+    destination: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
     if env::consts::OS != "windows" || env::consts::ARCH != "x86_64" {
         return Err("Windows Setup.exe project builds require native Windows x86_64".into());
     }
@@ -102,7 +106,7 @@ pub(super) fn build_project(project: &Path, destination: &Path) -> Result<(), St
     let pin = parse_pin(NSIS_LOCK)?;
     let nsis_archive = cached_nsis_archive(&target, &pin)?;
 
-    let work = WorkDirectory::new(parent)?;
+    let work = WorkDirectory::project(parent, managed_work)?;
     let package = work.path.join("internal-package.luxpkg");
     luxury_compiler::compile_project(project, &package)
         .map_err(|error| format!("could not compile installer project: {error}"))?;
@@ -134,6 +138,7 @@ pub(super) fn build_packaged_project(
     project: &Path,
     destination: &Path,
     resources: &Path,
+    managed_work: Option<&Path>,
 ) -> Result<(), String> {
     if env::consts::OS != "windows" || env::consts::ARCH != "x86_64" {
         return Err("packaged Windows project builds require native Windows x86_64".into());
@@ -150,7 +155,7 @@ pub(super) fn build_packaged_project(
     let pin = parse_pin(NSIS_LOCK)?;
     verify_pinned_archive(&nsis_archive, &pin)?;
 
-    let work = WorkDirectory::new(parent)?;
+    let work = WorkDirectory::project(parent, managed_work)?;
     let package = work.path.join("internal-package.luxpkg");
     luxury_compiler::compile_project(project, &package)
         .map_err(|error| format!("could not compile installer project: {error}"))?;

@@ -495,6 +495,7 @@ pub(super) fn require_executable(_: &Path, _: &str) -> Result<(), String> {
 
 pub(super) struct WorkDirectory {
     pub path: PathBuf,
+    owned: bool,
 }
 
 pub(super) fn retry_transient_io(
@@ -518,6 +519,13 @@ pub(super) fn retry_transient_io(
 }
 
 impl WorkDirectory {
+    pub(super) fn project(parent: &Path, managed: Option<&Path>) -> Result<Self, String> {
+        match managed {
+            Some(path) => Self::borrowed(path, parent),
+            None => Self::new(parent),
+        }
+    }
+
     pub(super) fn new(parent: &Path) -> Result<Self, String> {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -529,7 +537,7 @@ impl WorkDirectory {
                 std::process::id()
             ));
             match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path }),
+                Ok(()) => return Ok(Self { path, owned: true }),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => {
                     return Err(format!(
@@ -542,7 +550,41 @@ impl WorkDirectory {
         Err("could not allocate a fresh assembly directory".into())
     }
 
+    pub(super) fn borrowed(path: &Path, parent: &Path) -> Result<Self, String> {
+        if !path.is_absolute()
+            || !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".luxury-studio-build-"))
+        {
+            return Err("managed Studio assembly directory is invalid".into());
+        }
+        require_real_directory(path, "managed Studio assembly directory")?;
+        let canonical_parent = fs::canonicalize(parent)
+            .map_err(|error| format!("could not resolve installer output directory: {error}"))?;
+        let canonical_path = fs::canonicalize(path).map_err(|error| {
+            format!("could not resolve managed Studio assembly directory: {error}")
+        })?;
+        if canonical_path.parent() != Some(canonical_parent.as_path()) {
+            return Err("managed Studio assembly directory is outside the output directory".into());
+        }
+        if fs::read_dir(&canonical_path)
+            .map_err(|error| format!("could not read managed Studio assembly directory: {error}"))?
+            .next()
+            .is_some()
+        {
+            return Err("managed Studio assembly directory is not empty".into());
+        }
+        Ok(Self {
+            path: canonical_path,
+            owned: false,
+        })
+    }
+
     pub(super) fn cleanup(mut self) -> Result<(), String> {
+        if !self.owned {
+            return Ok(());
+        }
         let path = std::mem::take(&mut self.path);
         retry_transient_io(|| fs::remove_dir_all(&path)).map_err(|error| {
             format!(
@@ -555,7 +597,7 @@ impl WorkDirectory {
 
 impl Drop for WorkDirectory {
     fn drop(&mut self) {
-        if !self.path.as_os_str().is_empty() {
+        if self.owned && !self.path.as_os_str().is_empty() {
             let _ = retry_transient_io(|| fs::remove_dir_all(&self.path));
         }
     }
@@ -693,5 +735,28 @@ mod tests {
         let path = work.path.clone();
         work.cleanup().unwrap();
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn borrowed_studio_work_is_an_empty_sibling_and_remains_parent_owned() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join(".luxury-studio-build-test");
+        fs::create_dir(&path).unwrap();
+        let work = WorkDirectory::borrowed(&path, parent.path()).unwrap();
+        work.cleanup().unwrap();
+        assert!(path.is_dir());
+
+        fs::write(path.join("unexpected"), b"bytes").unwrap();
+        assert!(WorkDirectory::borrowed(&path, parent.path()).is_err());
+
+        let wrong_name = parent.path().join("ordinary-directory");
+        fs::create_dir(&wrong_name).unwrap();
+        assert!(WorkDirectory::borrowed(&wrong_name, parent.path()).is_err());
+
+        let nested_parent = parent.path().join("nested");
+        let nested = nested_parent.join(".luxury-studio-build-nested");
+        fs::create_dir(&nested_parent).unwrap();
+        fs::create_dir(&nested).unwrap();
+        assert!(WorkDirectory::borrowed(&nested, parent.path()).is_err());
     }
 }

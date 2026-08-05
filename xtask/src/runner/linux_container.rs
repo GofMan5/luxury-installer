@@ -100,7 +100,11 @@ pub(super) fn build(package: &Path) -> Result<(), String> {
     }
 }
 
-pub(super) fn build_project(project: &Path, destination: &Path) -> Result<(), String> {
+pub(super) fn build_project(
+    project: &Path,
+    destination: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
     if env::consts::OS != "linux" || !matches!(env::consts::ARCH, "x86_64" | "aarch64") {
         return Err("Linux project builds require a native Linux x86_64 or aarch64 host".into());
     }
@@ -115,7 +119,7 @@ pub(super) fn build_project(project: &Path, destination: &Path) -> Result<(), St
 
     let root = crate::workspace_root();
     let host = HostLayout::new(env::consts::OS, env::consts::ARCH)?;
-    let work = WorkDirectory::new(parent)?;
+    let work = WorkDirectory::project(parent, managed_work)?;
     let package = work.path.join("internal-package.luxpkg");
     luxury_compiler::compile_project(project, &package)
         .map_err(|error| format!("could not compile installer project: {error}"))?;
@@ -145,19 +149,20 @@ pub(super) fn build_packaged_project(
     project: &Path,
     destination: &Path,
     resources: &Path,
+    managed_work: Option<&Path>,
 ) -> Result<(), String> {
     #[cfg(all(target_os = "linux", feature = "standalone-linux-packager"))]
     {
-        build_packaged_project_native(project, destination, resources)
+        build_packaged_project_native(project, destination, resources, managed_work)
     }
     #[cfg(all(target_os = "linux", not(feature = "standalone-linux-packager")))]
     {
-        let _ = (project, destination, resources);
+        let _ = (project, destination, resources, managed_work);
         Err("packaged Linux Studio is missing its embedded native bundler".into())
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (project, destination, resources);
+        let _ = (project, destination, resources, managed_work);
         Err("packaged Linux project builds require a native Linux host".into())
     }
 }
@@ -167,6 +172,7 @@ fn build_packaged_project_native(
     project: &Path,
     destination: &Path,
     resources: &Path,
+    managed_work: Option<&Path>,
 ) -> Result<(), String> {
     if !matches!(env::consts::ARCH, "x86_64" | "aarch64") {
         return Err("Linux project builds require x86_64 or aarch64".into());
@@ -194,7 +200,7 @@ fn build_packaged_project_native(
         return Err("packaged Linux icon bytes changed".into());
     }
 
-    let work = WorkDirectory::new(parent)?;
+    let work = WorkDirectory::project(parent, managed_work)?;
     let package = work.path.join("internal-package.luxpkg");
     luxury_compiler::compile_project(project, &package)
         .map_err(|error| format!("could not compile installer project: {error}"))?;

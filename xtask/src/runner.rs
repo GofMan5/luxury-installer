@@ -578,21 +578,41 @@ pub(super) fn studio_assemble() -> Result<(), String> {
 }
 
 pub(super) fn project_installer(project: &Path, output: &Path) -> Result<(), String> {
+    project_installer_with_work(project, output, None)
+}
+
+pub(super) fn managed_project_installer(
+    project: &Path,
+    output: &Path,
+    work: &Path,
+) -> Result<(), String> {
+    project_installer_with_work(project, output, Some(work))
+}
+
+fn project_installer_with_work(
+    project: &Path,
+    output: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
     let packaged_resources = packaged_studio_resources()?;
     match env::consts::OS {
         "windows" => match packaged_resources {
             Some(resources) => {
-                windows_container::build_packaged_project(project, output, &resources)
+                windows_container::build_packaged_project(project, output, &resources, managed_work)
             }
-            None => windows_container::build_project(project, output),
+            None => windows_container::build_project(project, output, managed_work),
         },
         "linux" => match packaged_resources {
-            Some(resources) => linux_container::build_packaged_project(project, output, &resources),
-            None => linux_container::build_project(project, output),
+            Some(resources) => {
+                linux_container::build_packaged_project(project, output, &resources, managed_work)
+            }
+            None => linux_container::build_project(project, output, managed_work),
         },
         "macos" => match packaged_resources {
-            Some(resources) => macos_container::build_packaged_project(project, output, &resources),
-            None => macos_container::build_project(project, output),
+            Some(resources) => {
+                macos_container::build_packaged_project(project, output, &resources, managed_work)
+            }
+            None => macos_container::build_project(project, output, managed_work),
         },
         _ => unreachable!("HostLayout rejects unsupported operating systems"),
     }
