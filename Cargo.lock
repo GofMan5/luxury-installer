@@ -463,6 +463,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "luxury-process"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+ "windows-sys",
+]
+
+[[package]]
 name = "luxury-spec"
 version = "0.1.0"
 dependencies = [
@@ -1048,6 +1057,7 @@ dependencies = [
  "flate2",
  "luxury-compiler",
  "luxury-macos-trust",
+ "luxury-process",
  "luxury-spec",
  "luxury-windows-trust",
  "md-5",

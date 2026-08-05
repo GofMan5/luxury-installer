@@ -70,6 +70,7 @@ Then run one gate with a clear purpose:
 | Rust type wiring | `cargo core-check` |
 | Renderer, styles, Tauri commands/events, or protocol types | `cargo gui-check`; add `cargo tauri-test` for Rust-shell logic |
 | Tauri Rust transport/security boundary | `cargo tauri-test` + `cargo tauri-clippy` |
+| Native child-process containment | `cargo test --locked -p luxury-process` |
 | Windows signer/filesystem boundary | `cargo test --locked -p luxury-windows-trust -p luxury-platform` on Windows |
 | Native runner/lifecycle evidence | `cargo test --locked -p xtask`, `cargo runner-smoke`, then `cargo run --locked -p xtask -- verify-evidence-set <downloaded-dir>` for a three-OS set |
 | CI parity | `cargo ci` |

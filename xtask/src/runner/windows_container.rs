@@ -1273,7 +1273,7 @@ fn run_setup_probe(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let (child, mut containment) =
-        super::containment::ChildContainment::spawn(&mut command, timeout)
+        luxury_process::ChildContainment::spawn(&mut command, timeout)
             .map_err(|error| format!("could not run Windows Setup {label} probe: {error}"))?;
     let output = child
         .wait_with_output()

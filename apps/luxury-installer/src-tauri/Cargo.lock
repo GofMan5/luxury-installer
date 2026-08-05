@@ -1981,6 +1981,7 @@ version = "0.1.0"
 dependencies = [
  "core-foundation",
  "luxury-macos-trust",
+ "luxury-process",
  "luxury-spec",
  "luxury-windows-trust",
  "rustix",
@@ -2002,6 +2003,14 @@ dependencies = [
  "core-foundation",
  "libc",
  "security-framework",
+]
+
+[[package]]
+name = "luxury-process"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

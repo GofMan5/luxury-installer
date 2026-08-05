@@ -33,6 +33,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Fixed
 
+- Studio native-build cancellation, timeout, and primary exit now contain and reap the complete Cargo/NSIS/Tauri descendant tree through a shared Rust Job Object/process-group adapter instead of killing only the packager PID.
 - Independent Tauri `.deb`/RPM verification now derives the exact launcher hash after the pinned bundler's single `UNK -> DEB/RPM` bundle-type marker patch instead of incorrectly requiring the unpatched source hash.
 - RPM cross-checking accepts the observed `rpm2cpio 4.18` empty-stderr exit `1` only when `cpio` completed successfully; exact paths, modes, ownership, and SHA-256 verification still run afterward.
 - Standalone Rust RPM generation now records and verifies publisher provenance through the serialized `Vendor` field instead of the broken `rpm 0.16` `Packager` setter.

@@ -7,6 +7,7 @@ members = [
     "crates/luxury-platform",
     "crates/luxury-compiler",
     "crates/luxury-macos-trust",
+    "crates/luxury-process",
     "crates/luxury-windows-trust",
     "apps/luxury-cli",
     "xtask",
@@ -35,6 +36,7 @@ luxury-engine = { path = "crates/luxury-engine" }
 luxury-platform = { path = "crates/luxury-platform" }
 luxury-compiler = { path = "crates/luxury-compiler" }
 luxury-macos-trust = { path = "crates/luxury-macos-trust" }
+luxury-process = { path = "crates/luxury-process" }
 luxury-windows-trust = { path = "crates/luxury-windows-trust" }
 
 ed25519-dalek = { version = "3.0", default-features = false, features = ["pem", "zeroize"] }

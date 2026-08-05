@@ -53,7 +53,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Renderer owns presentation/accessibility only
 - Rust Tauri shell owns native dialogs, bound project/package/path authority, backend lifecycle, transport validation, event correlation, and public error mapping
 - luxury stdio owns machine-facing composition
-- luxury-engine owns use cases/ports; luxury-platform owns mutations; luxury-bundle owns archive trust; luxury-compiler owns project/package assembly; luxury-spec owns portable values
+- luxury-engine owns use cases/ports; luxury-platform owns mutations; luxury-bundle owns archive trust; luxury-compiler owns project/package assembly; luxury-process owns bounded descendant-process containment; luxury-spec owns portable values
 - Compiler output uses same-directory `tempfile` atomic replacement and rejects link/reparse/non-file targets; do not reintroduce deterministic backup names or `exists -> rename` publication.
 - No business policy in renderer or shell composition
 - No common/utils dump, one-implementation factory, or speculative feature flag
@@ -78,7 +78,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Normal desktop bootstrap must reject an elevated process before creating a webview; only windowless --verify-* may run elevated
 - Windows --verify-* must complete the strict one-shot packaged-backend named-pipe probe with mutual kernel PID binding; this is transport proof, not UAC/token/Authenticode/system authority
 - Before authenticated Windows runas, pin the exact helper without write/delete sharing, match its embedded signer to the process-image-bound running Tauri signer, and retain the guard through ShellExecuteExW
-- Routine CI keeps format, quick, GUI, and focused Windows luxury-windows-trust + luxury-platform jobs separate
+- Routine CI keeps format, quick, GUI, and focused Windows luxury-windows-trust + luxury-platform + luxury-process jobs separate
 - Routine CI jobs are explicitly time-boxed; the manual native matrix is capped per host. Do not combine them into one long serial gate.
 
 ## CLI surface
@@ -152,6 +152,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 ## Native runner and evidence v2
 
 - End-user build is host-native and no-clobber; .luxpkg is a temporary compiler-to-packager handoff, not the Studio result
+- Studio native builds use luxury-process: suspended kill-on-close Job Object on Windows, dedicated process group on Linux/macOS; cancel, timeout, failure, and primary exit terminate/reap all descendants before reporting
 - Released Studio carries a payload-free Setup template with one exact patchable fingerprint slot plus a Rust native packager; Windows also carries SHA-256-pinned NSIS, and Linux creates plus independently parses deb/RPM in Rust; no user Cargo/pnpm/Tauri or system package CLI is required
 - Builds dist backend, checks frontend/Tauri, builds standalone locked Tauri release shell, stages fixed backend/payload resources, rejects trust resource, verifies hashes/identity, runs --verify-runner, publishes under ignored dist/
 - Windows layout: launcher + backend/ + payload/

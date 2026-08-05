@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use luxury_process::ChildContainment;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, State, WebviewWindow};
@@ -836,30 +837,36 @@ fn run_native_packager(
                 "project_build_failed",
                 "Компонент native-сборки расположен неверно.",
             )
-        })?)
+        })?);
+    supervise_native_packager(command, cancel, BUILD_TIMEOUT)
+}
+
+fn supervise_native_packager(
+    mut command: Command,
+    cancel: &AtomicBool,
+    timeout: Duration,
+) -> Result<(), PublicError> {
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let mut child = command.spawn().map_err(|_| {
-        PublicError::new(
-            "project_build_failed",
-            "Не удалось запустить native-сборку.",
-        )
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        let _ = child.kill();
-        let _ = child.wait();
-        PublicError::new(
-            "project_build_failed",
-            "Native-сборка не открыла защищённый канал диагностики.",
-        )
-    })?;
+    let (mut child, mut containment) = ChildContainment::spawn_hidden(&mut command, timeout)
+        .map_err(|_| {
+            PublicError::new(
+                "project_build_failed",
+                "Не удалось запустить native-сборку.",
+            )
+        })?;
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            finish_native_packager(&mut child, &mut containment, false)?;
+            return Err(PublicError::new(
+                "project_build_failed",
+                "Native-сборка не открыла защищённый канал диагностики.",
+            ));
+        }
+    };
     let (diagnostics_tx, diagnostics) = mpsc::sync_channel(1);
     if thread::Builder::new()
         .name("native-packager-stderr".into())
@@ -868,28 +875,33 @@ fn run_native_packager(
         })
         .is_err()
     {
-        let _ = child.kill();
-        let _ = child.wait();
+        finish_native_packager(&mut child, &mut containment, false)?;
         return Err(PublicError::new(
             "project_build_failed",
             "Не удалось запустить защищённый канал диагностики native-сборки.",
         ));
     }
-    let deadline = Instant::now() + BUILD_TIMEOUT;
     loop {
         if cancel.load(Ordering::Acquire) {
-            let _ = child.kill();
-            let _ = child.wait();
+            finish_native_packager(&mut child, &mut containment, false)?;
             return Err(PublicError::new(
                 "project_build_cancelled",
                 "Сборка отменена.",
             ));
         }
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => {
-                return Ok(());
-            }
-            Ok(Some(_)) => {
+            Ok(Some(status)) => {
+                let timed_out = containment.timed_out();
+                finish_native_packager(&mut child, &mut containment, true)?;
+                if timed_out {
+                    return Err(PublicError::new(
+                        "project_build_failed",
+                        "Native-сборка превысила лимит времени.",
+                    ));
+                }
+                if status.success() {
+                    return Ok(());
+                }
                 let diagnostics = diagnostics
                     .recv_timeout(Duration::from_secs(1))
                     .unwrap_or_default();
@@ -898,24 +910,48 @@ fn run_native_packager(
                     "Native-сборка завершилась с ошибкой.",
                 ));
             }
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
+            Ok(None) if containment.timed_out() => {
+                finish_native_packager(&mut child, &mut containment, false)?;
                 return Err(PublicError::new(
                     "project_build_failed",
                     "Native-сборка превысила лимит времени.",
                 ));
             }
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                finish_native_packager(&mut child, &mut containment, false)?;
                 return Err(PublicError::new(
                     "project_build_failed",
                     "Не удалось дождаться native-сборки.",
                 ));
             }
         }
+    }
+}
+
+fn finish_native_packager(
+    child: &mut std::process::Child,
+    containment: &mut ChildContainment,
+    primary_exited: bool,
+) -> Result<(), PublicError> {
+    let termination = if primary_exited {
+        containment.terminate_after_primary_exit(child)
+    } else {
+        containment.terminate()
+    };
+    if termination.is_err() && !primary_exited {
+        // Best-effort primary fallback only; the containment error still makes the build fail.
+        let _ = child.kill();
+    }
+    let waited = child.wait();
+    containment.disarm();
+    if termination.is_err() || waited.is_err() {
+        Err(PublicError::new(
+            "project_build_failed",
+            "Не удалось завершить все процессы native-сборки.",
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -1245,6 +1281,8 @@ fn path_text(path: &Path) -> Result<&str, PublicError> {
 
 #[cfg(test)]
 mod tests {
+    use std::{env, sync::Arc};
+
     use super::*;
     use crate::backend::{
         InstallPolicy, InstallScope, PackageIdentity, Payload, ProjectAuthoring, Target,
@@ -1339,6 +1377,108 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, "project_build_cancelled");
+    }
+
+    #[test]
+    fn cancelled_native_build_terminates_packager_descendants() {
+        const MODE: &str = "LUXURY_NATIVE_PACKAGER_HELPER";
+        match env::var(MODE).as_deref() {
+            Ok("parent") => return native_packager_parent(),
+            Ok("grandchild") => return native_packager_grandchild(),
+            Ok("empty") => return,
+            _ => {}
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let ready = temp.path().join("descendant-ready");
+        let sentinel = temp.path().join("descendant-survived");
+        let executable = env::current_exe().unwrap();
+        let test_name = native_packager_test_name();
+        let mut command = Command::new(executable);
+        command
+            .args(["--exact", &test_name, "--nocapture"])
+            .env(MODE, "parent")
+            .env("LUXURY_NATIVE_PACKAGER_READY", &ready)
+            .env("LUXURY_NATIVE_PACKAGER_SENTINEL", &sentinel);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancellation = Arc::clone(&cancel);
+        let ready_signal = ready.clone();
+        let request_cancel = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !ready_signal.is_file() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            cancellation.store(true, Ordering::Release);
+        });
+
+        let error =
+            supervise_native_packager(command, &cancel, Duration::from_secs(10)).unwrap_err();
+        request_cancel.join().unwrap();
+        thread::sleep(Duration::from_millis(1_200));
+
+        assert!(ready.is_file(), "packager descendant never started");
+        assert_eq!(error.code, "project_build_cancelled");
+        assert!(
+            !sentinel.exists(),
+            "packager descendant survived cancellation"
+        );
+    }
+
+    #[test]
+    fn completed_native_build_reaps_its_empty_process_tree() {
+        let executable = env::current_exe().unwrap();
+        let test_name = native_packager_test_name();
+        let mut command = Command::new(executable);
+        command
+            .args(["--exact", &test_name, "--nocapture"])
+            .env("LUXURY_NATIVE_PACKAGER_HELPER", "empty");
+
+        supervise_native_packager(command, &AtomicBool::new(false), Duration::from_secs(10))
+            .unwrap();
+    }
+
+    fn native_packager_parent() {
+        thread::sleep(Duration::from_millis(75));
+        let executable = env::current_exe().unwrap();
+        let test_name = native_packager_test_name();
+        let mut grandchild = Command::new(executable)
+            .args(["--exact", &test_name, "--nocapture"])
+            .env("LUXURY_NATIVE_PACKAGER_HELPER", "grandchild")
+            .env(
+                "LUXURY_NATIVE_PACKAGER_READY",
+                env::var_os("LUXURY_NATIVE_PACKAGER_READY").unwrap(),
+            )
+            .env(
+                "LUXURY_NATIVE_PACKAGER_SENTINEL",
+                env::var_os("LUXURY_NATIVE_PACKAGER_SENTINEL").unwrap(),
+            )
+            .spawn()
+            .unwrap();
+        thread::sleep(Duration::from_secs(5));
+        let _ = grandchild.kill();
+        let _ = grandchild.wait();
+    }
+
+    fn native_packager_grandchild() {
+        fs::write(
+            env::var_os("LUXURY_NATIVE_PACKAGER_READY").unwrap(),
+            b"ready",
+        )
+        .unwrap();
+        thread::sleep(Duration::from_millis(800));
+        fs::write(
+            env::var_os("LUXURY_NATIVE_PACKAGER_SENTINEL").unwrap(),
+            b"survived",
+        )
+        .unwrap();
+        thread::sleep(Duration::from_secs(5));
+    }
+
+    fn native_packager_test_name() -> String {
+        let module = module_path!()
+            .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+            .unwrap_or(module_path!());
+        format!("{module}::cancelled_native_build_terminates_packager_descendants")
     }
 
     #[test]

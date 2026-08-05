@@ -1,3 +1,7 @@
+//! Bounded descendant-process containment for trusted native build and verification tools.
+
+#![deny(unsafe_code)]
+
 use std::{
     io,
     process::{Child, Command},
@@ -10,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-pub(super) struct ChildContainment {
+pub struct ChildContainment {
     containment: Arc<SharedContainment>,
     timed_out: Arc<AtomicBool>,
     stop: Option<SyncSender<()>>,
@@ -18,8 +22,21 @@ pub(super) struct ChildContainment {
 }
 
 impl ChildContainment {
-    pub(super) fn spawn(command: &mut Command, timeout: Duration) -> io::Result<(Child, Self)> {
-        let prepared = PreparedContainment::new(command)?;
+    pub fn spawn(command: &mut Command, timeout: Duration) -> io::Result<(Child, Self)> {
+        Self::spawn_inner(command, timeout, false)
+    }
+
+    /// Spawn without a console window on Windows while preserving the same containment contract.
+    pub fn spawn_hidden(command: &mut Command, timeout: Duration) -> io::Result<(Child, Self)> {
+        Self::spawn_inner(command, timeout, true)
+    }
+
+    fn spawn_inner(
+        command: &mut Command,
+        timeout: Duration,
+        hide_window: bool,
+    ) -> io::Result<(Child, Self)> {
+        let prepared = PreparedContainment::new(command, hide_window)?;
         let mut child = command.spawn()?;
         let platform = match prepared.attach(&child) {
             Ok(platform) => platform,
@@ -70,23 +87,23 @@ impl ChildContainment {
         ))
     }
 
-    pub(super) fn timed_out(&self) -> bool {
+    pub fn timed_out(&self) -> bool {
         self.timed_out.load(Ordering::Acquire)
     }
 
-    pub(super) fn terminate(&self) -> io::Result<()> {
+    pub fn terminate(&self) -> io::Result<()> {
         self.containment.terminate()
     }
 
-    pub(super) fn terminate_after_primary_exit(&self, child: &mut Child) -> io::Result<()> {
+    pub fn terminate_after_primary_exit(&self, child: &mut Child) -> io::Result<()> {
         self.containment.terminate_after_primary_exit(child)
     }
 
-    pub(super) fn wait_for_primary_exit(&self, child: &Child) -> io::Result<()> {
+    pub fn wait_for_primary_exit(&self, child: &Child) -> io::Result<()> {
         self.containment.platform.wait_for_primary_exit(child)
     }
 
-    pub(super) fn disarm(&mut self) {
+    pub fn disarm(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.try_send(());
         }
@@ -164,8 +181,9 @@ struct PreparedContainment {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 impl PreparedContainment {
-    fn new(command: &mut Command) -> io::Result<Self> {
+    fn new(command: &mut Command, hide_window: bool) -> io::Result<Self> {
         use std::{
             mem::size_of,
             os::windows::{
@@ -180,9 +198,9 @@ impl PreparedContainment {
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
             SetInformationJobObject,
         };
-        use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
 
-        command.creation_flags(CREATE_SUSPENDED);
+        command.creation_flags(CREATE_SUSPENDED | if hide_window { CREATE_NO_WINDOW } else { 0 });
 
         // SAFETY: null security/name pointers request a private unnamed job object.
         let raw = unsafe { CreateJobObjectW(null(), null()) };
@@ -224,6 +242,7 @@ impl PreparedContainment {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn resume_process_threads(process_id: u32) -> io::Result<()> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
@@ -329,6 +348,7 @@ struct PlatformContainment {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 impl PlatformContainment {
     fn wait_for_primary_exit(&self, child: &Child) -> io::Result<()> {
         use std::os::windows::io::AsRawHandle;
@@ -371,7 +391,7 @@ struct PreparedContainment;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl PreparedContainment {
-    fn new(command: &mut Command) -> io::Result<Self> {
+    fn new(command: &mut Command, _: bool) -> io::Result<Self> {
         use std::os::unix::process::CommandExt;
 
         command.process_group(0);
@@ -403,7 +423,7 @@ impl PlatformContainment {
                 WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
             ) {
                 Ok(Some(_)) => return Ok(()),
-                Ok(None) => continue,
+                Ok(None) => thread::sleep(Duration::from_millis(10)),
                 Err(rustix::io::Errno::INTR) => continue,
                 Err(error) => return Err(io::Error::from(error)),
             }
@@ -435,7 +455,7 @@ struct PreparedContainment;
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 impl PreparedContainment {
-    fn new(_: &mut Command) -> io::Result<Self> {
+    fn new(_: &mut Command, _: bool) -> io::Result<Self> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "child process containment is unsupported on this platform",

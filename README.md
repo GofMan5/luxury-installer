@@ -100,7 +100,7 @@ Native output is explicit:
 | Linux x64/arm64 | A new directory containing verified `.deb` and `.rpm` files. |
 | macOS x64/arm64 | A new `.dmg` file. |
 
-The normal Studio build needs no Rust, Node, or Tauri rebuild: released Studio bundles carry a verified host template and Rust packager. The Linux packager writes and independently inspects `.deb` and RPM containers in Rust, so users do not need `dpkg`, `rpm`, Cargo, or pnpm. Its current combined input limit is 256 MiB because the pinned RPM writer buffers payloads; the build fails clearly before exhausting memory. Building all platforms still uses native Windows/Linux/macOS runners because Apple signing and native containers cannot be truthfully produced by one Windows process.
+The normal Studio build needs no Rust, Node, or Tauri rebuild: released Studio bundles carry a verified host template and Rust packager. The Linux packager writes and independently inspects `.deb` and RPM containers in Rust, so users do not need `dpkg`, `rpm`, Cargo, or pnpm. Its current combined input limit is 256 MiB because the pinned RPM writer buffers payloads; the build fails clearly before exhausting memory. Studio runs the native packager in a bounded Windows Job Object or Unix process group, so cancel, timeout, window close, and primary-process exit terminate the complete descendant build tree before a result is reported. Building all platforms still uses native Windows/Linux/macOS runners because Apple signing and native containers cannot be truthfully produced by one Windows process.
 
 The low-level package/lifecycle CLI remains available for signing, CI, and engine testing. Unsigned package installation always needs explicit consent:
 

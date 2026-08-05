@@ -14,7 +14,6 @@ use crate::{gui_check, workspace_root};
 
 #[cfg(unix)]
 mod archive;
-mod containment;
 mod linux_container;
 mod macos_container;
 mod probe;

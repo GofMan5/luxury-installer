@@ -11,6 +11,7 @@ standalone-linux-packager = ["dep:ar", "dep:cpio", "dep:md-5", "dep:rpm"]
 
 [dependencies]
 luxury-compiler.workspace = true
+luxury-process.workspace = true
 luxury-spec.workspace = true
 luxury-windows-trust.workspace = true
 serde_json.workspace = true

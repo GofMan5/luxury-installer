@@ -44,6 +44,7 @@ luxury-bundle   ─→ luxury-spec
 luxury-engine   ─→ luxury-spec
 luxury-compiler ─→ luxury-bundle + luxury-spec
 luxury-platform ─→ luxury-bundle + luxury-engine + luxury-spec
+xtask + standalone Tauri shell ─→ luxury-process
 luxury (CLI / stdio) ─→ compiler + bundle + platform + engine + spec
 ```
 
@@ -52,6 +53,7 @@ luxury (CLI / stdio) ─→ compiler + bundle + platform + engine + spec
 - `luxury-engine` owns commands, events, outcomes, use-case order, and ports.
 - `luxury-platform` owns filesystem/OS adapters, transactional state, recovery, and native launch.
 - `luxury-compiler` owns safe project scanning, validation, and `.luxpkg` assembly; its `authoring` vertical slice owns atomic settings updates, bounded additive import, staged whole-payload replacement with rollback, and payload-path resolution instead of growing the crate root. Bundle output is written and synced through a same-directory `NamedTempFile`, rejects an existing link/reparse/non-file target, and uses the dependency's platform-native atomic replace instead of a check-then-rename backup namespace.
+- `luxury-process` owns only bounded descendant-process containment: suspended Windows Job Object attachment and Unix process groups. It contains no package, UI, or build policy and is shared by `xtask` and the standalone Tauri shell.
 - `luxury` is the human CLI and machine-facing `luxury stdio` composition root.
 - `xtask` owns repository gates, native runner assembly, smoke orchestration, and evidence validation.
 
@@ -181,7 +183,7 @@ Capacity preflight uses the nearest existing real ancestor and caller-visible fr
 
 ## Native runner and evidence
 
-`cargo studio-assemble` builds a payload-free authoring artifact for the current host together with a Rust packager and payload-free Setup template. Windows also embeds the exact SHA-256-pinned NSIS archive. Linux enables its small `standalone-linux-packager` feature only for that release sidecar: existing `tar`/`flate2` plus narrow `ar`/`rpm`/`cpio` crates create and independently parse the two native containers without Cargo, Node, Tauri CLI, or system package tools at runtime; routine `cargo quick` does not compile them. `cargo project-installer -- <project> <native-output>` compiles `.luxpkg` only inside a temporary work tree, materializes exactly one fingerprint slot in that template, repeats runner/container verification, and publishes only `.exe`, `.deb` + `.rpm`, or `.dmg`. `cargo assemble -- <package.luxpkg>` remains the low-level bound Setup gate. On Linux/macOS assembly additionally publishes deterministic `.tar.gz`; the Rust adapter rejects links/special entries and opened-file identity/mode drift, preserves only executable intent, normalizes modes/owners/timestamps, syncs the archive, and publishes without overwrite. Linux stages its exact helper/polkit policy; macOS stages its exact helper/LaunchDaemon plist and 13.0 deployment floor. Studio sidecars are exact-layout/hash checked but an unsigned portable Studio does not cryptographically bind them to the launcher. This is transport preservation, not signing or hostile same-user parent-path binding. Setup assembly:
+`cargo studio-assemble` builds a payload-free authoring artifact for the current host together with a Rust packager and payload-free Setup template. Windows also embeds the exact SHA-256-pinned NSIS archive. Linux enables its small `standalone-linux-packager` feature only for that release sidecar: existing `tar`/`flate2` plus narrow `ar`/`rpm`/`cpio` crates create and independently parse the two native containers without Cargo, Node, Tauri CLI, or system package tools at runtime; routine `cargo quick` does not compile them. Studio spawns that packager through `luxury-process`: Windows creates it suspended, attaches a kill-on-close Job Object, then resumes its exact primary thread; Linux/macOS create a dedicated process group. Cancel, timeout, spawn/setup failure, and even normal primary exit terminate/reap the complete descendant tree before Studio reports a result. `cargo project-installer -- <project> <native-output>` compiles `.luxpkg` only inside a temporary work tree, materializes exactly one fingerprint slot in that template, repeats runner/container verification, and publishes only `.exe`, `.deb` + `.rpm`, or `.dmg`. `cargo assemble -- <package.luxpkg>` remains the low-level bound Setup gate. On Linux/macOS assembly additionally publishes deterministic `.tar.gz`; the Rust adapter rejects links/special entries and opened-file identity/mode drift, preserves only executable intent, normalizes modes/owners/timestamps, syncs the archive, and publishes without overwrite. Linux stages its exact helper/polkit policy; macOS stages its exact helper/LaunchDaemon plist and 13.0 deployment floor. Studio sidecars are exact-layout/hash checked but an unsigned portable Studio does not cryptographically bind them to the launcher. This is transport preservation, not signing or hostile same-user parent-path binding. Setup assembly:
 
 1. validates one explicit unsigned-v1 package and host target;
 2. builds the dist `luxury` backend;
@@ -225,7 +227,7 @@ The exact combined set is currently Linux/Windows x86_64 plus macOS ARM64. `veri
 - `cargo macos-dmg -- <signed.app>` and `cargo verify-macos-dmg -- <signed.dmg>` are native-macOS-only container gates; they require already signed/notarized input and never own credentials.
 - `cargo verify-windows-signers -- <launcher.exe> <helper.exe>` requires two embedded Authenticode chains and one exact leaf certificate; it does not sign either file.
 - Windows release order is fixed: externally sign the inner Tauri launcher/backend with one leaf certificate, run `cargo windows-release-setup -- <signed-runner-dir> <nsis.zip>`, externally sign the emitted outer NSIS with that certificate, then run `cargo verify-windows-release -- <signed-setup.exe>`. Rust never receives signing credentials.
-- Routine pull-request/main CI runs format, quick, desktop, and focused Windows `luxury-windows-trust + luxury-platform` jobs separately.
+- Routine pull-request/main CI runs format, quick, desktop, and focused Windows `luxury-windows-trust + luxury-platform + luxury-process` jobs separately.
 - Manual CI runs full root tests, standalone Tauri tests, inspected unsigned Linux `.deb`/RPM generation, and host-native runner smoke on Linux/Windows x86_64 plus macOS ARM64, then verifies the exact schema-v2 set.
 
 One gate has one purpose. Do not repeat the same broad check without new code or evidence.

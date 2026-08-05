@@ -44,6 +44,7 @@ sudo apt-get install --no-install-recommends libwebkit2gtk-4.1-dev libayatana-ap
 | Package/archive verification | `cargo test -p luxury-bundle` |
 | Use case/port | `cargo test -p luxury-engine` |
 | Filesystem or OS adapter | focused `cargo test -p luxury-platform <test-name>` on the native host |
+| Descendant process containment | `cargo test -p luxury-process` on the native host |
 | Compiler/project scanning | `cargo test -p luxury-compiler` |
 | Human CLI or JSONL backend | focused `cargo test -p luxury <test-name>` |
 | Cross-crate core behavior | `cargo quick --locked` |
@@ -200,6 +201,7 @@ luxury stdio
     ├─ luxury-platform → real mutation
     ├─ luxury-bundle → archive trust
     ├─ luxury-compiler → project assembly
+    ├─ luxury-process → native descendant containment
     └─ luxury-spec → portable invariants
 ```
 
@@ -207,6 +209,7 @@ Rules:
 
 - Rust owns package policy, transition classification, rollback, receipts, recovery, and OS mutation.
 - The Tauri shell owns native dialogs, bound paths/identity, backend process lifecycle, JSONL validation, public errors, and renderer command/event correlation.
+- `luxury-process` is the shared narrow OS adapter for suspended Job Object / process-group containment. Native-build cancellation, timeout, setup failure, and primary exit must terminate and reap the complete packager descendant tree before returning.
 - React owns presentation state and accessibility only.
 - The exact Tauri ACL grants no generic renderer shell/fs/dialog/opener/process access.
 - The standalone `src-tauri` workspace must remain excluded from the root workspace.
@@ -246,7 +249,7 @@ cargo project-installer -- <absolute-project-directory> <absolute-native-output>
 - Linux x86_64/aarch64 output is a new directory containing `.deb`, `.rpm`, and provenance.
 - macOS x86_64/aarch64 output is a new `.dmg` file.
 
-The compiler package is an internal verified handoff and is removed with the work directory. Released Studio uses its bundled payload-free Setup template and Rust packager, so a user build does not run Cargo, pnpm, TypeScript, or Tauri compilation. Windows also carries the SHA-256-pinned NSIS archive. Linux creates deterministic-layout Debian `ar`/tar and RPM/CPIO containers with narrow Rust libraries, then independently parses their metadata, ownership, modes, scripts, dependencies, paths, and hashes; `dpkg`, `rpm`, and `cpio` are release cross-checks, not user runtime dependencies. The pinned RPM writer buffers its payload, so packaged Studio rejects combined Linux inputs above 256 MiB before allocation pressure; raise that ceiling only with a streaming RPM writer. Template materialization patches exactly one reviewed 64-byte binding slot, then repeats package, runner, container, argument-rejection, and final-byte checks.
+The compiler package is an internal verified handoff and is removed with the work directory. Released Studio uses its bundled payload-free Setup template and Rust packager, so a user build does not run Cargo, pnpm, TypeScript, or Tauri compilation. Windows also carries the SHA-256-pinned NSIS archive. Linux creates deterministic-layout Debian `ar`/tar and RPM/CPIO containers with narrow Rust libraries, then independently parses their metadata, ownership, modes, scripts, dependencies, paths, and hashes; `dpkg`, `rpm`, and `cpio` are release cross-checks, not user runtime dependencies. The pinned RPM writer buffers its payload, so packaged Studio rejects combined Linux inputs above 256 MiB before allocation pressure; raise that ceiling only with a streaming RPM writer. Studio contains the packager and every child tool in one bounded native process tree and treats cleanup failure as build failure. Template materialization patches exactly one reviewed 64-byte binding slot, then repeats package, runner, container, argument-rejection, and final-byte checks.
 
 Native multi-build means running this command on matching Windows/Linux/macOS runners. Do not claim Apple signing from Windows or publish the blocked Linux desktop graph. Low-level package and runner commands below remain release/security gates, not the Studio result.
 
@@ -367,7 +370,7 @@ Routine pull-request/main CI:
 - root and standalone-Tauri formatting;
 - `cargo quick --locked`;
 - isolated renderer + Tauri check;
-- focused Windows `cargo test --locked -p luxury-windows-trust -p luxury-platform` boundary check.
+- focused Windows `cargo test --locked -p luxury-windows-trust -p luxury-platform -p luxury-process` trust/filesystem/process-tree boundary check.
 
 Every routine job has an explicit 10-60 minute timeout; the manual native matrix remains capped at 60 minutes per host and its evidence merge at 20 minutes. Do not remove these caps or replace the separated jobs with one serial mega-gate.
 

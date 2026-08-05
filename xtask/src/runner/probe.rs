@@ -12,9 +12,9 @@ use serde_json::{Map, Value, json};
 
 use super::{
     HostLayout, LAUNCH_EXIT_ACK, LAUNCH_MARKER_FILE, LAUNCH_MARKER_MAGIC, LAUNCH_MARKER_TEMP_FILE,
-    SMOKE_LICENSE, bounded_output, containment::ChildContainment, is_link_or_reparse,
-    valid_package_id,
+    SMOKE_LICENSE, bounded_output, is_link_or_reparse, valid_package_id,
 };
+use luxury_process::ChildContainment;
 
 mod recovery;
 pub(super) use recovery::{

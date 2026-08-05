@@ -1,5 +1,5 @@
 [alias]
-quick = "test -p luxury-spec -p luxury-bundle -p luxury-engine -p luxury-platform -p luxury-compiler -p luxury-macos-trust -p luxury-windows-trust -p luxury -p xtask"
+quick = "test -p luxury-spec -p luxury-bundle -p luxury-engine -p luxury-platform -p luxury-compiler -p luxury-macos-trust -p luxury-process -p luxury-windows-trust -p luxury -p xtask"
 core-check = "check --workspace"
 gui-check = "run --locked -p xtask -- gui-check"
 tauri-test = "test --locked --manifest-path apps/luxury-installer/src-tauri/Cargo.toml"
