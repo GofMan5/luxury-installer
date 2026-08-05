@@ -40,6 +40,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Fixed
 
+- A failed **Launch** action no longer discards the successful Setup result for a generic rebootstrap. It stays inline and retryable; after a successful launch, a separate close failure hides **Launch** and leaves **Done** available instead of starting a second application instance.
 - Setup no longer hides an unconfirmed cancellation request: install and uninstall keep running, show the bounded public error inline, and restore a retryable **Cancel** action instead of pretending cancellation started.
 - Unsaved Studio settings now block project switching and reload, can be explicitly undone to the last validated baseline, and require a Rust-owned discard confirmation on close or Alt+F4.
 - Studio owns the exact native-build work directory and removes it after descendant reaping, including cancellation, timeout, and failure, instead of leaving a hidden partial assembly tree beside the selected output.

@@ -38,6 +38,8 @@ Closing Setup is part of the transaction contract. Every Setup action acquires o
 
 Interactive Setup cancellation remains a running-state request until Rust emits the correlated terminal event. A Tauri cancel transport failure clears only the pending-cancel UI flag, preserves the active install/uninstall state, renders the bounded public error inline, and permits another request; it never fabricates cancellation or rollback completion.
 
+The completed Setup surface owns one serialized presentation boundary for launch, reveal, finish-link, and close actions. Failures remain inline without replacing the authenticated installation result. Launch success is recorded before the separate close request; if close fails, launch authority is withheld from the renderer for the rest of that completed state and only pathless close/reveal/link actions remain.
+
 ## Workspace and dependency rule
 
 The core workspace is rooted at [`Cargo.toml`](../Cargo.toml):

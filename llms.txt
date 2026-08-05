@@ -77,6 +77,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Recent projects are a bounded six-item Rust-owned display list persisted atomically under app config; renderer reopens by validated index and Rust repeats validateProject before activation
 - Studio authoring loop is create/open -> edit validated settings -> native additive import or staged whole-payload replacement -> native entrypoint selection -> save/reload or save-and-build -> reveal output. Renderer never receives source paths or generic filesystem authority
 - Setup renderer receives display review + hasEntrypoint and sends pathless destination/install/uninstall/cancel/reveal/launch intent; cancel invoke failure stays in the active running state, shows one bounded inline error, and re-enables retry instead of claiming rollback. Completed user reveal uses the retained selection and completed system reveal uses luxury-system-roots, never renderer/helper path input
+- Completed Setup launch/reveal/link/close actions are serialized and fail inline. Launch success is recorded before close; a close failure removes launch and leaves pathless Done available, so retry never starts a second app instance
 - Exact capability grants event listen/unlisten, window dragging, and named app commands only
 - Renderer has no generic shell/fs/dialog/opener/process permission
 - Production CSP is local-only; loopback Vite/WebSocket origins exist only in devCsp

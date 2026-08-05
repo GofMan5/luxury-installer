@@ -73,7 +73,6 @@ export interface InstallerController {
   licenseAccepted: boolean
   publisherMigrationRequired: boolean
   publisherMigrationAccepted: boolean
-  launchPending: boolean
   destinationPending: boolean
   destinationError: string | null
   view: InstallerView
@@ -86,7 +85,6 @@ export interface InstallerController {
   startInstall(): Promise<void>
   startUninstall(): Promise<void>
   cancelOperation(): Promise<void>
-  launchInstalled(): Promise<void>
   continueAfterInstall(): void
   retry(): void
 }
@@ -99,9 +97,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
   const operationId = useRef<string | null>(null)
   const operationPending = useRef(false)
   const cancelPending = useRef(false)
-  const launchPendingRef = useRef(false)
   const destinationPendingRef = useRef(false)
-  const [launchPending, setLaunchPending] = useState(false)
   const [destinationPending, setDestinationPending] = useState(false)
   const [destinationError, setDestinationError] = useState<string | null>(null)
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0)
@@ -389,30 +385,6 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
     await sendCancellation()
   }, [sendCancellation])
 
-  const launchInstalled = useCallback(async () => {
-    if (
-      launchPendingRef.current ||
-      view.kind !== 'installComplete' ||
-      !review?.package.hasEntrypoint
-    ) return
-    launchPendingRef.current = true
-    setLaunchPending(true)
-    try {
-      await bridge.launchInstalled()
-      await bridge.closeWindow()
-    } catch (error) {
-      setView({
-        kind: 'error',
-        message: errorMessage(error),
-        canRetry: true,
-        publisherMigrationRequired: false,
-      })
-    } finally {
-      launchPendingRef.current = false
-      setLaunchPending(false)
-    }
-  }, [bridge, review, view.kind])
-
   const retry = useCallback(() => {
     if (view.kind === 'error') setPublisherMigrationAccepted(false)
     setView({ kind: 'booting' })
@@ -431,7 +403,6 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
     licenseAccepted,
     publisherMigrationRequired: review?.publisherMigrationRequired ?? false,
     publisherMigrationAccepted,
-    launchPending,
     destinationPending,
     destinationError,
     view,
@@ -444,7 +415,6 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
     startInstall,
     startUninstall,
     cancelOperation,
-    launchInstalled,
     continueAfterInstall,
     retry,
   }

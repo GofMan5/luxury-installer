@@ -291,6 +291,8 @@ Cancel an active request with a new request ID:
 
 The result contains `accepted`. Cancellation is cooperative; wait for the original request's terminal result/error and rollback completion. A transport error from the cancel request does not terminate the original operation: keep its event stream active and retry cancellation without inventing rollback or completion. Setup follows the same rule and keeps a failed pathless cancel request inline and retryable. Launch is no longer cancellable after successful spawn.
 
+On Setup's completed screen, launch/reveal/finish-link/close failures preserve the factual installation result and remain inline. A successful launch is recorded before the separate close request; if close fails, retry only **Done** and do not start the installed application again.
+
 Handle stable error codes by cause. Examples include `invalid_request`, `invalid_params`, `busy`, `cancelled`, `permission_denied`, `insufficient_space`, `collision`, `state_conflict`, `recovery_required`, `downgrade_denied`, `reinstall_mismatch`, `publisher_mismatch`, `publisher_migration_required`, `publisher_rotation_denied`, `license_not_accepted`, `unsigned_not_allowed`, and integrity/signature failures. Do not parse human messages for control flow.
 
 ## Agent completion checklist

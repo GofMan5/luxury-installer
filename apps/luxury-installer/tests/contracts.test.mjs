@@ -604,6 +604,23 @@ test('completion screen separates optional links from primary completion actions
   assert.match(styles, /\.result-links\s*\{[\s\S]*?grid-template-columns:/)
 })
 
+test('completion launch failure stays inline and close failure cannot relaunch the app', async () => {
+  const [app, controller, result] = await Promise.all([
+    readFile(new URL('../src/renderer/src/SetupApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/use-installer.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/features/installer/ResultView.tsx', import.meta.url), 'utf8'),
+  ])
+  assert.match(app, /'launch' \| 'reveal' \| 'close' \| number \| null/)
+  assert.match(
+    app,
+    /await installer\.bridge\.launchInstalled\(\)[\s\S]*?setLaunchSucceeded\(true\)[\s\S]*?await installer\.bridge\.closeWindow\(\)/,
+  )
+  assert.match(app, /canLaunch=\{summary\.hasEntrypoint && !launchSucceeded\}/)
+  assert.match(result, /actionPending === 'launch'/)
+  assert.doesNotMatch(result, /launchPending/)
+  assert.doesNotMatch(controller, /launchPending|const launchInstalled/)
+})
+
 test('system completion reveal is pathless and derives fixed roots in Rust', async () => {
   const [app, bridge, shell, roots] = await Promise.all([
     readFile(new URL('../src/renderer/src/SetupApp.tsx', import.meta.url), 'utf8'),
