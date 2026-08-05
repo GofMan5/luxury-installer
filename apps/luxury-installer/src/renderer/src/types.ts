@@ -198,6 +198,7 @@ export interface LuxuryBridge {
   revealProject(): Promise<void>
   revealBuildOutput(): Promise<void>
   buildProject(): Promise<StudioBuildResult | null>
+  cancelProjectBuild(): Promise<{ accepted: boolean }>
   chooseDirectory(): Promise<InstallerReview | null>
   startInstall(input: InstallRequest): Promise<{ operationId: string }>
   startUninstall(): Promise<{ operationId: string }>

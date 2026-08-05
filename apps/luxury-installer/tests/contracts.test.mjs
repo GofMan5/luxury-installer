@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import {
+  buildCancellationResultSchema,
   eventEnvelopeSchema,
   installRequestSchema,
   installerReviewSchema,
@@ -327,6 +328,30 @@ test('Studio publishes native installers from one parent-owned work directory', 
   assert.match(staging, /canonical_path\.parent\(\) != Some\(canonical_parent\.as_path\(\)\)/)
   assert.match(staging, /managed Studio assembly directory is not empty/)
   assert.doesNotMatch(shell, /set_file_name\([^)]*luxpkg/i)
+})
+
+test('Studio native build has one pathless race-free cancellation action', async () => {
+  const [view, controller, bridge, shell, app, capability, build] = await Promise.all([
+    readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/use-studio.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/tauri-bridge.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/studio.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/capabilities/main.json', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/build.rs', import.meta.url), 'utf8'),
+  ])
+  assert.equal(buildCancellationResultSchema.safeParse({ accepted: true }).success, true)
+  assert.equal(buildCancellationResultSchema.safeParse({ accepted: true, path: 'x' }).success, false)
+  assert.match(view, /onClick=\{onCancelBuild\}/)
+  assert.match(view, /state\.cancellationRequested \? 'Отменяем…' : 'Отменить'/)
+  assert.match(controller, /errorCode\(error\) === 'project_build_cancelled'/)
+  assert.match(bridge, /parsedInvoke\('cancel_project_build', buildCancellationResultSchema\)/)
+  assert.match(shell, /const BUILD_IDLE: u8 = 0;[\s\S]*?const BUILD_ACTIVE: u8 = 1;[\s\S]*?const BUILD_CANCELLED: u8 = 2;/)
+  assert.match(shell, /let _active = state[\s\S]{0,160}?\.build[\s\S]{0,80}?\.start\(\)[\s\S]*?spawn_blocking/)
+  assert.match(app, /studio::cancel_project_build/)
+  assert.match(capability, /allow-cancel-project-build/)
+  assert.match(build, /"cancel_project_build"/)
+  assert.doesNotMatch(bridge, /cancel_project_build[^\n]*\{[^\n]*(path|project|output)/i)
 })
 
 test('recent projects stay bounded display data and reopen by index only', () => {

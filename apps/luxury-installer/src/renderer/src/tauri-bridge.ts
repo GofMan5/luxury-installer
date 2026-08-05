@@ -4,6 +4,7 @@ import type { ZodType } from 'zod'
 
 import {
   appModeSchema,
+  buildCancellationResultSchema,
   eventEnvelopeSchema,
   installRequestSchema,
   installerReviewSchema,
@@ -20,6 +21,13 @@ import {
 import type { LuxuryBridge, SetupEvent } from './types'
 
 const OPERATION_EVENT = 'luxury://operation-event'
+
+class LuxuryInvokeError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message)
+    this.name = 'LuxuryInvokeError'
+  }
+}
 
 export function createTauriBridge(): LuxuryBridge {
   const subscribers = new Set<(event: SetupEvent) => void>()
@@ -82,6 +90,7 @@ export function createTauriBridge(): LuxuryBridge {
     revealProject: () => invokeCommand('reveal_project'),
     revealBuildOutput: () => invokeCommand('reveal_build_output'),
     buildProject: () => parsedInvoke('build_project', studioBuildResultSchema.nullable()),
+    cancelProjectBuild: () => parsedInvoke('cancel_project_build', buildCancellationResultSchema),
     chooseDirectory: () => parsedInvoke('choose_directory', installerReviewSchema.nullable()),
     startInstall: async (input) => {
       await ensureEventReady()
@@ -134,7 +143,7 @@ async function invokeCommand(command: string, args?: Record<string, unknown>): P
 
 function publicError(error: unknown): Error {
   const parsed = publicErrorSchema.safeParse(error)
-  return new Error(
-    parsed.success ? parsed.data.message : 'Компоненты Luxury Installer несовместимы или недоступны.',
-  )
+  return parsed.success
+    ? new LuxuryInvokeError(parsed.data.code, parsed.data.message)
+    : new Error('Компоненты Luxury Installer несовместимы или недоступны.')
 }

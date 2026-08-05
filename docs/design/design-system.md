@@ -77,7 +77,7 @@ No font download is required at runtime.
 - Loading: disable project actions while the Rust-owned native dialog and validation complete.
 - Ready: show the current project, manifest facts, payload counts/size, target, one primary build action, and secondary native-folder/reload actions in the rail.
 - Refreshing: preserve the last validated summary, disable project actions, and show one bounded validation status until Rust returns the replacement summary.
-- Building/built: show bounded Rust progress copy, then the selected output path and one pathless Rust-owned reveal action from the validated result.
+- Building: keep the primary build action disabled, expose one secondary **Cancel** action, announce `cancelling + cleanup` through the existing live region, and keep retryable cancel transport errors inline while the build remains active. Confirmed cancellation returns to the same validated project without a terminal error card. Built: show the selected output path and one pathless Rust-owned reveal action from the validated result.
 - Error: preserve the active project when possible and keep one dismiss action.
 - V2/v3 projects remain openable and validated, but GUI build is disabled with a CLI/stdin signing note; v3 explains that PoP is verified during CLI build with the current key.
 

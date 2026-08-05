@@ -243,6 +243,8 @@ export const studioBuildResultSchema = z
   .object({ outputPath: path, project: studioProjectSchema })
   .strict()
 
+export const buildCancellationResultSchema = z.object({ accepted: z.boolean() }).strict()
+
 export const recentProjectSchema = z
   .object({
     projectPath: path,

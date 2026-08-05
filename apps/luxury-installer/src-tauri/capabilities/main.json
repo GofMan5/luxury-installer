@@ -21,6 +21,7 @@
     "allow-reveal-project",
     "allow-reveal-build-output",
     "allow-build-project",
+    "allow-cancel-project-build",
     "allow-choose-directory",
     "allow-start-install",
     "allow-start-uninstall",

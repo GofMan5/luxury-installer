@@ -213,7 +213,7 @@ Rules:
 - Rust owns package policy, transition classification, rollback, receipts, recovery, and OS mutation.
 - The Tauri shell owns native dialogs, bound paths/identity, backend process lifecycle, JSONL validation, public errors, and renderer command/event correlation.
 - `luxury-system-roots` is the one narrow source for Windows Known Folders and fixed Linux/macOS system roots. `luxury-platform` uses it for privileged mutation; the Tauri shell uses only its install root after a verified completed operation for pathless reveal.
-- `luxury-process` is the shared narrow OS adapter for suspended Job Object / process-group containment. Native-build cancellation, timeout, setup failure, and primary exit must terminate and reap the complete packager descendant tree before returning.
+- `luxury-process` is the shared narrow OS adapter for suspended Job Object / process-group containment. The pathless Studio Cancel button, window close, timeout, setup failure, and primary exit share one Rust `idle -> active -> cancelled` lifecycle and must terminate/reap the complete packager descendant tree before returning; renderer cancellation carries no project/output/process identifier.
 - React owns presentation state and accessibility only.
 - The exact Tauri ACL grants no generic renderer shell/fs/dialog/opener/process access.
 - The standalone `src-tauri` workspace must remain excluded from the root workspace.

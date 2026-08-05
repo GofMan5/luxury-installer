@@ -4,8 +4,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc,
     },
     thread,
@@ -32,8 +32,7 @@ use crate::{
 
 pub(crate) struct StudioState {
     busy: AtomicBool,
-    build_active: AtomicBool,
-    build_cancel: AtomicBool,
+    build: Arc<BuildLifecycle>,
     active: Mutex<Option<ActiveProject>>,
     last_output: Mutex<Option<PathBuf>>,
     recent_path: Option<PathBuf>,
@@ -42,6 +41,62 @@ pub(crate) struct StudioState {
 
 const MAX_RECENT_PROJECTS: usize = 6;
 const MAX_RECENT_FILE_BYTES: u64 = 64 * 1024;
+const BUILD_IDLE: u8 = 0;
+const BUILD_ACTIVE: u8 = 1;
+const BUILD_CANCELLED: u8 = 2;
+
+#[derive(Default)]
+struct BuildLifecycle(AtomicU8);
+
+impl BuildLifecycle {
+    fn start(self: &Arc<Self>) -> Option<ActiveBuild> {
+        self.0
+            .compare_exchange(
+                BUILD_IDLE,
+                BUILD_ACTIVE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .ok()
+            .map(|_| ActiveBuild(Arc::clone(self)))
+    }
+
+    fn cancel(&self) -> bool {
+        let mut state = self.0.load(Ordering::Acquire);
+        loop {
+            match state {
+                BUILD_IDLE => return false,
+                BUILD_CANCELLED => return true,
+                BUILD_ACTIVE => match self.0.compare_exchange_weak(
+                    BUILD_ACTIVE,
+                    BUILD_CANCELLED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => return true,
+                    Err(next) => state = next,
+                },
+                _ => unreachable!("build lifecycle has only three states"),
+            }
+        }
+    }
+
+    fn active(&self) -> bool {
+        self.0.load(Ordering::Acquire) != BUILD_IDLE
+    }
+
+    fn cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire) == BUILD_CANCELLED
+    }
+}
+
+struct ActiveBuild(Arc<BuildLifecycle>);
+
+impl Drop for ActiveBuild {
+    fn drop(&mut self) {
+        self.0.0.store(BUILD_IDLE, Ordering::Release);
+    }
+}
 
 impl StudioState {
     pub(crate) fn new(recent_path: Option<PathBuf>) -> Self {
@@ -51,8 +106,7 @@ impl StudioState {
             .unwrap_or_default();
         Self {
             busy: AtomicBool::new(false),
-            build_active: AtomicBool::new(false),
-            build_cancel: AtomicBool::new(false),
+            build: Arc::new(BuildLifecycle::default()),
             active: Mutex::new(None),
             last_output: Mutex::new(None),
             recent_path,
@@ -288,9 +342,43 @@ pub(crate) async fn build_project(
 ) -> Result<Option<StudioBuildResult>, PublicError> {
     state.require_mode(AppMode::Studio)?;
     let state = state.inner().clone();
+    if state.close_started.load(Ordering::Acquire) {
+        return Err(PublicError::new(
+            "project_build_cancelled",
+            "Сборка отменена при закрытии Studio.",
+        ));
+    }
+    let _active = state
+        .studio
+        .build
+        .start()
+        .ok_or_else(|| PublicError::new("busy", "Другая native-сборка уже выполняется."))?;
+    if state.close_started.load(Ordering::Acquire) {
+        state.studio.build.cancel();
+        return Err(PublicError::new(
+            "project_build_cancelled",
+            "Сборка отменена при закрытии Studio.",
+        ));
+    }
     tauri::async_runtime::spawn_blocking(move || build_project_sync(&app, &window, &state))
         .await
         .map_err(|_| PublicError::new("internal_error", "Сборка Studio прервана."))?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BuildCancellationResult {
+    accepted: bool,
+}
+
+#[tauri::command]
+pub(crate) fn cancel_project_build(
+    state: State<'_, AppState>,
+) -> Result<BuildCancellationResult, PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    Ok(BuildCancellationResult {
+        accepted: state.studio.build.cancel(),
+    })
 }
 
 pub(crate) fn verify_studio(state: &AppState) -> Result<(), PublicError> {
@@ -304,9 +392,9 @@ pub(crate) fn shutdown(state: &AppState) -> Result<(), PublicError> {
     if state.mode != AppMode::Studio {
         return Ok(());
     }
-    state.studio.build_cancel.store(true, Ordering::Release);
+    state.studio.build.cancel();
     let deadline = Instant::now() + Duration::from_secs(10);
-    while state.studio.build_active.load(Ordering::Acquire) {
+    while state.studio.build.active() {
         if Instant::now() >= deadline {
             return Err(PublicError::new(
                 "project_build_failed",
@@ -764,20 +852,7 @@ fn build_project_sync(
             "Сборка отменена при закрытии Studio.",
         ));
     }
-    let _build_active = ExclusiveGuard::acquire(
-        &state.studio.build_active,
-        "busy",
-        "Другая native-сборка уже выполняется.",
-    )?;
-    state.studio.build_cancel.store(false, Ordering::Release);
-    if state.close_started.load(Ordering::Acquire) {
-        return Err(PublicError::new(
-            "project_build_cancelled",
-            "Сборка отменена при закрытии Studio.",
-        ));
-    }
-    run_native_packager(packager, &project.path, &output, &state.studio.build_cancel)?;
-    drop(_build_active);
+    run_native_packager(packager, &project.path, &output, &state.studio.build)?;
     let backend = state.backend().map_err(PublicError::from)?;
     let project_result: ProjectResult = backend
         .request_operation(
@@ -812,10 +887,10 @@ fn run_native_packager(
     executable: &Path,
     project: &Path,
     output: &Path,
-    cancel: &AtomicBool,
+    lifecycle: &BuildLifecycle,
 ) -> Result<(), PublicError> {
     const BUILD_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
-    if cancel.load(Ordering::Acquire) {
+    if lifecycle.cancelled() {
         return Err(PublicError::new(
             "project_build_cancelled",
             "Сборка отменена.",
@@ -854,7 +929,7 @@ fn run_native_packager(
                 "Компонент native-сборки расположен неверно.",
             )
         })?);
-    let result = supervise_native_packager(command, cancel, BUILD_TIMEOUT);
+    let result = supervise_native_packager(command, lifecycle, BUILD_TIMEOUT);
     finish_managed_native_build(result, work)
 }
 
@@ -894,7 +969,7 @@ fn cleanup_native_build_work(work: TempDir) -> Result<(), PublicError> {
 
 fn supervise_native_packager(
     mut command: Command,
-    cancel: &AtomicBool,
+    lifecycle: &BuildLifecycle,
     timeout: Duration,
 ) -> Result<(), PublicError> {
     command
@@ -933,7 +1008,7 @@ fn supervise_native_packager(
         ));
     }
     loop {
-        if cancel.load(Ordering::Acquire) {
+        if lifecycle.cancelled() {
             finish_native_packager(&mut child, &mut containment, false)?;
             return Err(PublicError::new(
                 "project_build_cancelled",
@@ -1419,15 +1494,41 @@ mod tests {
 
     #[test]
     fn pre_cancelled_native_build_never_opens_the_packager() {
-        let cancel = AtomicBool::new(true);
+        let lifecycle = Arc::new(BuildLifecycle::default());
+        let _active = lifecycle.start().unwrap();
+        assert!(lifecycle.cancel());
         let error = run_native_packager(
             Path::new("missing-packager"),
             Path::new("missing-project"),
             Path::new("missing-output"),
-            &cancel,
+            &lifecycle,
         )
         .unwrap_err();
         assert_eq!(error.code, "project_build_cancelled");
+    }
+
+    #[test]
+    fn manual_build_cancellation_is_idempotent_and_scoped_to_one_active_build() {
+        assert_eq!(
+            serde_json::to_value(BuildCancellationResult { accepted: true }).unwrap(),
+            json!({ "accepted": true })
+        );
+        let lifecycle = Arc::new(BuildLifecycle::default());
+        assert!(!lifecycle.active());
+        assert!(!lifecycle.cancel());
+
+        let active = lifecycle.start().unwrap();
+        assert!(lifecycle.active());
+        assert!(lifecycle.cancel());
+        assert!(lifecycle.cancel());
+        assert!(lifecycle.cancelled());
+        assert!(lifecycle.start().is_none());
+
+        drop(active);
+        assert!(!lifecycle.active());
+        assert!(!lifecycle.cancelled());
+        assert!(!lifecycle.cancel());
+        assert!(lifecycle.start().is_some());
     }
 
     #[test]
@@ -1475,19 +1576,20 @@ mod tests {
             .env(MODE, "parent")
             .env("LUXURY_NATIVE_PACKAGER_READY", &ready)
             .env("LUXURY_NATIVE_PACKAGER_SENTINEL", &sentinel);
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancellation = Arc::clone(&cancel);
+        let lifecycle = Arc::new(BuildLifecycle::default());
+        let _active = lifecycle.start().unwrap();
+        let cancellation = Arc::clone(&lifecycle);
         let ready_signal = ready.clone();
         let request_cancel = thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(5);
             while !ready_signal.is_file() && Instant::now() < deadline {
                 thread::sleep(Duration::from_millis(10));
             }
-            cancellation.store(true, Ordering::Release);
+            cancellation.cancel();
         });
 
         let error =
-            supervise_native_packager(command, &cancel, Duration::from_secs(10)).unwrap_err();
+            supervise_native_packager(command, &lifecycle, Duration::from_secs(10)).unwrap_err();
         request_cancel.join().unwrap();
         thread::sleep(Duration::from_millis(1_200));
 
@@ -1508,8 +1610,9 @@ mod tests {
             .args(["--exact", &test_name, "--nocapture"])
             .env("LUXURY_NATIVE_PACKAGER_HELPER", "empty");
 
-        supervise_native_packager(command, &AtomicBool::new(false), Duration::from_secs(10))
-            .unwrap();
+        let lifecycle = Arc::new(BuildLifecycle::default());
+        let _active = lifecycle.start().unwrap();
+        supervise_native_packager(command, &lifecycle, Duration::from_secs(10)).unwrap();
     }
 
     fn native_packager_parent() {

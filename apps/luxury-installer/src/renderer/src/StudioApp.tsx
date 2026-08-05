@@ -12,6 +12,7 @@ import {
   Terminal,
   Trash2,
   TriangleAlert,
+  X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -45,6 +46,7 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
       onReplacePayload={() => void studio.importProject('replace')}
       onChooseEntrypoint={studio.chooseProjectEntrypoint}
       onBuild={() => void studio.buildProject()}
+      onCancelBuild={() => void studio.cancelProjectBuild()}
       folderPending={studio.folderPending}
       onDismissError={studio.dismissError}
     />
@@ -66,6 +68,7 @@ interface StudioViewProps {
   onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
   onBuild(): void
+  onCancelBuild(): void
   folderPending: boolean
   onDismissError(): void
 }
@@ -85,6 +88,7 @@ export function StudioView({
   onReplacePayload,
   onChooseEntrypoint,
   onBuild,
+  onCancelBuild,
   folderPending,
   onDismissError,
 }: StudioViewProps) {
@@ -173,6 +177,7 @@ export function StudioView({
             onReplacePayload={onReplacePayload}
             onChooseEntrypoint={onChooseEntrypoint}
             onBuild={onBuild}
+            onCancelBuild={onCancelBuild}
             onRevealBuildOutput={bridge.revealBuildOutput}
             onDismissError={onDismissError}
           />
@@ -287,6 +292,7 @@ function ProjectView({
   onReplacePayload,
   onChooseEntrypoint,
   onBuild,
+  onCancelBuild,
   onRevealBuildOutput,
   onDismissError,
 }: {
@@ -299,6 +305,7 @@ function ProjectView({
   onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
   onBuild(): void
+  onCancelBuild(): void
   onRevealBuildOutput(): Promise<void>
   onDismissError(): void
 }) {
@@ -340,7 +347,22 @@ function ProjectView({
           <code tabIndex={0} title={project.projectPath}>{project.projectPath}</code>
         </div>
         <div className="studio-project__header-actions">
-          {buildable ? (
+          {building ? (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={state.cancellationRequested}
+              onClick={onCancelBuild}
+            >
+              {state.cancellationRequested ? (
+                <SquareDashed className="spin" size={17} aria-hidden="true" />
+              ) : (
+                <X size={17} aria-hidden="true" />
+              )}
+              {state.cancellationRequested ? 'Отменяем…' : 'Отменить'}
+            </button>
+          ) : null}
+          {buildable && !building ? (
             <button className="secondary-button" type="submit" disabled={busy || !dirty}>
               {saving ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Save size={17} aria-hidden="true" />}
               {saving ? 'Сохраняем…' : 'Сохранить'}
@@ -382,7 +404,14 @@ function ProjectView({
       {building ? (
         <div className="studio-build-progress" role="status" aria-live="polite">
           <SquareDashed className="spin" size={19} aria-hidden="true" />
-          Rust проверяет проект и собирает готовый установщик…
+          <div>
+            <span>
+              {state.cancellationRequested
+                ? 'Останавливаем native-сборку и очищаем временные файлы…'
+                : 'Rust проверяет проект и собирает готовый установщик…'}
+            </span>
+            {state.cancellationError ? <small role="alert">{state.cancellationError}</small> : null}
+          </div>
         </div>
       ) : null}
 

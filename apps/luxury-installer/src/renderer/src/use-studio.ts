@@ -16,7 +16,12 @@ export type StudioView =
   | { kind: 'saving'; project: StudioProject }
   | { kind: 'importing'; project: StudioProject }
   | { kind: 'choosingEntrypoint'; project: StudioProject }
-  | { kind: 'building'; project: StudioProject }
+  | {
+      kind: 'building'
+      project: StudioProject
+      cancellationRequested: boolean
+      cancellationError: string | null
+    }
   | { kind: 'built'; result: StudioBuildResult }
   | { kind: 'error'; message: string; project: StudioProject | null }
 
@@ -33,6 +38,7 @@ export interface StudioController {
   chooseProjectEntrypoint(): Promise<string | null>
   revealProject(): Promise<void>
   buildProject(): Promise<void>
+  cancelProjectBuild(): Promise<void>
   dismissError(): void
 }
 
@@ -146,15 +152,49 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     if (!project || project.formatVersion !== 1) return
     const previous = view
     busy.current = true
-    setView({ kind: 'building', project })
+    setView({
+      kind: 'building',
+      project,
+      cancellationRequested: false,
+      cancellationError: null,
+    })
     try {
       const result = await bridge.buildProject()
       setView(result ? { kind: 'built', result } : previous)
       if (result) void refreshRecentProjects()
     } catch (error) {
-      setView({ kind: 'error', message: errorMessage(error), project })
+      setView(
+        errorCode(error) === 'project_build_cancelled'
+          ? { kind: 'ready', project }
+          : { kind: 'error', message: errorMessage(error), project },
+      )
     } finally {
       busy.current = false
+    }
+  }
+
+  async function cancelProjectBuild() {
+    if (view.kind !== 'building' || view.cancellationRequested) return
+    setView({ ...view, cancellationRequested: true, cancellationError: null })
+    try {
+      const result = await bridge.cancelProjectBuild()
+      if (!result.accepted) {
+        setView((current) =>
+          current.kind === 'building'
+            ? { ...current, cancellationRequested: false }
+            : current,
+        )
+      }
+    } catch (error) {
+      setView((current) =>
+        current.kind === 'building'
+          ? {
+              ...current,
+              cancellationRequested: false,
+              cancellationError: errorMessage(error),
+            }
+          : current,
+      )
     }
   }
 
@@ -217,6 +257,7 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     chooseProjectEntrypoint,
     revealProject,
     buildProject,
+    cancelProjectBuild,
     dismissError,
   }
 }
@@ -241,4 +282,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim()
     ? error.message
     : 'Неизвестная ошибка Studio.'
+}
+
+function errorCode(error: unknown): string | null {
+  if (!(error instanceof Error) || !('code' in error)) return null
+  const code = (error as Error & { code?: unknown }).code
+  return typeof code === 'string' ? code : null
 }

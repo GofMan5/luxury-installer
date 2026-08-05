@@ -25,6 +25,7 @@ spec → use case → adapter → CLI/GUI
 - Keep archive verification in `luxury-bundle` and project scanning/assembly in `luxury-compiler`.
 - Keep `luxury` as the human CLI and machine-facing stdio composition root.
 - Keep the Rust Tauri shell focused on lifecycle, exact commands/events, native dialogs, schema validation, and backend transport.
+- Keep Studio native-build cancellation pathless and registered before its blocking dialog/worker starts; one Rust lifecycle state must serve the button, close, timeout, descendant reaping, and temp cleanup.
 - Keep the React renderer presentation-only; do not duplicate Rust package or mutation policy in TypeScript.
 - Keep Setup package path/fingerprint, state root, native-dialog install base, and latest preparation authoritative in the Rust shell; renderer commands return consent/intent, not roots or package identity.
 - Keep completed-install reveal pathless. The Rust shell derives system paths from `luxury-system-roots`; renderer and helper frames never provide a reveal path.

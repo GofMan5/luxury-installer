@@ -525,6 +525,7 @@ pub fn run() {
             studio::reveal_project,
             studio::reveal_build_output,
             studio::build_project,
+            studio::cancel_project_build,
             setup::get_bootstrap,
             setup::choose_directory,
             setup::start_install,

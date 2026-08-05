@@ -1480,6 +1480,15 @@ code:focus-visible {
   color: var(--accent-strong);
 }
 
+.studio-build-progress > div {
+  display: grid;
+  gap: 3px;
+}
+
+.studio-build-progress small {
+  color: var(--danger);
+}
+
 .studio-build-result {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 14px;
