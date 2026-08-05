@@ -2,10 +2,6 @@ name: Native project build
 run-name: Native project build from ${{ github.ref_name }}
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/native-project.yml
-      - examples/matrix/**
   workflow_dispatch:
     inputs:
       windows_project:
