@@ -68,9 +68,10 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - --trusted-publisher-key and LUXURY_BACKEND_PATH are debug-only absolute paths
 - Setup is not a .luxpkg browser: no picker, drag-and-drop, file input, or renderer-supplied package/root path
 - Studio renderer sends typed settings plus pathless create/open/import/replace/entrypoint/reveal/reload/build/cancel-build intent; Rust shell owns native dialog results and active project/output/source paths. Cancel uses one Rust idle/active/cancelled lifecycle, reaps descendants, cleans work, and returns to the validated project.
+- Studio primary build runs native form validity; when dirty it awaits typed `updateProject` and Rust revalidation before sending pathless `buildProject`. A save error never reaches output selection or native packager.
 - Studio build UI shows monotonic elapsed time with tabular h:mm:ss formatting; the timer exists only in presentation, cleans its interval, is aria-hidden, and never fabricates Rust/native stages or percent.
 - Recent projects are a bounded six-item Rust-owned display list persisted atomically under app config; renderer reopens by validated index and Rust repeats validateProject before activation
-- Studio authoring loop is create/open -> edit validated settings -> native additive import or staged whole-payload replacement -> native entrypoint selection -> save/reload -> build/reveal output. Renderer never receives source paths or generic filesystem authority
+- Studio authoring loop is create/open -> edit validated settings -> native additive import or staged whole-payload replacement -> native entrypoint selection -> save/reload or save-and-build -> reveal output. Renderer never receives source paths or generic filesystem authority
 - Setup renderer receives display review + hasEntrypoint and sends pathless destination/install/uninstall/cancel/reveal/launch intent; completed user reveal uses the retained selection and completed system reveal uses luxury-system-roots, never renderer/helper path input
 - Exact capability grants event listen/unlisten, window dragging, and named app commands only
 - Renderer has no generic shell/fs/dialog/opener/process permission

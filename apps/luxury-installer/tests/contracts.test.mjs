@@ -369,6 +369,24 @@ test('Studio build elapsed time is monotonic, bounded, and silent to live region
   assert.match(styles, /\.studio-build-progress__elapsed\s*\{[\s\S]*?font-variant-numeric: tabular-nums;/)
 })
 
+test('Studio saves a valid dirty draft before starting the native build', async () => {
+  const [view, controller] = await Promise.all([
+    readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/use-studio.ts', import.meta.url), 'utf8'),
+  ])
+  assert.match(view, /disabled=\{busy \|\| !buildable\}/)
+  assert.doesNotMatch(view, /disabled=\{busy \|\| !buildable \|\| dirty\}/)
+  assert.match(view, /form\?\.reportValidity\(\)/)
+  assert.match(view, /onBuild\(dirty \? draft : undefined\)/)
+  assert.match(view, /Сохранить и \$\{nativeBuildLabel\(draft\.targetOs\)\.toLowerCase\(\)\}/)
+  assert.match(controller, /async function buildProject\(input\?: StudioProjectUpdate\)/)
+  assert.match(
+    controller,
+    /if \(input\) \{[\s\S]*?await bridge\.updateProject\(input\)[\s\S]*?kind: 'building'[\s\S]*?await bridge\.buildProject\(\)/,
+  )
+  assert.match(controller, /buildStarted && errorCode\(error\) === 'project_build_cancelled'/)
+})
+
 test('recent projects stay bounded display data and reopen by index only', () => {
   const recent = {
     projectPath: String.raw`C:\projects\demo`,

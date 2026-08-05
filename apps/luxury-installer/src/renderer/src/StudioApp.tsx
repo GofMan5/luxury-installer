@@ -45,7 +45,7 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
       onImportDirectory={() => void studio.importProject('directory')}
       onReplacePayload={() => void studio.importProject('replace')}
       onChooseEntrypoint={studio.chooseProjectEntrypoint}
-      onBuild={() => void studio.buildProject()}
+      onBuild={(input) => void studio.buildProject(input)}
       onCancelBuild={() => void studio.cancelProjectBuild()}
       folderPending={studio.folderPending}
       onDismissError={studio.dismissError}
@@ -67,7 +67,7 @@ interface StudioViewProps {
   onImportDirectory(): void
   onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
-  onBuild(): void
+  onBuild(input?: StudioProjectUpdate): void
   onCancelBuild(): void
   folderPending: boolean
   onDismissError(): void
@@ -304,7 +304,7 @@ function ProjectView({
   onImportDirectory(): void
   onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
-  onBuild(): void
+  onBuild(input?: StudioProjectUpdate): void
   onCancelBuild(): void
   onRevealBuildOutput(): Promise<void>
   onDismissError(): void
@@ -372,12 +372,21 @@ function ProjectView({
           <button
             className="primary-button"
             type="button"
-            disabled={busy || !buildable || dirty}
+            disabled={busy || !buildable}
             aria-describedby={buildable ? undefined : 'studio-signed-build-note'}
-            onClick={onBuild}
+            onClick={(event) => {
+              if (!event.currentTarget.form?.reportValidity()) return
+              onBuild(dirty ? draft : undefined)
+            }}
           >
-            {building ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Hammer size={17} aria-hidden="true" />}
-            {building ? 'Собираем…' : nativeBuildLabel(project.targetOs)}
+            {saving || building ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Hammer size={17} aria-hidden="true" />}
+            {saving
+              ? 'Сохраняем…'
+              : building
+                ? 'Собираем…'
+                : dirty
+                  ? `Сохранить и ${nativeBuildLabel(draft.targetOs).toLowerCase()}`
+                  : nativeBuildLabel(draft.targetOs)}
           </button>
         </div>
       </header>

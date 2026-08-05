@@ -75,7 +75,7 @@ No font download is required at runtime.
 
 - Empty: offer only `Новый проект` and `Открыть проект`; no HTML file input or drag-and-drop.
 - Loading: disable project actions while the Rust-owned native dialog and validation complete.
-- Ready: show the current project, manifest facts, payload counts/size, target, one primary build action, and secondary native-folder/reload actions in the rail.
+- Ready: show the current project, manifest facts, payload counts/size, target, one primary build action, and secondary native-folder/reload actions in the rail. A clean form says **Build**; a dirty valid form says **Save and build**, awaits the existing Rust save/revalidation, and starts native build only after success.
 - Refreshing: preserve the last validated summary, disable project actions, and show one bounded validation status until Rust returns the replacement summary.
 - Building: keep the primary build action disabled, expose one secondary **Cancel** action, and show a monotonic tabular elapsed clock from `0:00` through `h:mm:ss`. The clock is visual context and stays `aria-hidden` so the polite live region announces stage/cancellation changes instead of every second. Announce `cancelling + cleanup` through the existing live region, and keep retryable cancel transport errors inline while the build remains active. Confirmed cancellation returns to the same validated project without a terminal error card. Built: show the selected output path and one pathless Rust-owned reveal action from the validated result.
 - Error: preserve the active project when possible and keep one dismiss action.
@@ -122,7 +122,7 @@ No font download is required at runtime.
 ## Navigation and accessibility
 
 - Setup rail middle step follows the prepared action (`Установка`, `Обновление`, or `Восстановление`); the current step uses `aria-current="step"`.
-- Studio rail exposes `Новый проект`, `Открыть проект`, and—only with an active project—`Папка проекта` and `Перепроверить`, plus the current validated project identity. Payload actions stay beside the payload summary; entrypoint selection stays beside its field. Native-dialog actions disable while settings are unsaved so a returned summary cannot discard the draft.
+- Studio rail exposes `Новый проект`, `Открыть проект`, and—only with an active project—`Папка проекта` and `Перепроверить`, plus the current validated project identity. Payload actions stay beside the payload summary; entrypoint selection stays beside its field. Native-dialog actions disable while settings are unsaved so a returned summary cannot discard the draft; the primary build action is the exception because it saves and revalidates the exact draft before requesting any native output dialog.
 - Tab order follows visual order; native buttons and checkbox keep keyboard behavior.
 - Every screen has a labelled heading; errors use `role="alert"`; progress exposes numeric ARIA values.
 - Icons that repeat visible text are hidden from assistive technology.

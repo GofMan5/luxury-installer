@@ -37,7 +37,7 @@ export interface StudioController {
   importProject(kind: 'files' | 'directory' | 'replace'): Promise<void>
   chooseProjectEntrypoint(): Promise<string | null>
   revealProject(): Promise<void>
-  buildProject(): Promise<void>
+  buildProject(input?: StudioProjectUpdate): Promise<void>
   cancelProjectBuild(): Promise<void>
   dismissError(): void
 }
@@ -146,27 +146,41 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     }
   }
 
-  async function buildProject() {
+  async function buildProject(input?: StudioProjectUpdate) {
     if (busy.current) return
     const project = projectFrom(view)
     if (!project || project.formatVersion !== 1) return
     const previous = view
+    let currentProject = project
+    let buildStarted = false
     busy.current = true
-    setView({
-      kind: 'building',
-      project,
-      cancellationRequested: false,
-      cancellationError: null,
-    })
     try {
+      if (input) {
+        setView({ kind: 'saving', project })
+        currentProject = await bridge.updateProject(input)
+        void refreshRecentProjects()
+      }
+      setView({
+        kind: 'building',
+        project: currentProject,
+        cancellationRequested: false,
+        cancellationError: null,
+      })
+      buildStarted = true
       const result = await bridge.buildProject()
-      setView(result ? { kind: 'built', result } : previous)
-      if (result) void refreshRecentProjects()
+      setView(
+        result
+          ? { kind: 'built', result }
+          : input
+            ? { kind: 'ready', project: currentProject }
+            : previous,
+      )
+      if (result && !input) void refreshRecentProjects()
     } catch (error) {
       setView(
-        errorCode(error) === 'project_build_cancelled'
-          ? { kind: 'ready', project }
-          : { kind: 'error', message: errorMessage(error), project },
+        buildStarted && errorCode(error) === 'project_build_cancelled'
+          ? { kind: 'ready', project: currentProject }
+          : { kind: 'error', message: errorMessage(error), project: currentProject },
       )
     } finally {
       busy.current = false
