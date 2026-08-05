@@ -773,6 +773,7 @@ fn build_project_sync(
             "Соберите проект на выбранной целевой системе или через native build matrix.",
         ));
     }
+    let artifact_name = safe_artifact_name(&project.summary.name, &project.summary.package_id);
     let version = project
         .summary
         .version
@@ -799,10 +800,7 @@ fn build_project_sync(
             .set_parent(window)
             .set_title("Собрать Windows Setup")
             .set_directory(directory)
-            .set_file_name(format!(
-                "{}-{version}-Setup.exe",
-                project.summary.package_id
-            ))
+            .set_file_name(format!("{artifact_name}-{version}-Setup.exe"))
             .add_filter("Windows installer", &["exe"])
             .blocking_save_file()
             .map(file_path)
@@ -818,8 +816,7 @@ fn build_project_sync(
             .transpose()?
             .map(|parent| {
                 parent.join(format!(
-                    "{}-{version}-linux-{}",
-                    project.summary.package_id,
+                    "{artifact_name}-{version}-linux-{}",
                     match host.arch {
                         TargetArch::X86_64 => "x86_64",
                         TargetArch::Aarch64 => "aarch64",
@@ -832,7 +829,7 @@ fn build_project_sync(
             .set_parent(window)
             .set_title("Собрать macOS DMG")
             .set_directory(directory)
-            .set_file_name(format!("{}-{version}.dmg", project.summary.package_id))
+            .set_file_name(format!("{artifact_name}-{version}.dmg"))
             .add_filter("macOS installer", &["dmg"])
             .blocking_save_file()
             .map(file_path)
@@ -872,6 +869,33 @@ fn build_project_sync(
         output_path,
         project: summary,
     }))
+}
+
+fn safe_artifact_name(name: &str, package_id: &str) -> String {
+    const MAX_BYTES: usize = 96;
+    for candidate in [name, package_id] {
+        let mut output = String::new();
+        let mut separator = false;
+        for character in candidate.chars() {
+            if character.is_alphanumeric() {
+                let separator_bytes = usize::from(separator && !output.is_empty());
+                if output.len() + separator_bytes + character.len_utf8() > MAX_BYTES {
+                    break;
+                }
+                if separator_bytes != 0 {
+                    output.push('-');
+                }
+                output.push(character);
+                separator = false;
+            } else if !output.is_empty() {
+                separator = true;
+            }
+        }
+        if !output.is_empty() {
+            return output;
+        }
+    }
+    "app".to_owned()
 }
 
 fn file_path(path: tauri_plugin_dialog::FilePath) -> Result<PathBuf, PublicError> {
@@ -1460,6 +1484,30 @@ mod tests {
         assert!(licensed.has_license);
         assert!(StudioProject::from_backend(&path, project(2, Some("Terms"))).is_err());
         assert!(StudioProject::from_backend(&path, project(3, Some("bad\0text"))).is_err());
+    }
+
+    #[test]
+    fn native_output_suggestion_uses_a_bounded_human_product_name() {
+        assert_eq!(
+            safe_artifact_name("Luxury Demo", "dev.luxury.demo"),
+            "Luxury-Demo"
+        );
+        assert_eq!(
+            safe_artifact_name("  Пример / App:*  ", "dev.luxury.demo"),
+            "Пример-App"
+        );
+        assert_eq!(
+            safe_artifact_name("🚀", "dev.luxury.demo"),
+            "dev-luxury-demo"
+        );
+        assert_eq!(safe_artifact_name("🚀", ""), "app");
+        assert_eq!(
+            safe_artifact_name("demo\u{202e}exe", "dev.luxury.demo"),
+            "demo-exe"
+        );
+        let bounded = safe_artifact_name(&"Я".repeat(100), "dev.luxury.demo");
+        assert!(bounded.len() <= 96);
+        assert!(!bounded.ends_with('-'));
     }
 
     #[test]
