@@ -136,7 +136,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - allowUnsigned and acceptLicense are separate explicit consents; allowPublisherMigration is legacy/unsigned adoption authority only and never identity
 - Setup package/root/entrypoint authority stays in Rust shell
 - Uninstall is pathless from renderer and aggregate-only publicly
-- Launch is zero-argument, receipt-owned, direct, no shell/env/auto-run/forwarded streams; successful spawn is not cancellable
+- Launch is zero-argument, receipt-owned, direct, no shell/application args/auto-run/forwarded streams; successful spawn is not cancellable. Linux user/system launch executes kernel-owned `/proc/self/fd/N` for the verified entrypoint after optional credential drop with no original-path fallback; one read-only self descriptor remains inherited for script compatibility
 - Backend progress keeps one latest pending frame and flushes before non-progress/terminal output; shell validates counters and correlates events
 - Private signing keys never enter JSONL
 

@@ -7,6 +7,9 @@ use std::{
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::ffi::OsString;
 
+#[cfg(target_os = "linux")]
+use std::os::{fd::AsRawFd, unix::process::CommandExt};
+
 #[cfg(windows)]
 use std::os::windows::io::BorrowedHandle;
 
@@ -58,7 +61,7 @@ impl LocalLaunchAdapter {
         launch: F,
     ) -> Result<(), PortError>
     where
-        F: FnOnce(&Path, &Path) -> Result<(), PortError>,
+        F: FnOnce(&Path, &Path, &LaunchGuards) -> Result<(), PortError>,
     {
         if expected.scope() != self.scope {
             return Err(state_error(
@@ -102,8 +105,8 @@ impl LocalLaunchAdapter {
             validate_directory_chain(parent)?;
         }
 
-        let _guards = verify_entrypoint(&executable, file)?;
-        launch(&executable, &install_root)
+        let guards = verify_entrypoint(&executable, file)?;
+        launch(&executable, &install_root, &guards)
     }
 }
 
@@ -128,7 +131,41 @@ impl LaunchPort for LocalLaunchAdapter {
     }
 }
 
-fn launch_direct(executable: &Path, install_root: &Path) -> Result<(), PortError> {
+#[cfg(target_os = "linux")]
+fn launch_direct(
+    executable: &Path,
+    install_root: &Path,
+    guards: &LaunchGuards,
+) -> Result<(), PortError> {
+    let reaper = start_launch_reaper(executable)?;
+    let (mut command, executable_fd) = linux_verified_command(executable, &guards.file)?;
+    command
+        .current_dir(install_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: only one async-signal-safe fcntl runs after fork. Clearing CLOEXEC in the child
+    // keeps the verified descriptor available when the kernel invokes a shebang interpreter.
+    #[allow(unsafe_code)]
+    unsafe {
+        command.pre_exec(move || clear_linux_exec_cloexec(&executable_fd));
+    }
+    let child = command
+        .spawn()
+        .map_err(|source| io_error("launching verified entrypoint", executable, source))?;
+    if let Err(error) = reaper.send(child) {
+        let mut child = error.0;
+        let _ = child.wait();
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn launch_direct(
+    executable: &Path,
+    install_root: &Path,
+    _guards: &LaunchGuards,
+) -> Result<(), PortError> {
     #[cfg(unix)]
     let reaper = start_launch_reaper(executable)?;
     let child = Command::new(executable)
@@ -207,10 +244,21 @@ impl LaunchPort for LinuxSystemLaunchAdapter {
         let gid = self.gid;
         let groups = &self.groups;
         let environment = &self.environment;
-        self.inner
-            .launch_owned_entrypoint_with(expected, file, |executable, install_root| {
-                launch_as_linux_user(executable, install_root, uid, gid, groups, environment)
-            })
+        self.inner.launch_owned_entrypoint_with(
+            expected,
+            file,
+            |executable, install_root, guards| {
+                launch_as_linux_user(
+                    executable,
+                    install_root,
+                    &guards.file,
+                    uid,
+                    gid,
+                    groups,
+                    environment,
+                )
+            },
+        )
     }
 }
 
@@ -218,13 +266,12 @@ impl LaunchPort for LinuxSystemLaunchAdapter {
 fn launch_as_linux_user(
     executable: &Path,
     install_root: &Path,
+    verified: &File,
     uid: u32,
     gid: u32,
     groups: &[u32],
     environment: &[(OsString, OsString)],
 ) -> Result<(), PortError> {
-    use std::os::unix::process::CommandExt;
-
     if uid == 0 || gid == 0 || groups.contains(&0) {
         return Err(PortError::with_kind(
             PortErrorKind::Permission,
@@ -232,7 +279,7 @@ fn launch_as_linux_user(
         ));
     }
     let reaper = start_launch_reaper(executable)?;
-    let mut command = Command::new(executable);
+    let (mut command, executable_fd) = linux_verified_command(executable, verified)?;
     command
         .current_dir(install_root)
         .stdin(Stdio::null())
@@ -248,14 +295,15 @@ fn launch_as_linux_user(
         .collect::<Vec<_>>();
     let uid = rustix::process::Uid::from_raw(uid);
     let gid = rustix::process::Gid::from_raw(gid);
-    // SAFETY: the closure performs only raw credential syscalls in the post-fork child. It
-    // allocates nothing, touches no shared state, and returns before the exact direct exec.
+    // SAFETY: only async-signal-safe credential and fcntl syscalls run after fork. The descriptor
+    // names the already verified executable; no attacker-controlled pathname is resolved.
     #[allow(unsafe_code)]
     unsafe {
         command.pre_exec(move || {
             rustix::thread::set_thread_groups(&groups).map_err(rustix_error)?;
             rustix::thread::set_thread_res_gid(gid, gid, gid).map_err(rustix_error)?;
-            rustix::thread::set_thread_res_uid(uid, uid, uid).map_err(rustix_error)
+            rustix::thread::set_thread_res_uid(uid, uid, uid).map_err(rustix_error)?;
+            clear_linux_exec_cloexec(&executable_fd)
         });
     }
     let child = command.spawn().map_err(|source| {
@@ -270,6 +318,23 @@ fn launch_as_linux_user(
         let _ = child.wait();
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_verified_command(
+    executable: &Path,
+    verified: &File,
+) -> Result<(Command, File), PortError> {
+    let executable_fd = verified
+        .try_clone()
+        .map_err(|source| io_error("duplicating launch entrypoint", executable, source))?;
+    let program = format!("/proc/self/fd/{}", executable_fd.as_raw_fd());
+    Ok((Command::new(program), executable_fd))
+}
+
+#[cfg(target_os = "linux")]
+fn clear_linux_exec_cloexec(executable_fd: &File) -> std::io::Result<()> {
+    rustix::io::fcntl_setfd(executable_fd, rustix::io::FdFlags::empty()).map_err(rustix_error)
 }
 
 #[cfg(target_os = "linux")]
@@ -332,10 +397,13 @@ impl LaunchPort for MacosSystemLaunchAdapter {
         let groups = &self.groups;
         let username = &self.username;
         let home = &self.home;
-        self.inner
-            .launch_owned_entrypoint_with(expected, file, |executable, install_root| {
+        self.inner.launch_owned_entrypoint_with(
+            expected,
+            file,
+            |executable, install_root, _guards| {
                 launch_as_macos_user(executable, install_root, uid, gid, groups, username, home)
-            })
+            },
+        )
     }
 }
 
@@ -447,8 +515,10 @@ impl LaunchPort for WindowsSystemLaunchAdapter<'_> {
         file: &FileEntry,
     ) -> Result<(), PortError> {
         let parent_process = self.parent_process;
-        self.inner
-            .launch_owned_entrypoint_with(expected, file, |executable, install_root| {
+        self.inner.launch_owned_entrypoint_with(
+            expected,
+            file,
+            |executable, install_root, _guards| {
                 super::windows::launch_with_process_token(parent_process, executable, install_root)
                     .map_err(|source| {
                         io_error(
@@ -457,7 +527,8 @@ impl LaunchPort for WindowsSystemLaunchAdapter<'_> {
                             source,
                         )
                     })
-            })
+            },
+        )
     }
 }
 
@@ -481,7 +552,12 @@ struct LaunchGuards {
     _delete_guard: File,
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
+struct LaunchGuards {
+    file: File,
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
 struct LaunchGuards {
     _file: File,
 }
@@ -527,9 +603,10 @@ fn verify_entrypoint(path: &Path, expected: &FileEntry) -> Result<LaunchGuards, 
                 "launch entrypoint bytes or executable mode do not match the ownership receipt",
             ));
         }
-        // The verified descriptor remains live through spawn. Unix Command still resolves the
-        // pathname again; hostile same-user namespace replacement remains the documented ceiling.
-        Ok(LaunchGuards { _file: file })
+        #[cfg(target_os = "linux")]
+        return Ok(LaunchGuards { file });
+        #[cfg(not(target_os = "linux"))]
+        return Ok(LaunchGuards { _file: file });
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -549,7 +626,7 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     use std::{thread, time::Duration};
 
     use luxury_engine::{
@@ -722,9 +799,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_system_launch_rejects_root_identity_before_spawn() {
+        let verified = File::open("/bin/true").unwrap();
         let error = launch_as_linux_user(
             Path::new("/bin/true"),
             Path::new("/"),
+            &verified,
             0,
             1000,
             &[1000],
@@ -732,6 +811,33 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.kind(), PortErrorKind::Permission);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_launch_executes_verified_descriptor_after_path_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempdir().unwrap();
+        let executable = temp.path().join("app");
+        let verified_name = temp.path().join("verified-app");
+        let marker = temp.path().join("marker");
+        let marker_text = marker.to_str().unwrap();
+        assert!(!marker_text.contains('\''));
+        let script = |value: &str| format!("#!/bin/sh\nprintf '%s' '{value}' > '{marker_text}'\n");
+        fs::write(&executable, script("verified")).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let verified = File::open(&executable).unwrap();
+        fs::rename(&executable, &verified_name).unwrap();
+        fs::write(&executable, script("replacement")).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        launch_direct(&executable, temp.path(), &LaunchGuards { file: verified }).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !marker.is_file() && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(fs::read_to_string(marker).unwrap(), "verified");
     }
 
     #[cfg(target_os = "macos")]

@@ -56,6 +56,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Security
 
+- Linux receipt-owned launch now executes the exact descriptor that passed receipt hash/mode/link checks. User and post-credential-drop system launch use its kernel-owned `/proc/self/fd/N` name with no original-path fallback, so replacing the entrypoint name after verification cannot select attacker bytes; macOS launch and remaining parent/mapped-writer races stay documented.
 - Strict portable-path, archive, JSONL, Tauri invoke/event, receipt, journal, and privileged-helper boundaries.
 - Tauri's independent Linux `.deb`/RPM bundler receives only the isolated verified launcher and no build-binding or signing credentials; Rust accepts only its pinned, single fixed-width bundle-type marker patch and verifies every other launcher byte through the independently derived container hash.
 - Read-only destination permission and capacity preflight before installation starts.
