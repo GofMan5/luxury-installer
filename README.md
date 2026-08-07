@@ -194,8 +194,10 @@ Use the smallest command that proves the work:
 | `cargo project-installer -- <project> <native-output>` | User-facing native installer; the package is a temporary internal file. |
 | `cargo assemble -- <package.luxpkg>` | Low-level package-bound runner gate. |
 | `cargo runner-smoke` | Native packaged lifecycle, cancellation, recovery, launch, cleanup, and local evidence. |
+| `gh workflow run ci.yml --ref <branch> -f native_scope=<lane>` | One native lifecycle lane (`linux-x64`, `windows-x64`, or `macos-arm64`) without paying for the full matrix. |
 
 Windows, Linux, and macOS have different final container/signing flows. Follow the exact order in the [AI build guide](docs/ai-build.md); Rust release commands do not accept signing credentials.
+Use `native_scope=all` only when all three native lanes and the merged lifecycle evidence set are required. A single lane is development evidence for that host, not release evidence.
 
 ## Platform status
 

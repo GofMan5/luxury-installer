@@ -5,6 +5,17 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      native_scope:
+        description: Native lifecycle lanes to run
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - linux-x64
+          - windows-x64
+          - macos-arm64
 
 permissions:
   contents: read
@@ -73,27 +84,42 @@ jobs:
       - run: pnpm --dir apps/luxury-installer install --frozen-lockfile
       - run: cargo gui-check
 
+  native-selection:
+    name: Select native lifecycle lanes
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        name: Build the exact native matrix
+        shell: bash
+        env:
+          NATIVE_SCOPE: ${{ inputs.native_scope }}
+        run: |
+          set -euo pipefail
+          linux='{"os":"ubuntu-latest","label":"Linux-X64","evidence":"linux-x86_64.json","studio_path":"dist/luxury-installer-studio-*-linux-x86_64.tar.gz"}'
+          windows='{"os":"windows-latest","label":"Windows-X64","evidence":"windows-x86_64.json","studio_path":"dist/luxury-installer-studio-*-windows-x86_64"}'
+          macos='{"os":"macos-latest","label":"macOS-ARM64","evidence":"macos-aarch64.json","studio_path":"dist/luxury-installer-studio-*-macos-aarch64.tar.gz"}'
+          case "$NATIVE_SCOPE" in
+            all) matrix="{\"include\":[$linux,$windows,$macos]}" ;;
+            linux-x64) matrix="{\"include\":[$linux]}" ;;
+            windows-x64) matrix="{\"include\":[$windows]}" ;;
+            macos-arm64) matrix="{\"include\":[$macos]}" ;;
+            *) echo "unsupported native scope: $NATIVE_SCOPE" >&2; exit 64 ;;
+          esac
+          printf 'value=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+
   cross-platform:
     name: Full / ${{ matrix.label }}
     if: github.event_name == 'workflow_dispatch'
+    needs: native-selection
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            label: Linux-X64
-            evidence: linux-x86_64.json
-            studio_path: dist/luxury-installer-studio-*-linux-x86_64.tar.gz
-          - os: windows-latest
-            label: Windows-X64
-            evidence: windows-x86_64.json
-            studio_path: dist/luxury-installer-studio-*-windows-x86_64
-          - os: macos-latest
-            label: macOS-ARM64
-            evidence: macos-aarch64.json
-            studio_path: dist/luxury-installer-studio-*-macos-aarch64.tar.gz
+      matrix: ${{ fromJSON(needs.native-selection.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - if: runner.os == 'macOS'
@@ -217,7 +243,7 @@ jobs:
 
   evidence-set:
     name: Verify lifecycle evidence set
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.native_scope == 'all'
     needs: cross-platform
     runs-on: ubuntu-latest
     timeout-minutes: 20

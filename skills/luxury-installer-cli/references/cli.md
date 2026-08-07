@@ -74,6 +74,14 @@ gh workflow run native-project.yml --ref <branch> \
 
 Each input is a repository-relative directory containing a regular `luxury.toml`; absolute paths, `..`, link escape, missing projects, and target/host mismatch fail. The workflow does not mutate target or entrypoint. Download `native-project-development-Windows-X64`, `native-project-development-Linux-X64`, and `native-project-development-macOS-ARM64`, then verify every file against the included sorted `SHA256SUMS.txt`. These 14-day Actions artifacts are unsigned development outputs, not release or signing evidence. See `examples/matrix` for the expected layout.
 
+For repository lifecycle verification on only one native host, run:
+
+```text
+gh workflow run ci.yml --ref <branch> -f native_scope=macos-arm64
+```
+
+The accepted scopes are `linux-x64`, `windows-x64`, `macos-arm64`, and the default `all`. A single scope runs only that host lane and does not merge lifecycle evidence. `all` runs the three lanes in parallel and alone verifies the complete evidence set; it still is not production-signing proof.
+
 Minimal configuration shape:
 
 ```toml

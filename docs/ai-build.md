@@ -386,17 +386,14 @@ Routine pull-request/main CI:
 - isolated renderer + Tauri check;
 - focused Windows `cargo test --locked -p luxury-windows-trust -p luxury-platform -p luxury-system-roots -p luxury-process` trust/filesystem/root/process-tree boundary check.
 
-Every routine job has an explicit 10-60 minute timeout; the manual native matrix remains capped at 60 minutes per host and its evidence merge at 20 minutes. Do not remove these caps or replace the separated jobs with one serial mega-gate.
+Every routine job has an explicit 10-60 minute timeout; each manual native lane remains capped at 60 minutes and the all-host evidence merge at 20 minutes. Do not remove these caps or replace the separated jobs with one serial mega-gate.
 
 Manual `workflow_dispatch`:
 
-- full root-workspace tests;
-- standalone Tauri tests;
-- payload-free Studio assembly and `--verify-studio` on each native host;
-- inspected unsigned `.deb`/RPM development packaging on Linux, plus native runner smoke on Linux/Windows x86_64 and macOS ARM64;
-- exact schema-v2 evidence-set verification.
+- `native_scope=linux-x64`, `windows-x64`, or `macos-arm64` runs only that host's full root-workspace tests, standalone Tauri tests, payload-free Studio assembly, native installer build, runner smoke, and host-specific packaging checks;
+- `native_scope=all` is the default, runs all three lanes in parallel, and alone downloads/merges their exact schema-v2 lifecycle evidence set.
 
-That existing CI dispatch is the repository lifecycle/release gate. **Native project build** is the separate user-facing build matrix for checked-in target projects; neither substitutes for production release signing.
+A single scoped lane is development verification, not a partial release claim. The default `all` dispatch remains the repository lifecycle/release gate. **Native project build** is the separate user-facing build matrix for checked-in target projects; none substitutes for production release signing.
 
 Before a public release, still require native container signing, signer provenance, installer install/uninstall behavior, platform privilege review, recovery/cancellation on final bytes, and downloaded artifact verification. Current configuration is not release readiness.
 

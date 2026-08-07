@@ -37,6 +37,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Released Studio bundles carry a payload-free Setup template and Rust packager; Windows uses bundled SHA-256-pinned NSIS, while Linux writes and independently parses `.deb`/RPM in Rust without a source checkout or system packaging CLI.
 - Portable package paths now enforce the common 255-byte component ceiling, and Tauri reuses the same Rust validators instead of maintaining looser copies.
 - GitHub Actions are pinned to current Node 24 releases so hosted CI no longer depends on forced execution of deprecated Node 20 actions.
+- Manual lifecycle CI can run one selected Linux, Windows, or macOS native lane; the default all-host mode remains the only one that merges the complete evidence set.
 
 ### Fixed
 

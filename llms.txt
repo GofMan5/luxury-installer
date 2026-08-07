@@ -43,6 +43,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - cargo studio-assemble: verified payload-free authoring Studio with a native packager and host Setup template; Linux/macOS also publish a deterministic mode-preserving tar.gz, which is the CI upload unit
 - cargo project-installer -- <absolute-project> <absolute-native-output>: user-facing build; publishes Windows .exe, Linux .deb + .rpm directory, or macOS .dmg while keeping .luxpkg internal to the temporary work tree
 - .github/workflows/native-project.yml: manual user matrix for three repo-relative target projects; Rust confines paths to checkout, builds on Windows x64/Linux x64/macOS ARM64 in parallel, and uploads unsigned 14-day development artifacts with sorted SHA256SUMS.txt. It never rewrites target/entrypoint or creates a Release.
+- .github/workflows/ci.yml workflow_dispatch: `native_scope=linux-x64|windows-x64|macos-arm64` runs one host lifecycle lane; default `native_scope=all` runs all lanes and is the only mode that merges/verifies the three-host evidence set. A single lane is development evidence, not release evidence.
 - cargo runner-smoke: native packaged recovery/cancel/launch/lifecycle + Tauri entrypoint + cleanup + local evidence schema v2
 - cargo assemble -- <absolute-package.luxpkg>: verified unsigned-v1 runner for current host only
 - cargo windows-setup -- <absolute-package.luxpkg> <absolute-nsis-3.12.zip>: unsigned Windows development container
