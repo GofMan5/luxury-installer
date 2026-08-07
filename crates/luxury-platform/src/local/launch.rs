@@ -8,7 +8,10 @@ use std::{
 use std::ffi::OsString;
 
 #[cfg(target_os = "linux")]
-use std::os::{fd::AsRawFd, unix::process::CommandExt};
+use std::os::{
+    fd::{AsRawFd, OwnedFd},
+    unix::process::CommandExt,
+};
 
 #[cfg(windows)]
 use std::os::windows::io::BorrowedHandle;
@@ -105,7 +108,7 @@ impl LocalLaunchAdapter {
             validate_directory_chain(parent)?;
         }
 
-        let guards = verify_entrypoint(&executable, file)?;
+        let guards = verify_entrypoint(&executable, &install_root, file)?;
         launch(&executable, &install_root, &guards)
     }
 }
@@ -137,18 +140,18 @@ fn launch_direct(
     install_root: &Path,
     guards: &LaunchGuards,
 ) -> Result<(), PortError> {
+    let working_directory = clone_linux_working_directory(install_root, &guards.working_directory)?;
     let reaper = start_launch_reaper(executable)?;
     let (mut command, executable_fd) = linux_verified_command(executable, &guards.file)?;
     command
-        .current_dir(install_root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    // SAFETY: only one async-signal-safe fcntl runs after fork. Clearing CLOEXEC in the child
-    // keeps the verified descriptor available when the kernel invokes a shebang interpreter.
+    // SAFETY: only async-signal-safe fchdir and fcntl run after fork. The opened directory and
+    // executable descriptors bind both process inputs without resolving their old pathnames.
     #[allow(unsafe_code)]
     unsafe {
-        command.pre_exec(move || clear_linux_exec_cloexec(&executable_fd));
+        command.pre_exec(move || prepare_linux_exec(&executable_fd, &working_directory));
     }
     let child = command
         .spawn()
@@ -251,7 +254,7 @@ impl LaunchPort for LinuxSystemLaunchAdapter {
                 launch_as_linux_user(
                     executable,
                     install_root,
-                    &guards.file,
+                    guards,
                     uid,
                     gid,
                     groups,
@@ -266,7 +269,7 @@ impl LaunchPort for LinuxSystemLaunchAdapter {
 fn launch_as_linux_user(
     executable: &Path,
     install_root: &Path,
-    verified: &File,
+    guards: &LaunchGuards,
     uid: u32,
     gid: u32,
     groups: &[u32],
@@ -278,10 +281,10 @@ fn launch_as_linux_user(
             "system entrypoint launch identity must be unprivileged",
         ));
     }
+    let working_directory = clone_linux_working_directory(install_root, &guards.working_directory)?;
     let reaper = start_launch_reaper(executable)?;
-    let (mut command, executable_fd) = linux_verified_command(executable, verified)?;
+    let (mut command, executable_fd) = linux_verified_command(executable, &guards.file)?;
     command
-        .current_dir(install_root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -295,15 +298,15 @@ fn launch_as_linux_user(
         .collect::<Vec<_>>();
     let uid = rustix::process::Uid::from_raw(uid);
     let gid = rustix::process::Gid::from_raw(gid);
-    // SAFETY: only async-signal-safe credential and fcntl syscalls run after fork. The descriptor
-    // names the already verified executable; no attacker-controlled pathname is resolved.
+    // SAFETY: only async-signal-safe credential, fchdir and fcntl syscalls run after fork. Both
+    // launch descriptors are already verified; no attacker-controlled pathname is resolved.
     #[allow(unsafe_code)]
     unsafe {
         command.pre_exec(move || {
             rustix::thread::set_thread_groups(&groups).map_err(rustix_error)?;
             rustix::thread::set_thread_res_gid(gid, gid, gid).map_err(rustix_error)?;
             rustix::thread::set_thread_res_uid(uid, uid, uid).map_err(rustix_error)?;
-            clear_linux_exec_cloexec(&executable_fd)
+            prepare_linux_exec(&executable_fd, &working_directory)
         });
     }
     let child = command.spawn().map_err(|source| {
@@ -330,6 +333,26 @@ fn linux_verified_command(
         .map_err(|source| io_error("duplicating launch entrypoint", executable, source))?;
     let program = format!("/proc/self/fd/{}", executable_fd.as_raw_fd());
     Ok((Command::new(program), executable_fd))
+}
+
+#[cfg(target_os = "linux")]
+fn clone_linux_working_directory(
+    install_root: &Path,
+    working_directory: &OwnedFd,
+) -> Result<OwnedFd, PortError> {
+    rustix::io::fcntl_dupfd_cloexec(working_directory, 0).map_err(|source| {
+        io_error(
+            "duplicating launch working directory",
+            install_root,
+            rustix_error(source),
+        )
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_linux_exec(executable_fd: &File, working_directory: &OwnedFd) -> std::io::Result<()> {
+    rustix::process::fchdir(working_directory).map_err(rustix_error)?;
+    clear_linux_exec_cloexec(executable_fd)
 }
 
 #[cfg(target_os = "linux")]
@@ -556,6 +579,7 @@ struct LaunchGuards {
 #[cfg(target_os = "linux")]
 struct LaunchGuards {
     file: File,
+    working_directory: OwnedFd,
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
@@ -563,9 +587,14 @@ struct LaunchGuards {
     _file: File,
 }
 
-fn verify_entrypoint(path: &Path, expected: &FileEntry) -> Result<LaunchGuards, PortError> {
+fn verify_entrypoint(
+    path: &Path,
+    install_root: &Path,
+    expected: &FileEntry,
+) -> Result<LaunchGuards, PortError> {
     #[cfg(windows)]
     {
+        let _ = install_root;
         let (path, parent_guards) = super::windows::open_real_parent_chain(path)
             .map_err(|source| io_error("opening launch parent directories", path, source))?;
         let (mut write_guard, delete_guard) = super::windows::open_launch_guards_nofollow(&path)
@@ -593,10 +622,35 @@ fn verify_entrypoint(path: &Path, expected: &FileEntry) -> Result<LaunchGuards, 
         })
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::PermissionsExt;
 
+        let working_directory = super::unix::open_directory(install_root)
+            .map_err(|source| io_error("opening launch working directory", install_root, source))?;
+        let mut file =
+            super::unix::open_file_beneath(&working_directory, expected.path.to_native_path())
+                .map_err(|source| io_error("opening launch entrypoint", path, source))?;
+        let (size, sha256) = hash_opened_file(path, &mut file, false)?;
+        let metadata = validate_open_regular(path, &file, false)?;
+        let executable = metadata.permissions().mode() & 0o111 != 0;
+        if size != expected.size || sha256 != expected.sha256 || executable != expected.executable {
+            return Err(PortError::with_kind(
+                PortErrorKind::Integrity,
+                "launch entrypoint bytes or executable mode do not match the ownership receipt",
+            ));
+        }
+        Ok(LaunchGuards {
+            file,
+            working_directory,
+        })
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _ = install_root;
         let mut file = super::transaction::open_existing_nofollow(path)?;
         let (size, sha256) = hash_opened_file(path, &mut file, false)?;
         let metadata = validate_open_regular(path, &file, false)?;
@@ -607,15 +661,12 @@ fn verify_entrypoint(path: &Path, expected: &FileEntry) -> Result<LaunchGuards, 
                 "launch entrypoint bytes or executable mode do not match the ownership receipt",
             ));
         }
-        #[cfg(target_os = "linux")]
-        return Ok(LaunchGuards { file });
-        #[cfg(not(target_os = "linux"))]
-        return Ok(LaunchGuards { _file: file });
+        Ok(LaunchGuards { _file: file })
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (path, expected);
+        let _ = (path, install_root, expected);
         Err(PortError::with_kind(
             PortErrorKind::Unsupported,
             "launch verification is unsupported on this platform",
@@ -737,6 +788,11 @@ mod tests {
             LocalLaunchAdapter::new(&self.install_base, &self.state_root)
         }
 
+        #[cfg(any(target_os = "linux", windows))]
+        fn install_root(&self) -> PathBuf {
+            self.install_base.join(self.receipt.directory().as_str())
+        }
+
         fn paths(&self) -> super::super::transaction::TransactionPaths {
             transaction_paths(
                 &self.install_base,
@@ -803,11 +859,14 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_system_launch_rejects_root_identity_before_spawn() {
-        let verified = File::open("/bin/true").unwrap();
+        let guards = LaunchGuards {
+            file: File::open("/bin/true").unwrap(),
+            working_directory: super::super::unix::open_directory(Path::new("/")).unwrap(),
+        };
         let error = launch_as_linux_user(
             Path::new("/bin/true"),
             Path::new("/"),
-            &verified,
+            &guards,
             0,
             1000,
             &[1000],
@@ -835,13 +894,75 @@ mod tests {
         fs::rename(&executable, &verified_name).unwrap();
         fs::write(&executable, script("replacement")).unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
-        launch_direct(&executable, temp.path(), &LaunchGuards { file: verified }).unwrap();
+        let working_directory = super::super::unix::open_directory(temp.path()).unwrap();
+        launch_direct(
+            &executable,
+            temp.path(),
+            &LaunchGuards {
+                file: verified,
+                working_directory,
+            },
+        )
+        .unwrap();
 
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while !marker.is_file() && std::time::Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(fs::read_to_string(marker).unwrap(), "verified");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_launch_keeps_the_verified_working_directory_after_path_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut fixture = LaunchFixture::new();
+        let install_root = fixture.install_root();
+        let moved_root = fixture._temp.path().join("verified-root");
+        let marker = fixture._temp.path().join("cwd-marker");
+        let marker_text = marker.to_str().unwrap();
+        assert!(!marker_text.contains('\''));
+        fs::write(install_root.join("identity"), b"verified").unwrap();
+        fs::write(
+            &fixture.installed,
+            format!("#!/bin/sh\nread value < identity\nprintf '%s' \"$value\" > '{marker_text}'\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&fixture.installed, fs::Permissions::from_mode(0o755)).unwrap();
+        let bytes = fs::read(&fixture.installed).unwrap();
+        fixture.file.size = bytes.len() as u64;
+        fixture.file.sha256 = Sha256Digest::parse(hex::encode(Sha256::digest(&bytes))).unwrap();
+        fixture.file.executable = true;
+        let guards = verify_entrypoint(&fixture.installed, &install_root, &fixture.file).unwrap();
+        assert!(
+            rustix::io::fcntl_getfd(&guards.file)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+        assert!(
+            rustix::io::fcntl_getfd(&guards.working_directory)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+
+        fs::rename(&install_root, &moved_root).unwrap();
+        fs::create_dir(&install_root).unwrap();
+        fs::write(install_root.join("identity"), b"replacement").unwrap();
+        launch_direct(&fixture.installed, &install_root, &guards).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !matches!(fs::read_to_string(&marker), Ok(value) if !value.is_empty())
+            && std::time::Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(fs::read_to_string(marker).unwrap(), "verified");
+        assert!(
+            rustix::io::fcntl_getfd(&guards.working_directory)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -913,7 +1034,8 @@ mod tests {
         use std::fs::OpenOptions;
 
         let fixture = LaunchFixture::new();
-        let _guards = verify_entrypoint(&fixture.installed, &fixture.file).unwrap();
+        let _guards =
+            verify_entrypoint(&fixture.installed, &fixture.install_root(), &fixture.file).unwrap();
 
         assert!(
             OpenOptions::new()
@@ -945,13 +1067,14 @@ mod tests {
             .unwrap();
         assert!(status.success(), "creating directory junction failed");
 
-        let rejection = match verify_entrypoint(&fixture.installed, &fixture.file) {
-            Ok(guards) => {
-                drop(guards);
-                None
-            }
-            Err(error) => Some(error),
-        };
+        let rejection =
+            match verify_entrypoint(&fixture.installed, &fixture.install_root(), &fixture.file) {
+                Ok(guards) => {
+                    drop(guards);
+                    None
+                }
+                Err(error) => Some(error),
+            };
         fs::remove_dir(parent).unwrap();
         fs::rename(original, parent).unwrap();
         let error = rejection.unwrap_or_else(|| panic!("replaced parent reparse point accepted"));
