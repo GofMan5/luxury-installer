@@ -8,10 +8,10 @@ use std::{
 use std::ffi::OsString;
 
 #[cfg(target_os = "linux")]
-use std::os::{
-    fd::{AsRawFd, OwnedFd},
-    unix::process::CommandExt,
-};
+use std::os::fd::AsRawFd;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::os::{fd::OwnedFd, unix::process::CommandExt};
 
 #[cfg(windows)]
 use std::os::windows::io::BorrowedHandle;
@@ -140,7 +140,7 @@ fn launch_direct(
     install_root: &Path,
     guards: &LaunchGuards,
 ) -> Result<(), PortError> {
-    let working_directory = clone_linux_working_directory(install_root, &guards.working_directory)?;
+    let working_directory = clone_working_directory(install_root, &guards.working_directory)?;
     let reaper = start_launch_reaper(executable)?;
     let (mut command, executable_fd) = linux_verified_command(executable, &guards.file)?;
     command
@@ -163,7 +163,35 @@ fn launch_direct(
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn launch_direct(
+    executable: &Path,
+    install_root: &Path,
+    guards: &LaunchGuards,
+) -> Result<(), PortError> {
+    let working_directory = clone_working_directory(install_root, &guards.working_directory)?;
+    let reaper = start_launch_reaper(executable)?;
+    let mut command = Command::new(executable);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: fchdir is async-signal-safe and the descriptor used no-follow traversal.
+    #[allow(unsafe_code)]
+    unsafe {
+        command.pre_exec(move || rustix::process::fchdir(&working_directory).map_err(rustix_error));
+    }
+    let child = command
+        .spawn()
+        .map_err(|source| io_error("launching owned entrypoint", executable, source))?;
+    if let Err(error) = reaper.send(child) {
+        let mut child = error.0;
+        let _ = child.wait();
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn launch_direct(
     executable: &Path,
     install_root: &Path,
@@ -281,7 +309,7 @@ fn launch_as_linux_user(
             "system entrypoint launch identity must be unprivileged",
         ));
     }
-    let working_directory = clone_linux_working_directory(install_root, &guards.working_directory)?;
+    let working_directory = clone_working_directory(install_root, &guards.working_directory)?;
     let reaper = start_launch_reaper(executable)?;
     let (mut command, executable_fd) = linux_verified_command(executable, &guards.file)?;
     command
@@ -335,15 +363,15 @@ fn linux_verified_command(
     Ok((Command::new(program), executable_fd))
 }
 
-#[cfg(target_os = "linux")]
-fn clone_linux_working_directory(
-    install_root: &Path,
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn clone_working_directory(
+    context: &Path,
     working_directory: &OwnedFd,
 ) -> Result<OwnedFd, PortError> {
     rustix::io::fcntl_dupfd_cloexec(working_directory, 0).map_err(|source| {
         io_error(
             "duplicating launch working directory",
-            install_root,
+            context,
             rustix_error(source),
         )
     })
@@ -360,7 +388,7 @@ fn clear_linux_exec_cloexec(executable_fd: &File) -> std::io::Result<()> {
     rustix::io::fcntl_setfd(executable_fd, rustix::io::FdFlags::empty()).map_err(rustix_error)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn rustix_error(error: rustix::io::Errno) -> std::io::Error {
     std::io::Error::from_raw_os_error(error.raw_os_error())
 }
@@ -423,8 +451,16 @@ impl LaunchPort for MacosSystemLaunchAdapter {
         self.inner.launch_owned_entrypoint_with(
             expected,
             file,
-            |executable, install_root, _guards| {
-                launch_as_macos_user(executable, install_root, uid, gid, groups, username, home)
+            |executable, _install_root, guards| {
+                launch_as_macos_user(
+                    executable,
+                    &guards.working_directory,
+                    uid,
+                    gid,
+                    groups,
+                    username,
+                    home,
+                )
             },
         )
     }
@@ -433,15 +469,13 @@ impl LaunchPort for MacosSystemLaunchAdapter {
 #[cfg(target_os = "macos")]
 fn launch_as_macos_user(
     executable: &Path,
-    install_root: &Path,
+    verified_working_directory: &OwnedFd,
     uid: u32,
     gid: u32,
     groups: &[u32],
     username: &OsString,
     home: &OsString,
 ) -> Result<(), PortError> {
-    use std::os::unix::process::CommandExt;
-
     if uid == 0 || gid == 0 || groups.contains(&0) || username.is_empty() || home.is_empty() {
         return Err(PortError::with_kind(
             PortErrorKind::Permission,
@@ -459,6 +493,7 @@ fn launch_as_macos_user(
         .copied()
         .map(|group| group as libc::gid_t)
         .collect::<Vec<_>>();
+    let working_directory = clone_working_directory(executable, verified_working_directory)?;
     let uid_argument = uid.to_string();
     let reaper = start_launch_reaper(executable)?;
     let mut command = Command::new("/bin/launchctl");
@@ -466,7 +501,6 @@ fn launch_as_macos_user(
         .arg("asuser")
         .arg(uid_argument)
         .arg(executable)
-        .current_dir(install_root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -475,9 +509,9 @@ fn launch_as_macos_user(
         .env("HOME", home)
         .env("USER", username)
         .env("LOGNAME", username);
-    // SAFETY: only async-signal-safe credential syscalls run in the post-fork child. The fixed
-    // launchctl broker then enters the target user's bootstrap namespace and direct-execs the
-    // already verified entrypoint without application arguments.
+    // SAFETY: only async-signal-safe credential and fchdir syscalls run after fork. launchctl
+    // inherits the verified cwd, enters the user's bootstrap namespace and direct-execs the
+    // receipt-owned pathname without application arguments.
     #[allow(unsafe_code)]
     unsafe {
         command.pre_exec(move || {
@@ -487,7 +521,7 @@ fn launch_as_macos_user(
             {
                 Err(std::io::Error::last_os_error())
             } else {
-                Ok(())
+                rustix::process::fchdir(&working_directory).map_err(rustix_error)
             }
         });
     }
@@ -582,7 +616,13 @@ struct LaunchGuards {
     working_directory: OwnedFd,
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
+#[cfg(target_os = "macos")]
+struct LaunchGuards {
+    _file: File,
+    working_directory: OwnedFd,
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 struct LaunchGuards {
     _file: File,
 }
@@ -646,7 +686,31 @@ fn verify_entrypoint(
         })
     }
 
-    #[cfg(all(unix, not(target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let working_directory = super::unix::open_directory(install_root)
+            .map_err(|source| io_error("opening launch working directory", install_root, source))?;
+        let mut file =
+            super::unix::open_file_beneath(&working_directory, expected.path.to_native_path())
+                .map_err(|source| io_error("opening launch entrypoint", path, source))?;
+        let (size, sha256) = hash_opened_file(path, &mut file, false)?;
+        let metadata = validate_open_regular(path, &file, false)?;
+        let executable = metadata.permissions().mode() & 0o111 != 0;
+        if size != expected.size || sha256 != expected.sha256 || executable != expected.executable {
+            return Err(PortError::with_kind(
+                PortErrorKind::Integrity,
+                "launch entrypoint bytes or executable mode do not match the ownership receipt",
+            ));
+        }
+        Ok(LaunchGuards {
+            _file: file,
+            working_directory,
+        })
+    }
+
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     {
         use std::os::unix::fs::PermissionsExt;
 
@@ -681,7 +745,7 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     use std::{thread, time::Duration};
 
     use luxury_engine::{
@@ -788,7 +852,7 @@ mod tests {
             LocalLaunchAdapter::new(&self.install_base, &self.state_root)
         }
 
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(any(target_os = "linux", target_os = "macos", windows))]
         fn install_root(&self) -> PathBuf {
             self.install_base.join(self.receipt.directory().as_str())
         }
@@ -967,10 +1031,63 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn macos_launch_keeps_the_verified_working_directory_after_path_replacement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut fixture = LaunchFixture::new();
+        let install_root = fixture.install_root();
+        let moved_root = fixture._temp.path().join("verified-root");
+        let marker = fixture._temp.path().join("cwd-marker");
+        let marker_text = marker.to_str().unwrap();
+        assert!(!marker_text.contains('\''));
+        fs::write(install_root.join("identity"), b"verified").unwrap();
+        let script =
+            format!("#!/bin/sh\nread value < identity\nprintf '%s' \"$value\" > '{marker_text}'\n");
+        fs::write(&fixture.installed, &script).unwrap();
+        fs::set_permissions(&fixture.installed, fs::Permissions::from_mode(0o755)).unwrap();
+        fixture.file.size = script.len() as u64;
+        fixture.file.sha256 =
+            Sha256Digest::parse(hex::encode(Sha256::digest(script.as_bytes()))).unwrap();
+        fixture.file.executable = true;
+        let guards = verify_entrypoint(&fixture.installed, &install_root, &fixture.file).unwrap();
+        assert!(
+            rustix::io::fcntl_getfd(&guards.working_directory)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+
+        fs::rename(&install_root, &moved_root).unwrap();
+        let replacement = install_root.join(fixture.file.path.to_native_path());
+        fs::create_dir_all(replacement.parent().unwrap()).unwrap();
+        fs::write(install_root.join("identity"), b"replacement").unwrap();
+        fs::write(&replacement, script).unwrap();
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o755)).unwrap();
+        launch_direct(&fixture.installed, &install_root, &guards).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !matches!(fs::read_to_string(&marker), Ok(value) if !value.is_empty())
+            && std::time::Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(fs::read_to_string(marker).unwrap(), "verified");
+        assert!(
+            rustix::io::fcntl_getfd(&guards.working_directory)
+                .unwrap()
+                .contains(rustix::io::FdFlags::CLOEXEC)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn macos_system_launch_rejects_root_identity_before_spawn() {
+        let guards = LaunchGuards {
+            _file: File::open("/usr/bin/true").unwrap(),
+            working_directory: super::super::unix::open_directory(Path::new("/")).unwrap(),
+        };
         let error = launch_as_macos_user(
             Path::new("/usr/bin/true"),
-            Path::new("/"),
+            &guards.working_directory,
             0,
             20,
             &[20],

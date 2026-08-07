@@ -63,5 +63,6 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Read-only destination permission and capacity preflight before installation starts.
 - Versioned private user state rejects legacy broad ACL/modes without rewriting or trusting old receipts and journals.
 - Core manifest validation bounds optional package descriptions instead of relying on Studio-only checks.
+- macOS launch now keeps the verified no-follow install root as cwd through direct user spawn and post-credential-drop `launchctl asuser`; executable pathname replacement remains an explicit ceiling.
 
 > No production release has been published yet. See the blockers in [README.md](README.md#security-model).
