@@ -6,7 +6,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Added
 
-- An evidence-based product capability roadmap comparing the current installer with established tools and prioritizing typed shortcuts, associations, components, prerequisites and secure updates without adding arbitrary package scripts.
+- An evidence-based master roadmap from preview to signed 1.0 production: competitor matrix, best-in-class metrics, product workstreams, version milestones, exact vertical-slice queue, performance budgets, release scorecard, typed shortcuts/associations/components/prerequisites/updater priorities, and deliberate exclusion of arbitrary package scripts.
 - Rust-first `.luxpkg` compiler, verifier, transactional installer, repair, uninstall, rollback/recovery, receipts, and explicit receipt-owned launch.
 - Tauri 2 Studio and bound-payload Setup for Windows, Linux, and macOS development workflows.
 - Publisher-authenticated v2 packages, v3 key rotation, and schema-v3 plain-text license consent.

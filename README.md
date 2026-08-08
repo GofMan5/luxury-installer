@@ -229,7 +229,7 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md). Keep changes as small vertical sl
 
 Questions belong in [Discussions](https://github.com/GofMan5/luxury-installer/discussions); reproducible defects use the issue forms. See [SUPPORT.md](SUPPORT.md), [CHANGELOG.md](CHANGELOG.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-Product capability gaps and their delivery order are maintained in the [installer product roadmap](docs/product-roadmap.md). It distinguishes features to implement from script-era mechanisms deliberately replaced by typed, reversible Rust actions.
+The [installer product roadmap](docs/product-roadmap.md) is the single development plan from the current preview through signed 1.0 production. It contains the competitor matrix, P0–P3 priorities, workstreams, version milestones, exact slice order, performance budgets and hard Windows/Linux/macOS release gates. It also distinguishes useful capabilities from script-era mechanisms deliberately replaced by typed, reversible Rust actions.
 
 ## License
 

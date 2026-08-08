@@ -12,6 +12,81 @@ Reference surfaces reviewed for the comparison:
 - [Advanced Installer User Guide](https://www.advancedinstaller.com/user-guide/) — GUI-authored shortcuts, associations, services, prerequisites, updates, environment, localization and enterprise deployment surfaces;
 - [InstallBuilder product overview](https://installbuilder.com/) — cross-platform components, downloadable components, desktop integration, text/silent modes and DMG workflows.
 
+Production and distribution references additionally include the [Windows Installer portal](https://learn.microsoft.com/en-us/windows/win32/msi/windows-installer-portal), [MSIX overview](https://learn.microsoft.com/en-us/windows/msix/overview), [Apple notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution), [Flatpak documentation](https://docs.flatpak.org/en/latest/), [AppImage documentation](https://docs.appimage.org/), [Reproducible Builds](https://reproducible-builds.org/docs/), and [SLSA 1.1](https://slsa.dev/spec/v1.1/).
+
+## North star: what "better than the top installers" means
+
+The target is not the largest directive count. Luxury Installer wins only when a real application can ship faster and with fewer unsafe escape hatches while retaining the mature capabilities users expect.
+
+| Dimension | Best-in-class outcome | Measurement |
+| --- | --- | --- |
+| Authoring | A first useful installer is produced from Studio or CLI without learning a scripting language. | Clean-project time-to-first native artifact under 10 minutes, excluding toolchain download. |
+| Correctness | Install, update, repair, cancel, crash recovery and uninstall converge on one receipt-owned state. | Native fault-injection matrix has no orphaned claimed files, lost modified files, or false success. |
+| Security | Package and native identity, privileges, paths and integrations are fail-closed. | Threat model and attack-path review for every trust-boundary slice; zero accepted high/critical release findings. |
+| Portability | One portable intent maps to native Windows, Linux and macOS behavior without pretending the OSes are identical. | Every advertised capability has explicit per-OS adapter/evidence rows. |
+| Automation | Humans, CI and coding agents receive the same typed contract. | Live CLI help, JSONL, Studio, docs and AI skill drift tests remain green. |
+| Operations | Enterprise deployment is observable and deterministic. | Stable exit codes, JSON inventory/plan/result, redacted logs, idempotent unattended flows and rollback records. |
+| Performance | Large packages build and install without whole-payload memory growth or serial mega-gates. | Streaming I/O; bounded RSS; published clean/incremental build and install benchmarks. |
+| Supply chain | Every public byte is attributable, signed and re-verifiable after download. | Checksums, SBOM, provenance, native signatures/notarization and downloaded-final-byte gates. |
+| Accessibility | Studio and Setup work with keyboard, scaling, reduced motion and assistive technology. | Automated contract tests plus native manual checklist at every release candidate. |
+| Maintainability | New capability extends a vertical slice instead of a generic scripting runtime. | No `common` dumping ground, speculative factory, renderer policy copy, or unbounded plug-in surface. |
+
+## Definition of full production
+
+Version 1.0 is allowed only when every mandatory gate below is evidenced on the exact release commit and downloaded release assets.
+
+### Product gates
+
+- Studio can create, reopen, validate and build a real target project on all advertised native hosts.
+- Setup supports fresh install, update, exact repair, cancellation, recovery, uninstall, launch and reveal for user and system scope.
+- P0 desktop integration, associations, components, prerequisite preflight and secure updater are complete across supported platforms or explicitly absent from that platform's advertised surface.
+- Headless inventory/install/uninstall/update flows have stable JSON, exit codes and bounded diagnostics suitable for MDM/CI.
+- English and Russian are complete compile-time locales; fallback behavior is deterministic and never fetches UI text.
+- All public documentation describes only the live parser and packaged behavior.
+
+### Native release gates
+
+| Platform | Production artifact | Mandatory proof |
+| --- | --- | --- |
+| Windows 10/11 x64 + ARM64 | Authenticode-signed `Setup.exe`; optional MSI/MSIX only after demand review | Signed inner Tauri/backend, assembled outer NSIS, signed outer container, signer equality, SmartScreen-compatible metadata, user/system lifecycle, shortcuts/associations/services, reboot cases, downloaded-byte re-verification. |
+| Linux supported distributions x64 + ARM64 | Signed repository-ready `.deb` and `.rpm`; optional Flatpak/AppImage milestone later | GTK advisory removed, installed root-owned helper/polkit lifecycle, package-manager install/upgrade/remove, desktop/MIME integration, distro metadata/signing, downloaded extraction/hash/mode/owner validation. |
+| macOS 13+ Intel + Apple Silicon | Developer ID-signed, notarized, stapled `.dmg` with signed `.app`/LaunchDaemon | Nested designated requirements, Gatekeeper, notarization/staple, install/update/uninstall, LaunchServices associations, helper lifecycle, both architectures, downloaded DMG re-verification. |
+
+### Security and reliability gates
+
+- Repository threat model covers package supply chain, Studio authoring, JSONL, renderer/Tauri, helpers, filesystem transactions, updater, OS integrations and CI/release.
+- Two independent source-first reviews plus review-of-review close every release-blocking finding.
+- Path/link/alias, archive-bomb, hard-link, rename/ABA, cancellation, crash-window, power-loss approximation and low-disk matrices pass.
+- Fuzz targets cover manifest/TOML, package archive, receipt/WAL, JSONL, privileged frames, updater metadata and native-container parsers.
+- Dependency audit has no unaccepted vulnerability or unmaintained runtime boundary; Linux GTK blocker is gone rather than ignored.
+- Secrets never enter Rust commands, JSONL, logs, fixtures or repository artifacts; external signing owns credentials.
+
+### Supply-chain gates
+
+- Hermetic pinned toolchain inputs and dependency locks for every target.
+- Per-artifact SHA-256 manifest, CycloneDX or SPDX SBOM, license inventory and SLSA-aligned provenance.
+- Release workflow signs metadata, uploads native assets, downloads every asset again, verifies signatures/hashes/layout and publishes a machine-readable verification report.
+- Reproducibility is measured per artifact. Differences that cannot yet be bit-reproducible are explained and final signed bytes remain provenance-bound.
+
+### Performance budgets
+
+Budgets are release criteria after a benchmark baseline is recorded on named hardware; they are not claims about the current preview.
+
+- Studio idle RSS: target under 150 MiB; Setup idle RSS: target under 120 MiB.
+- Compiler/packager memory: `O(stream buffer + metadata)`, never `O(total payload)`; default streaming buffer at most 16 MiB per active stream.
+- 1 GiB/25k-file package: bounded-memory compile and install with monotonic progress and cancellation latency under 500 ms outside commit.
+- Incremental `cargo quick`: target under 60 seconds on reference CI; renderer contract/typecheck target under 30 seconds with dependencies cached.
+- Full three-host native matrix stays parallel; no single lane exceeds 30 minutes on hosted release runners without an explicit exception record.
+- Installed startup/launch overhead added by the receipt check: target under 150 ms median on SSD reference systems.
+
+### Quality gates
+
+- Unit/property tests for pure policy, contract tests for every wire boundary, native integration tests for each adapter, and final-artifact end-to-end tests.
+- Keyboard-only, 100/125/150/200% scaling, screen-reader labels, reduced motion, high contrast and long-localized-text checks.
+- Upgrade compatibility fixtures from every previously released schema/receipt/config version supported by policy.
+- Backup restore and rollback commands are executed, not merely generated.
+- Release notes, changelog, README, guides, CLI skill and `llms.txt` are synchronized on the release commit.
+
 ## Product rules
 
 1. **Portable intent, native result.** The project describes a shortcut, file association, service, or prerequisite once; Rust maps it to the host-native implementation.
@@ -101,6 +176,178 @@ Legend: **Yes** is implemented in the current product flow; **Partial** has a us
 - Optional welcome/readme/privacy content.
 - Extension SDK only for typed out-of-process adapters with explicit capabilities, receipts and rollback. No in-process installer plug-ins.
 
+## Workstreams
+
+Each workstream is a durable product responsibility. Milestones below select slices from these streams; they do not become new monolithic crates by default.
+
+### W1 — package model and compiler
+
+- Versioned portable manifest with exported limits and compatibility rules.
+- Stable typed declarations for shortcuts, associations, components, prerequisites, services, environment changes, conditions, updater channels and branding.
+- Deterministic package compilation, streaming payload/object handling, signing and publisher rotation.
+- Compatibility fixtures and migration diagnostics for all supported schemas.
+
+### W2 — transactional engine and receipts
+
+- One plan contains payload files plus native integration intents.
+- Receipt versions own installed files, selected components and OS integration objects with their exact previous-state backups.
+- Install, update, repair, rollback, recovery and uninstall treat the aggregate plan atomically.
+- Typed actions declare prepare/apply/verify/undo behavior; engine never executes package-supplied code.
+
+### W3 — native platform adapters
+
+- Windows: shell links, association registry contract, services, environment, Restart Manager/locked files, Authenticode and system roots.
+- Linux: XDG desktop/MIME integration, systemd where supported, environment/profile policy, polkit helper and package-manager lifecycle.
+- macOS: app/LaunchServices integration, LaunchAgents/Daemons, environment limits, SMAppService, codesign/notarization and DMG.
+- All adapters enforce no-follow/link/owner/mode/path rules and restore overwritten native state precisely.
+
+### W4 — Studio authoring experience
+
+- Guided project creation with application, payload, integration, requirements, update and release sections.
+- Searchable validation summary, plain-language errors, target compatibility and native preview.
+- Reusable presets/templates without hidden code execution.
+- Import/migration assistants for safe subsets of Inno Setup, NSIS and existing app layouts; unsupported directives become explicit review items.
+- Build history, exact artifact report and pathless reveal; no secret or generic filesystem authority in React.
+
+### W5 — Setup user experience
+
+- Fixed verified state machine for review, components, license, prerequisites, destination, progress, completion and maintenance.
+- Compile-time localization, accessibility, scaling and bounded product branding.
+- Clear disk/change summary and factual native integrations before mutation.
+- Retry/cancel/recovery that never contradicts Rust state.
+
+### W6 — automation and fleet deployment
+
+- Stable human CLI plus versioned typed JSONL/stdio.
+- Bound-launcher `--info-json`, plan/validate modes, unattended actions, response-file support only when secret-free, and deterministic exit taxonomy.
+- MDM-friendly inventory, logs and verification receipts.
+- First-party AI skill generated/tested against live help and schema examples.
+
+### W7 — secure update and distribution
+
+- Signed channel metadata with staged rollout, minimum versions, revocation and publisher-key continuity.
+- Resumable range download into a bounded cache, exact package verification before handoff, offline bundle support and proxy policy.
+- Update service remains optional; applying bytes always reuses the normal Setup transaction.
+- Delta/chunk transport is an optimization over the same verified full-package identity, never a separate trust model.
+
+### W8 — release engineering and supply chain
+
+- Pinned toolchains and native runner images, external credential handoff, SBOM/provenance/checksums.
+- Windows two-phase signing, macOS sign/notary/staple, Linux distro signing.
+- Release dry-run, candidate, publish, downloaded verification and rollback workflows.
+- Public GitHub Release contains only production-qualified assets; prereleases are clearly labelled.
+
+### W9 — observability, diagnostics and support
+
+- Stable error codes and human remedies; redacted structured logs with operation correlation.
+- Exportable support bundle containing versions, public package identity, stages and bounded diagnostics—never payload paths, secrets or raw private state.
+- Installer self-diagnostics for OS prerequisites, signature validation and helper health.
+- Crash reports are opt-in and separate from the install protocol.
+
+### W10 — performance and maintainability
+
+- Streaming package/container writers and parsers, bounded queues and cancellation.
+- Benchmarks for compile, package, install, update, repair, uninstall, launch and memory.
+- Hot modules split by real ownership inside current crates; dependency and binary-size budgets tracked.
+- Tiered gates remain focused; release matrices run in parallel and reuse only trustworthy caches.
+
+## Milestones and release train
+
+Version numbers are planning targets. A milestone advances only when its exit criteria pass; incomplete capability moves forward rather than being hidden behind a release claim.
+
+| Milestone | Product outcome | Mandatory exit criteria |
+| --- | --- | --- |
+| **0.2 Desktop essentials** | Receipt-owned application-menu/Start Menu and optional desktop shortcuts | Spec → Studio → engine → three native adapters; install/update/repair/uninstall/rollback; user/system native evidence. |
+| **0.3 Open-with integration** | Typed file associations and URL protocols | Previous-owner restoration, one validated OS argument, collision UX, LaunchServices/XDG/Windows tests. |
+| **0.4 Components** | Required/optional feature selection | Stable component IDs, authenticated selection, receipt persistence, update/repair semantics, unattended selection contract. |
+| **0.5 Requirements** | Actionable prerequisites and conditions | Runtime/OS/disk predicates, preflight JSON, Studio editor, offline-friendly detect-and-block behavior. |
+| **0.6 Updater preview** | Signed feed and verified full-package download | Metadata signing/rotation/revocation, resumable cache, staged rollout, handoff to existing Setup, proxy/offline tests. |
+| **0.7 Deployment** | Localization and enterprise typed integrations | English/Russian, services/daemons, environment/PATH, richer inventory/logs, system-scope native matrix. |
+| **0.8 Release pipeline** | Repeatable signed prereleases | Windows/macOS/Linux signing flows, SBOM/provenance, downloaded-final-byte checks, no Linux advisory blocker. |
+| **0.9 Hardening RC** | Feature freeze and migration confidence | Fuzz/fault/performance/accessibility matrices, legacy fixtures, zero open release-blocking findings. |
+| **1.0 Production** | Public best-in-class stable release | Every full-production gate above passes on exact tagged assets; install/uninstall and rollback proven from downloaded artifacts. |
+| **1.1+ Scale** | Efficient large deployments | Streaming RPM, deltas, downloadable components, cache management and measured bandwidth/RSS improvements. |
+| **2.x Ecosystem** | Carefully bounded extensibility and extra formats | Typed out-of-process adapter SDK and only demand-backed MSI/MSIX/PKG/Flatpak/AppImage work. |
+
+## Exact implementation queue
+
+This is the working order for agents. Finish one slice—including review and evidence—before starting the next row.
+
+| # | Vertical slice | Depends on | Smallest routine gate | Native gate |
+| ---: | --- | --- | --- | --- |
+| 1 | Shortcut intent and schema validation | Existing entrypoint schema | `cargo test -p luxury-spec -p luxury-compiler` | None yet |
+| 2 | Shortcut plan/receipt compatibility | 1 | Engine focused tests | None yet |
+| 3 | User-scope native shortcuts | 2 | Platform focused tests | Matching Windows/Linux/macOS integration |
+| 4 | System-scope shortcut helper flow | 3 | Privileged protocol + Tauri tests | Signed/root-owned native helper lanes |
+| 5 | Studio shortcut controls and Setup review | 1–4 | `cargo gui-check` + help/docs test | Full shortcut lifecycle matrix |
+| 6 | File association schema and previous-owner receipt | Shortcut receipt pattern | Spec/engine tests | None yet |
+| 7 | Native file associations | 6 | Platform + GUI contracts | Three-host open/restore tests |
+| 8 | URL protocols | 7 | Argument-bound launch tests | Three-host protocol activation |
+| 9 | Component schema/compiler | Stable integration receipt | Spec/compiler tests | None yet |
+| 10 | Component selection plan/receipt | 9 | Engine/JSONL contracts | None yet |
+| 11 | Setup/Studio component UX | 10 | GUI contracts | Three-host install/update/repair matrix |
+| 12 | Prerequisite predicates | Component plan | Spec/engine/CLI tests | Host runtime fixtures |
+| 13 | Secure updater metadata | Publisher rotation | Parser/signature/fuzz tests | None yet |
+| 14 | Resumable verified downloader | 13 | HTTP/cache integration tests | Proxy/offline host lanes |
+| 15 | Update UI/automation handoff | 14 | GUI/JSONL contracts | Downloaded end-to-end update matrix |
+| 16 | English/Russian locale catalogs | Stable Setup screens | Renderer contract tests | Native manual accessibility |
+| 17 | Services/daemons | Typed integration transaction | Engine/platform tests | Three-host service lifecycle |
+| 18 | Environment/PATH | Previous-state restore pattern | Engine/platform tests | Three-host shell/session checks |
+| 19 | Locked files/reboot | Windows integration maturity | Windows focused tests | Restart Manager/reboot VM matrix |
+| 20 | Signing/provenance release UX | Stable feature set | xtask/release contract tests | Downloaded signed native matrix |
+
+## Dependency graph
+
+```text
+entrypoint + receipts
+  └─ shortcuts
+      └─ native-integration receipt pattern
+          ├─ associations ── URL protocols
+          ├─ components ── prerequisites
+          ├─ services/daemons
+          └─ environment/PATH ── reboot handling
+
+publisher signing + rotation
+  └─ signed updater metadata
+      └─ resumable verified download
+          └─ staged rollout ── deltas/downloadable components
+
+stable Setup screens
+  └─ localization + accessibility freeze
+      └─ 0.9 hardening RC
+
+all P0/P1 + signing + supply-chain + native evidence
+  └─ 1.0 production
+```
+
+## Production scorecard
+
+Maintain this table in every release-readiness review. Evidence must name an exact commit/run/artifact; `planned` is never green.
+
+| Gate | Current preview | 0.9 requirement | 1.0 requirement |
+| --- | --- | --- | --- |
+| Core transactional lifecycle | Implemented and source/native-smoke tested | Full fault matrix | Downloaded final-byte matrix |
+| Windows signed release | Source flow exists | Signed RC lifecycle | Signed downloaded release verified |
+| Linux release | Blocked by GTK advisory | Advisory removed + distro integration | Signed downloaded `.deb`/`.rpm` verified |
+| macOS release | Source flow exists | Signed/notarized dual-arch RC | Downloaded stapled DMG verified |
+| Shortcuts/associations/components/prerequisites/updater | Planned | Complete and frozen | Compatibility evidence |
+| Localization/accessibility | Russian presentation baseline | English/Russian + automated/manual matrix | Release checklist green |
+| Fuzz/fault/security reviews | Strong focused tests, incomplete portfolio | Full portfolio, no blockers | Repeat on final diff/bytes |
+| Performance budgets | No authoritative baseline | Baseline + budgets met | Regression comparison published |
+| SBOM/provenance/reproducibility | Partial checksums/evidence | RC artifacts carry reports | Downloaded public assets reverified |
+| Documentation/AI compatibility | Live help drift test exists | All feature docs synchronized | Release docs and skill versioned |
+
+## Release decision rules
+
+- A capability is not shipped because its schema compiles; it needs final native behavior and rollback proof.
+- A platform is not supported because another OS passed or a cross-compile succeeded.
+- A GitHub Actions artifact is not a release; production requires GitHub Release assets downloaded and reverified.
+- Unsigned output is always a development/prerelease artifact.
+- A known security advisory in a shipped runtime blocks production rather than receiving a silent ignore.
+- A failed neighboring test invalidates reused matrix evidence.
+- Performance and accessibility regressions are release defects, not post-release polish.
+- Every milestone ends with independent review, review-of-review, concise before/after value, exact gaps and runnable rollback.
+
 ## Architecture and build optimization backlog
 
 The architecture direction is correct, but several composition modules are now expensive to review:
@@ -156,3 +403,12 @@ Definition of done:
 - A plug-in loader.
 - More archive/container formats before common authoring capabilities.
 - A universal Windows cross-build that pretends to sign/notarize Linux or macOS outputs.
+
+## Roadmap maintenance contract
+
+- This file is the single public product roadmap. Do not create a competing backlog document.
+- When a slice ships, update its capability-matrix state, milestone exit criteria, implementation queue and production scorecard in the same commit.
+- Every roadmap claim must be `implemented`, `partial`, `blocked`, `planned`, or `deliberate no`; avoid vague percentages.
+- Issues/PRs reference the workstream, milestone and queue row, but source/docs remain authoritative for live behavior.
+- Quarterly or before a release candidate, refresh competitor/platform references and reassess whether excluded formats or integrations have real demand.
+- New ideas enter after evidence of user value, threat-boundary analysis, rollback ownership and native verification cost—not because another installer exposes a directive.
