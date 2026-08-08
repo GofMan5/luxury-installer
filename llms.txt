@@ -14,6 +14,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - /docs/architecture.md: dependency, process, transaction, trust, runner, and evidence boundaries
 - /docs/design/design-system.md: Tauri renderer visual/accessibility contract
 - /docs/privileged-helper.md: required system-scope elevation and peer-authentication boundary
+- /docs/product-roadmap.md: evidence-based capability matrix versus Inno Setup, NSIS, WiX/Burn, Advanced Installer and InstallBuilder; P0-P3 delivery order and deliberate exclusions
 - /CONTRIBUTING.md: contribution and handoff checklist
 - /SECURITY.md: security scope and known ceilings
 - /README.md: public product overview

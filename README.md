@@ -229,6 +229,8 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md). Keep changes as small vertical sl
 
 Questions belong in [Discussions](https://github.com/GofMan5/luxury-installer/discussions); reproducible defects use the issue forms. See [SUPPORT.md](SUPPORT.md), [CHANGELOG.md](CHANGELOG.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
+Product capability gaps and their delivery order are maintained in the [installer product roadmap](docs/product-roadmap.md). It distinguishes features to implement from script-era mechanisms deliberately replaced by typed, reversible Rust actions.
+
 ## License
 
 Licensed under either [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
