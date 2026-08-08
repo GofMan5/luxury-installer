@@ -34,17 +34,19 @@ Open Studio and describe the application instead of hand-writing a setup script:
 - keep unsaved edits visible and protected: project switching and reload stay locked until you save or undo, and closing Studio asks before discarding the draft;
 - add files or a complete folder through native dialogs, or safely replace the whole payload with a staged new build folder;
 - choose the launch file from the real payload;
-- add a license, optional installation details, and up to four HTTPS finish links;
+- add a license, optional installation details, up to four HTTPS finish links, and schema 4 application-menu/desktop shortcut intent tied to the selected launch file;
 - press one build action to save and revalidate current edits, build a real `.exe`, `.deb` + `.rpm`, or `.dmg` with a human-readable product-name file/folder suggestion, then reveal it directly from Studio.
 
-The internal package container stays between the Rust compiler and packager and is deleted with the build workspace. It is not the file a Studio user ships. Source and output paths stay in the Rust shell; React receives validated portable settings, not generic filesystem access.
+The internal package container stays between the Rust compiler and packager and is deleted with the build workspace. It is not the file a Studio user ships. Source and output paths stay in the Rust shell; React receives validated portable settings, not generic filesystem access. Replacing the complete payload clears a missing entrypoint and its now-unbound shortcut intent together.
 
 ### Setup for the person installing the application
 
 Each Setup is bound to one reviewed payload. It shows the application description, publisher, version, destination, and exact operation without becoming a package browser.
 
+Setup's strict review contract already carries authenticated shortcut intent, but current bootstrap stops at typed native preflight before that screen is shown. The review becomes visible with the Windows, Linux, and macOS transactional adapters; a schema-only project never reports a false successful integration.
+
 - a newer downloaded version becomes an update;
-- the same version with the exact file set becomes repair;
+- the same version with the exact file set, launch entrypoint, and shortcut intent becomes repair;
 - downgrade is never silently approved;
 - cancellation and failure restore the previous installation; if Setup cannot confirm the cancel request, it explains that inline and keeps **Cancel** available for an idempotent retry while the operation continues;
 - unknown files and modified obsolete files are preserved;
@@ -65,6 +67,8 @@ There is no built-in update-download service yet. Updating means launching a new
 | Desktop | Fixed adaptive Codex-style Tauri window with a small exact ACL and no renderer shell/fs/process permission. |
 | Build speed | Core Rust and desktop graphs are separate; routine work uses targeted gates instead of a serial native matrix. |
 | Automation | Human CLI plus strict typed JSONL v3 over stdin/stdout for agents and desktop composition. |
+
+Manifest capability `schema_version` is independent of package trust `format_version`: schema 2 adds the exact entrypoint, schema 3 adds the authenticated license, and schema 4 adds bounded receipt-owned shortcut intent. Package trust formats remain v1-v3.
 
 ## Quick start
 
@@ -148,7 +152,7 @@ My-App-Setup.exe --unattended-install --allow-unsigned
 My-App-Setup.exe --unattended-uninstall
 ```
 
-`--info-json` validates the bound payload, build fingerprint, backend, and host target, then prints one JSON line for inventory or deployment planning. It is read-only, opens no window or authorization prompt, and exposes bounded display metadata and counts—not license text, finish URLs, internal package paths, or native roots. Windows packaging re-runs this command through the final outer Setup and rejects broken stdout/stderr forwarding.
+`--info-json` validates the bound payload, build fingerprint, backend, and host target, then prints one schema-2 JSON line for inventory or deployment planning. Schema 2 adds the required shortcut policy object. It is read-only, opens no window or authorization prompt, and exposes bounded display metadata and counts—not license text, finish URLs, internal package paths, or native roots. Windows packaging re-runs this command through the final outer Setup and rejects broken stdout/stderr forwarding.
 
 Current Studio builds are unsigned development artifacts, so they need explicit `--allow-unsigned`. Add `--accept-license` only when the authenticated package contains a license, and `--allow-publisher-migration` only when preflight requires that migration. Unattended removal is idempotent. Paths, keys, downgrade approval, launch, and arbitrary commands are not accepted.
 

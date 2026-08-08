@@ -202,13 +202,17 @@ fn installs_verified_user_package_and_emits_monotonic_progress() {
     );
 
     let receipt = port.receipt.unwrap();
-    assert_eq!(receipt.format_version(), 4);
+    assert_eq!(
+        receipt.format_version(),
+        luxury_engine::uninstall::RECEIPT_FORMAT_VERSION
+    );
     assert_eq!(receipt.package_id().as_str(), "dev.luxury.demo");
     assert_eq!(receipt.package_identity(), Some(PackageIdentity::Unsigned));
     assert_eq!(receipt.payload_signer(), Some(PackageIdentity::Unsigned));
     assert_eq!(receipt.files().len(), 2);
     assert_eq!(receipt.directory().as_str(), "LuxuryDemo");
     assert_eq!(receipt.entrypoint(), None);
+    assert_eq!(receipt.shortcuts(), luxury_spec::ShortcutPolicy::default());
 
     let progress = events
         .iter()
@@ -1013,6 +1017,39 @@ fn same_version_repair_requires_exact_entrypoint_and_persists_it() {
 }
 
 #[test]
+fn shortcut_intent_is_persisted_and_changes_same_version_identity() {
+    let mut package = manifest(InstallScope::User, Target::host());
+    package.install.entrypoint = Some(package.files[0].path.clone());
+    package.install.shortcuts.application_menu = true;
+    let mut port = FakeInstallPort::new(Rc::new(Cell::new(0)));
+
+    install(
+        InstallCommand::new(package.clone()),
+        &mut port,
+        || false,
+        |_| {},
+    )
+    .unwrap();
+    let receipt = port.receipt.clone().unwrap();
+    assert_eq!(receipt.entrypoint(), package.install.entrypoint.as_ref());
+    assert_eq!(receipt.shortcuts(), package.install.shortcuts);
+
+    port.receipt = Some(receipt);
+    let repaired = install(
+        InstallCommand::new(package.clone()),
+        &mut port,
+        || false,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(repaired.action, InstallAction::Repair);
+
+    package.install.shortcuts.desktop = true;
+    let error = install(InstallCommand::new(package), &mut port, || false, |_| {}).unwrap_err();
+    assert!(matches!(error, InstallError::ReinstallMismatch { .. }));
+}
+
+#[test]
 fn build_metadata_cannot_bypass_same_version_reinstall_policy() {
     let mut package = manifest(InstallScope::User, Target::host());
     package.package.version = Version::parse("1.2.3+new").unwrap();
@@ -1395,6 +1432,7 @@ fn manifest(scope: InstallScope, target: Target) -> Manifest {
             entrypoint: None,
             show_install_log: false,
             finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy::default(),
         },
         publisher_rotation: None,
         files: vec![

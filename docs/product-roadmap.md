@@ -110,7 +110,7 @@ Legend: **Yes** is implemented in the current product flow; **Partial** has a us
 | Silent/unattended deployment | **Yes**: bounded bound-launcher commands and stable exits | Standard `/SILENT`, `/S`, MSI quiet modes | Add machine-readable deployment diagnostics before adding more flags. |
 | License page, finish links, optional details | **Yes** | Standard | Keep bounded plain-text/HTTPS policy. |
 | Publisher package signing and key rotation | **Yes** at package level; native release signing still gated | Native signing common; package-key rotation uncommon | Finish native signing UX and evidence. |
-| Start Menu/Desktop/application-menu shortcuts | **No** | Inno `[Icons]`, NSIS `CreateShortCut`, WiX `Shortcut`, commercial GUI editors | **P0.** First missing mainstream feature. |
+| Start Menu/Desktop/application-menu shortcuts | **Partial**: manifest schema 4 intent, compiler, plan/receipt v5, JSONL, Studio controls and Setup review contract; Setup bootstrap remains unsupported until native adapters | Inno `[Icons]`, NSIS `CreateShortCut`, WiX `Shortcut`, commercial GUI editors | **P0.** Next: transactional user-scope adapters, then system helpers, visible review and full lifecycle proof. |
 | File associations and URL protocols | **No** | Common in Inno/NSIS/WiX/commercial tools | **P0.** Typed extension/protocol declarations, never raw registry snippets. |
 | Optional components/features | **No** | Inno Components, NSIS Sections, MSI Features, InstallBuilder components | **P0.** Needed for real authoring; must bind selection into plan, receipt, repair and uninstall. |
 | Prerequisite detection/bootstrap chain | **No** | WiX Burn and commercial suites are strong here | **P0.** Start with detect-and-block guidance, then signed prerequisite bundles. |
@@ -275,11 +275,11 @@ This is the working order for agents. Finish one slice—including review and ev
 
 | # | Vertical slice | Depends on | Smallest routine gate | Native gate |
 | ---: | --- | --- | --- | --- |
-| 1 | Shortcut intent and schema validation | Existing entrypoint schema | `cargo test -p luxury-spec -p luxury-compiler` | None yet |
-| 2 | Shortcut plan/receipt compatibility | 1 | Engine focused tests | None yet |
+| 1 | Shortcut intent and schema validation — **implemented** | Existing entrypoint schema | `cargo test -p luxury-spec -p luxury-compiler` | None yet |
+| 2 | Shortcut plan/receipt/JSONL/GUI contract compatibility — **implemented; native preflight intentionally unsupported** | 1 | Engine, CLI and GUI focused tests | None yet |
 | 3 | User-scope native shortcuts | 2 | Platform focused tests | Matching Windows/Linux/macOS integration |
 | 4 | System-scope shortcut helper flow | 3 | Privileged protocol + Tauri tests | Signed/root-owned native helper lanes |
-| 5 | Studio shortcut controls and Setup review | 1–4 | `cargo gui-check` + help/docs test | Full shortcut lifecycle matrix |
+| 5 | Enable visible Setup shortcut review and finish lifecycle UX | 1–4 | `cargo gui-check` + help/docs test | Full shortcut lifecycle matrix |
 | 6 | File association schema and previous-owner receipt | Shortcut receipt pattern | Spec/engine tests | None yet |
 | 7 | Native file associations | 6 | Platform + GUI contracts | Three-host open/restore tests |
 | 8 | URL protocols | 7 | Argument-bound launch tests | Three-host protocol activation |
@@ -330,7 +330,7 @@ Maintain this table in every release-readiness review. Evidence must name an exa
 | Windows signed release | Source flow exists | Signed RC lifecycle | Signed downloaded release verified |
 | Linux release | Blocked by GTK advisory | Advisory removed + distro integration | Signed downloaded `.deb`/`.rpm` verified |
 | macOS release | Source flow exists | Signed/notarized dual-arch RC | Downloaded stapled DMG verified |
-| Shortcuts/associations/components/prerequisites/updater | Planned | Complete and frozen | Compatibility evidence |
+| Shortcuts/associations/components/prerequisites/updater | Shortcut schema/receipt/authoring/review partial; remaining capabilities planned | Complete and frozen | Compatibility evidence |
 | Localization/accessibility | Russian presentation baseline | English/Russian + automated/manual matrix | Release checklist green |
 | Fuzz/fault/security reviews | Strong focused tests, incomplete portfolio | Full portfolio, no blockers | Repeat on final diff/bytes |
 | Performance budgets | No authoritative baseline | Baseline + budgets met | Regression comparison published |

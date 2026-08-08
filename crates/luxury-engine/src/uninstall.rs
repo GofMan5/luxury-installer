@@ -6,8 +6,8 @@ use std::{
 };
 
 use luxury_spec::{
-    FileEntry, InstallDirectory, InstallScope, OperatingSystem, PackageId, PackagePath, SpecError,
-    validate_entrypoint,
+    FileEntry, InstallDirectory, InstallScope, OperatingSystem, PackageId, PackagePath,
+    ShortcutPolicy, SpecError, validate_entrypoint,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,8 @@ use crate::{
 const LEGACY_RECEIPT_FORMAT_VERSION: u32 = 1;
 const IDENTITY_RECEIPT_FORMAT_VERSION: u32 = 2;
 const PROVENANCE_RECEIPT_FORMAT_VERSION: u32 = 3;
-pub const RECEIPT_FORMAT_VERSION: u32 = 4;
+const ENTRYPOINT_RECEIPT_FORMAT_VERSION: u32 = 4;
+pub const RECEIPT_FORMAT_VERSION: u32 = 5;
 const MAX_RECEIPT_FILES: usize = 100_000;
 
 /// Durable ownership data. Adapters persist it outside the removable app tree.
@@ -41,6 +42,8 @@ pub struct OwnershipReceipt {
     payload_signer: Option<PackageIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     entrypoint: Option<PackagePath>,
+    #[serde(default, skip_serializing_if = "ShortcutPolicy::is_disabled")]
+    shortcuts: ShortcutPolicy,
     files: Vec<FileEntry>,
 }
 
@@ -63,6 +66,7 @@ impl OwnershipReceipt {
             authorized_publisher: Some(package_identity),
             payload_signer: Some(package_identity),
             entrypoint: None,
+            shortcuts: ShortcutPolicy::default(),
             files,
         };
         receipt.validate()?;
@@ -80,6 +84,7 @@ impl OwnershipReceipt {
             authorized_publisher: Some(plan.package_identity()),
             payload_signer: Some(plan.payload_signer()),
             entrypoint: plan.entrypoint().cloned(),
+            shortcuts: plan.shortcuts(),
             files: plan.files().to_vec(),
         }
     }
@@ -94,13 +99,17 @@ impl OwnershipReceipt {
             (LEGACY_RECEIPT_FORMAT_VERSION, None, None, None)
             | (IDENTITY_RECEIPT_FORMAT_VERSION, Some(_), None, None)
             | (
-                PROVENANCE_RECEIPT_FORMAT_VERSION | RECEIPT_FORMAT_VERSION,
+                PROVENANCE_RECEIPT_FORMAT_VERSION
+                | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(PackageIdentity::Unsigned),
                 Some(PackageIdentity::Unsigned),
             )
             | (
-                PROVENANCE_RECEIPT_FORMAT_VERSION | RECEIPT_FORMAT_VERSION,
+                PROVENANCE_RECEIPT_FORMAT_VERSION
+                | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(PackageIdentity::TrustedPublisher { .. }),
                 Some(PackageIdentity::TrustedPublisher { .. }),
@@ -114,17 +123,40 @@ impl OwnershipReceipt {
             (IDENTITY_RECEIPT_FORMAT_VERSION, Some(_), _, _) => {
                 return Err(ReceiptError::V2PayloadSigner);
             }
-            (PROVENANCE_RECEIPT_FORMAT_VERSION | RECEIPT_FORMAT_VERSION, Some(_), _, _) => {
+            (
+                PROVENANCE_RECEIPT_FORMAT_VERSION
+                | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | RECEIPT_FORMAT_VERSION,
+                Some(_),
+                _,
+                _,
+            ) => {
                 return Err(ReceiptError::V3LegacyPackageIdentity);
             }
-            (PROVENANCE_RECEIPT_FORMAT_VERSION | RECEIPT_FORMAT_VERSION, None, None, _) => {
+            (
+                PROVENANCE_RECEIPT_FORMAT_VERSION
+                | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | RECEIPT_FORMAT_VERSION,
+                None,
+                None,
+                _,
+            ) => {
                 return Err(ReceiptError::MissingPackageIdentity);
             }
-            (PROVENANCE_RECEIPT_FORMAT_VERSION | RECEIPT_FORMAT_VERSION, None, Some(_), None) => {
+            (
+                PROVENANCE_RECEIPT_FORMAT_VERSION
+                | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | RECEIPT_FORMAT_VERSION,
+                None,
+                Some(_),
+                None,
+            ) => {
                 return Err(ReceiptError::MissingPayloadSigner);
             }
             (
-                PROVENANCE_RECEIPT_FORMAT_VERSION | RECEIPT_FORMAT_VERSION,
+                PROVENANCE_RECEIPT_FORMAT_VERSION
+                | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(_),
                 Some(_),
@@ -159,7 +191,7 @@ impl OwnershipReceipt {
             {
                 return Err(ReceiptError::LegacyEntrypoint);
             }
-            RECEIPT_FORMAT_VERSION => {
+            ENTRYPOINT_RECEIPT_FORMAT_VERSION | RECEIPT_FORMAT_VERSION => {
                 validate_entrypoint(
                     OperatingSystem::host(),
                     self.entrypoint.as_ref(),
@@ -168,6 +200,12 @@ impl OwnershipReceipt {
                 .map_err(ReceiptError::InvalidEntrypoint)?;
             }
             _ => {}
+        }
+        if self.format_version < RECEIPT_FORMAT_VERSION && self.shortcuts.enabled() {
+            return Err(ReceiptError::LegacyShortcuts);
+        }
+        if self.shortcuts.enabled() && self.entrypoint.is_none() {
+            return Err(ReceiptError::ShortcutsWithoutEntrypoint);
         }
         Ok(())
     }
@@ -211,6 +249,10 @@ impl OwnershipReceipt {
         self.entrypoint.as_ref()
     }
 
+    pub const fn shortcuts(&self) -> ShortcutPolicy {
+        self.shortcuts
+    }
+
     pub fn files(&self) -> &[FileEntry] {
         &self.files
     }
@@ -234,6 +276,10 @@ pub enum ReceiptError {
     MismatchedPublisherKinds,
     #[error("receipt formats 1 through 3 must not contain an entrypoint")]
     LegacyEntrypoint,
+    #[error("receipt formats 1 through 4 must not contain shortcuts")]
+    LegacyShortcuts,
+    #[error("receipt shortcuts require an exact owned entrypoint")]
+    ShortcutsWithoutEntrypoint,
     #[error("invalid receipt entrypoint: {0}")]
     InvalidEntrypoint(#[source] SpecError),
     #[error("receipt contains no owned files")]

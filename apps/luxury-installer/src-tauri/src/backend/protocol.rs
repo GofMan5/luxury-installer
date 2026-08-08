@@ -359,6 +359,17 @@ pub(crate) struct InstallPolicy {
     pub(crate) show_install_log: bool,
     #[serde(default)]
     pub(crate) finish_links: Vec<FinishLink>,
+    #[serde(default)]
+    pub(crate) shortcuts: ShortcutPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ShortcutPolicy {
+    #[serde(default)]
+    pub(crate) application_menu: bool,
+    #[serde(default)]
+    pub(crate) desktop: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

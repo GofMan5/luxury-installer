@@ -80,6 +80,9 @@ const installLog = z
 const finishLink = z
   .object({ label: text.max(48), url: z.string().max(2_048).refine(validHttpsUrl) })
   .strict()
+const shortcutPolicy = z
+  .object({ applicationMenu: z.boolean(), desktop: z.boolean() })
+  .strict()
 
 const trust = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unsigned') }).strict(),
@@ -105,6 +108,7 @@ export const packageSummarySchema = z
     hasEntrypoint: z.boolean(),
     installLog: installLog.nullable(),
     finishLinks: z.array(finishLink).max(4),
+    shortcuts: shortcutPolicy,
     files: count,
     bytes: count,
     trust,
@@ -117,6 +121,9 @@ export const packageSummarySchema = z
       value.installLog.files.length + value.installLog.omittedFiles !== value.files
     ) {
       context.addIssue({ code: 'custom', path: ['installLog'], message: 'invalid install log' })
+    }
+    if ((value.shortcuts.applicationMenu || value.shortcuts.desktop) && !value.hasEntrypoint) {
+      context.addIssue({ code: 'custom', path: ['shortcuts'], message: 'entrypoint required' })
     }
     if (
       value.publisherRotation &&
@@ -186,7 +193,7 @@ export const studioProjectSchema = z
   .object({
     projectPath: path,
     formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
     packageId,
     name: text,
     publisher: text,
@@ -203,6 +210,7 @@ export const studioProjectSchema = z
     hasEntrypoint: z.boolean(),
     showInstallLog: z.boolean(),
     finishLinks: z.array(finishLink).max(4),
+    shortcuts: shortcutPolicy,
     executableFiles: count,
     files: count,
     bytes: count,
@@ -214,6 +222,12 @@ export const studioProjectSchema = z
     }
     if (value.hasLicense !== (value.license !== null) || (value.hasLicense && value.schemaVersion < 3)) {
       context.addIssue({ code: 'custom', path: ['hasLicense'], message: 'schema mismatch' })
+    }
+    if (
+      (value.shortcuts.applicationMenu || value.shortcuts.desktop) &&
+      (!value.hasEntrypoint || value.schemaVersion < 4)
+    ) {
+      context.addIssue({ code: 'custom', path: ['shortcuts'], message: 'schema mismatch' })
     }
     if (value.executableFiles > value.files) {
       context.addIssue({ code: 'custom', path: ['executableFiles'], message: 'count mismatch' })
@@ -236,8 +250,14 @@ export const studioProjectUpdateSchema = z
     entrypoint: portablePath.nullable(),
     showInstallLog: z.boolean(),
     finishLinks: z.array(finishLink).max(4),
+    shortcuts: shortcutPolicy,
   })
   .strict()
+  .refine(
+    (value) =>
+      !(value.shortcuts.applicationMenu || value.shortcuts.desktop) || value.entrypoint !== null,
+    { path: ['shortcuts'], message: 'entrypoint required' },
+  )
 
 export const studioBuildResultSchema = z
   .object({ outputPath: path, project: studioProjectSchema })

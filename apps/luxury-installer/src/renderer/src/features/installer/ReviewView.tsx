@@ -126,6 +126,20 @@ export function ReviewView({
           </div>
         )}
 
+        {summary.shortcuts.applicationMenu || summary.shortcuts.desktop ? (
+          <div className="integration-summary">
+            <span className="field-label">Ярлыки из пакета</span>
+            <strong>
+              {summary.shortcuts.applicationMenu && summary.shortcuts.desktop
+                ? 'Меню приложений и рабочий стол'
+                : summary.shortcuts.applicationMenu
+                  ? 'Меню приложений'
+                  : 'Рабочий стол'}
+            </strong>
+            <small>Запрошены для проверенной точки запуска; поддержка платформы проверяется до установки.</small>
+          </div>
+        ) : null}
+
         {summary.publisherRotation ? (
           <div className="publisher-rotation">
             <span className="publisher-rotation__icon" aria-hidden="true">

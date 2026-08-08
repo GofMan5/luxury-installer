@@ -8,7 +8,7 @@ use std::{
 
 use luxury_spec::{
     FileEntry, InstallDirectory, InstallScope, Manifest, PackageId, PackagePath, PublisherKeyId,
-    SpecError, Target,
+    ShortcutPolicy, SpecError, Target,
 };
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -159,6 +159,7 @@ pub struct InstallPlan {
     scope: InstallScope,
     directory: InstallDirectory,
     entrypoint: Option<PackagePath>,
+    shortcuts: ShortcutPolicy,
     verified_identity: VerifiedPackageIdentity,
     files: Vec<FileEntry>,
     total_bytes: u64,
@@ -172,6 +173,7 @@ impl InstallPlan {
             scope: manifest.install.scope,
             directory: manifest.install.directory.clone(),
             entrypoint: manifest.install.entrypoint.clone(),
+            shortcuts: manifest.install.shortcuts,
             verified_identity,
             files: manifest.files.clone(),
             total_bytes: manifest.payload_size(),
@@ -196,6 +198,10 @@ impl InstallPlan {
 
     pub fn entrypoint(&self) -> Option<&PackagePath> {
         self.entrypoint.as_ref()
+    }
+
+    pub const fn shortcuts(&self) -> ShortcutPolicy {
+        self.shortcuts
     }
 
     pub fn package_identity(&self) -> PackageIdentity {
@@ -386,7 +392,7 @@ pub enum InstallError {
         requested: Version,
     },
     #[error(
-        "installed version {version} has different files or entrypoint; same-version reinstall is refused"
+        "installed version {version} has different files, entrypoint, or shortcut intent; same-version reinstall is refused"
     )]
     ReinstallMismatch { version: Version },
     #[error(
@@ -801,7 +807,10 @@ fn assess_install(
             InstallAction::Downgrade
         }
         Ordering::Equal => {
-            if previous.files() != plan.files() || previous.entrypoint() != plan.entrypoint() {
+            if previous.files() != plan.files()
+                || previous.entrypoint() != plan.entrypoint()
+                || previous.shortcuts() != plan.shortcuts()
+            {
                 return Err(InstallError::ReinstallMismatch {
                     version: plan.version().clone(),
                 });

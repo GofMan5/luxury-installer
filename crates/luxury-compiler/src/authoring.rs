@@ -8,7 +8,7 @@ use std::{
 use luxury_spec::{
     ENTRYPOINT_SCHEMA_VERSION, FORMAT_VERSION, InstallPolicy, LICENSE_SCHEMA_VERSION,
     MAX_PAYLOAD_BYTES, MAX_PAYLOAD_FILE_BYTES, MAX_PAYLOAD_FILES, Manifest, OperatingSystem,
-    Package, PackagePath, SpecError, Target,
+    Package, PackagePath, SHORTCUT_SCHEMA_VERSION, SpecError, Target,
 };
 use tempfile::{NamedTempFile, TempDir, tempdir_in};
 
@@ -276,6 +276,7 @@ pub fn replace_payload_cancellable(
                 || config.payload.executable.contains(entrypoint));
         if !keep_entrypoint {
             config.install.entrypoint = None;
+            config.install.shortcuts = luxury_spec::ShortcutPolicy::default();
         }
     }
     config.schema_version = schema_version(&config.package, &config.install);
@@ -826,7 +827,9 @@ fn restore_previous_payload(previous: &Path, payload: &Path, staging: TempDir) -
 }
 
 fn schema_version(package: &Package, install: &InstallPolicy) -> u32 {
-    if package.license.is_some() {
+    if install.shortcuts.enabled() {
+        SHORTCUT_SCHEMA_VERSION
+    } else if package.license.is_some() {
         LICENSE_SCHEMA_VERSION
     } else if install.entrypoint.is_some() {
         ENTRYPOINT_SCHEMA_VERSION
@@ -871,6 +874,32 @@ fn replace_project_config(path: &Path, expected: &[u8], contents: &[u8]) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_authoring_selects_schema_four() {
+        let package = Package {
+            id: luxury_spec::PackageId::parse("dev.luxury.demo").unwrap(),
+            name: "Luxury Demo".into(),
+            version: "1.0.0".parse().unwrap(),
+            publisher: "Luxury Software".into(),
+            description: None,
+            license: None,
+        };
+        let install = InstallPolicy {
+            scope: luxury_spec::InstallScope::User,
+            directory: luxury_spec::InstallDirectory::parse("Luxury Demo").unwrap(),
+            allow_downgrade: false,
+            entrypoint: Some(PackagePath::parse("bin/demo.exe").unwrap()),
+            show_install_log: false,
+            finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy {
+                application_menu: true,
+                desktop: false,
+            },
+        };
+
+        assert_eq!(schema_version(&package, &install), SHORTCUT_SCHEMA_VERSION);
+    }
 
     #[test]
     fn studio_import_applies_manifest_limits_before_copying_more_files() {

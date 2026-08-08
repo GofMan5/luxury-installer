@@ -737,6 +737,9 @@ arch = "{}"
 scope = "user"
 directory = "Luxury Demo"
 # show_install_log = true
+# [install.shortcuts]
+# application_menu = true
+# desktop = false
 # [[install.finish_links]]
 # label = "Документация"
 # url = "https://example.com/docs"
@@ -1057,6 +1060,8 @@ mod tests {
         let first = replace_payload(&project, &first_source).unwrap();
         let mut install = first.install.clone();
         install.entrypoint = Some(PackagePath::parse("old.exe").unwrap());
+        install.shortcuts.application_menu = true;
+        install.shortcuts.desktop = true;
         let configured = update_project(
             &project,
             ProjectUpdate {
@@ -1070,7 +1075,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(configured.schema_version, ENTRYPOINT_SCHEMA_VERSION);
+        assert_eq!(
+            configured.schema_version,
+            luxury_spec::SHORTCUT_SCHEMA_VERSION
+        );
 
         let next_source = temp.path().join("next");
         fs::create_dir_all(next_source.join("assets")).unwrap();
@@ -1080,6 +1088,7 @@ mod tests {
         let replaced = replace_payload(&project, &next_source).unwrap();
         assert_eq!(replaced.schema_version, 1);
         assert!(replaced.install.entrypoint.is_none());
+        assert!(!replaced.install.shortcuts.enabled());
         assert_eq!(
             replaced
                 .files
@@ -1194,6 +1203,64 @@ mod tests {
                 .unwrap()
                 .manifest(),
             &compiled
+        );
+    }
+
+    #[test]
+    fn validates_and_compiles_schema_four_shortcut_intent() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        init_project(&project).unwrap();
+        let (entrypoint, executable) = match Target::host().os {
+            luxury_spec::OperatingSystem::Windows => ("bin/app.exe", "executable = []"),
+            luxury_spec::OperatingSystem::Linux | luxury_spec::OperatingSystem::Macos => {
+                ("bin/app", "executable = [\"bin/app\"]")
+            }
+        };
+        let entrypoint_path = project
+            .join("payload")
+            .join(entrypoint.replace('/', std::path::MAIN_SEPARATOR_STR));
+        fs::create_dir_all(entrypoint_path.parent().unwrap()).unwrap();
+        fs::write(&entrypoint_path, b"entrypoint").unwrap();
+
+        let config = project.join(PROJECT_FILE);
+        let source = fs::read_to_string(&config)
+            .unwrap()
+            .replacen(
+                "format_version = 1",
+                &format!(
+                    "format_version = 1\nschema_version = {}",
+                    luxury_spec::SHORTCUT_SCHEMA_VERSION
+                ),
+                1,
+            )
+            .replacen(
+                "directory = \"Luxury Demo\"",
+                &format!(
+                    "directory = \"Luxury Demo\"\nentrypoint = \"{entrypoint}\"\n\n[install.shortcuts]\napplication_menu = true\ndesktop = true"
+                ),
+                1,
+            )
+            .replacen("executable = []", executable, 1);
+        fs::write(&config, source).unwrap();
+
+        let validated = validate_project(&project).unwrap();
+        assert_eq!(
+            validated.schema_version,
+            luxury_spec::SHORTCUT_SCHEMA_VERSION
+        );
+        assert!(validated.install.shortcuts.application_menu);
+        assert!(validated.install.shortcuts.desktop);
+
+        let output = temp.path().join("shortcuts.luxpkg");
+        assert_eq!(compile_project(&project, &output).unwrap(), validated);
+        assert_eq!(
+            open_bundle(File::open(output).unwrap(), None)
+                .unwrap()
+                .manifest()
+                .install
+                .shortcuts,
+            validated.install.shortcuts
         );
     }
 

@@ -79,6 +79,21 @@ fn public_ai_docs_cover_the_live_cli_and_jsonl_methods() {
     assert!(!methods.is_empty());
     let ai_guide = fs::read_to_string(root.join("docs/ai-build.md")).unwrap();
     let readme = fs::read_to_string(root.join("README.md")).unwrap();
+    let roadmap = fs::read_to_string(root.join("docs/product-roadmap.md")).unwrap();
+    let schema_version = luxury_spec::MANIFEST_SCHEMA_VERSION.to_string();
+    for (name, document) in [
+        ("README.md", readme.as_str()),
+        ("llms.txt", llms.as_str()),
+        ("docs/product-roadmap.md", roadmap.as_str()),
+        ("CLI skill", reference.as_str()),
+    ] {
+        assert!(
+            document.contains(&format!("schema {schema_version}"))
+                || document.contains(&format!("schema-v{schema_version}"))
+                || document.contains(&format!("schema_version = {schema_version}")),
+            "{name} misses manifest schema {schema_version}"
+        );
+    }
     for (name, document) in [
         ("README.md", readme.as_str()),
         ("llms.txt", llms.as_str()),

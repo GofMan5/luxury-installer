@@ -23,6 +23,11 @@ export interface FinishLink {
   url: string
 }
 
+export interface ShortcutPolicy {
+  applicationMenu: boolean
+  desktop: boolean
+}
+
 export interface InstallLog {
   files: string[]
   omittedFiles: number
@@ -41,6 +46,7 @@ export interface PackageSummary {
   hasEntrypoint: boolean
   installLog: InstallLog | null
   finishLinks: FinishLink[]
+  shortcuts: ShortcutPolicy
   files: number
   bytes: number
   trust: PackageTrust
@@ -65,7 +71,7 @@ export interface InstallerReview {
 export interface StudioProject {
   projectPath: string
   formatVersion: 1 | 2 | 3
-  schemaVersion: 1 | 2 | 3
+  schemaVersion: 1 | 2 | 3 | 4
   packageId: string
   name: string
   publisher: string
@@ -82,6 +88,7 @@ export interface StudioProject {
   hasEntrypoint: boolean
   showInstallLog: boolean
   finishLinks: FinishLink[]
+  shortcuts: ShortcutPolicy
   executableFiles: number
   files: number
   bytes: number
@@ -102,6 +109,7 @@ export interface StudioProjectUpdate {
   entrypoint: string | null
   showInstallLog: boolean
   finishLinks: FinishLink[]
+  shortcuts: ShortcutPolicy
 }
 
 export interface RecentProject {

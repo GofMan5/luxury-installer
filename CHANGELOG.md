@@ -7,6 +7,8 @@ All notable changes to Luxury Installer are documented here. The project follows
 ### Added
 
 - An evidence-based master roadmap from preview to signed 1.0 production: competitor matrix, best-in-class metrics, product workstreams, version milestones, exact vertical-slice queue, performance budgets, release scorecard, typed shortcuts/associations/components/prerequisites/updater priorities, and deliberate exclusion of arbitrary package scripts.
+- Manifest schema 4 adds bounded application-menu/desktop shortcut intent tied to the exact entrypoint. Compiler, plan, ownership receipt v5, JSONL, Studio authoring and the strict Setup review contract preserve it; Setup bootstrap fails as unsupported before rendering that review or mutating state until native adapters land.
+- Bound Setup `--info-json` response schema is now v2 and requires the strict shortcut policy object; final Windows container verification rejects older or drifted response shapes.
 - Rust-first `.luxpkg` compiler, verifier, transactional installer, repair, uninstall, rollback/recovery, receipts, and explicit receipt-owned launch.
 - Tauri 2 Studio and bound-payload Setup for Windows, Linux, and macOS development workflows.
 - Publisher-authenticated v2 packages, v3 key rotation, and schema-v3 plain-text license consent.

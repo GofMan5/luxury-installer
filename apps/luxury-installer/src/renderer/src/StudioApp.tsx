@@ -295,6 +295,7 @@ function projectUpdateFrom(project: StudioProject): StudioProjectUpdate {
     entrypoint: project.entrypoint,
     showInstallLog: project.showInstallLog,
     finishLinks: project.finishLinks.map((link) => ({ ...link })),
+    shortcuts: { ...project.shortcuts },
   }
 }
 
@@ -551,7 +552,13 @@ function ProjectView({
               <div className="studio-field studio-field--wide">
                 <label htmlFor="studio-entrypoint">Точка запуска</label>
                 <div className="studio-entrypoint">
-                  <input id="studio-entrypoint" aria-describedby="studio-entrypoint-hint" maxLength={4096} value={draft.entrypoint ?? ''} onChange={(event) => setDraft({ ...draft, entrypoint: event.target.value || null })} placeholder="bin/app.exe" />
+                  <input id="studio-entrypoint" aria-describedby="studio-entrypoint-hint" maxLength={4096} value={draft.entrypoint ?? ''} onChange={(event) => setDraft({
+                    ...draft,
+                    entrypoint: event.target.value || null,
+                    shortcuts: event.target.value
+                      ? draft.shortcuts
+                      : { applicationMenu: false, desktop: false },
+                  })} placeholder="bin/app.exe" />
                   <button
                     className="secondary-button"
                     type="button"
@@ -573,6 +580,44 @@ function ProjectView({
               <label><input type="checkbox" checked={draft.showInstallLog} onChange={(event) => setDraft({ ...draft, showInstallLog: event.target.checked })} />Показывать пользователю детали установки</label>
               <label><input type="checkbox" checked={draft.allowDowngrade} onChange={(event) => setDraft({ ...draft, allowDowngrade: event.target.checked })} />Разрешить установку более старой версии</label>
             </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Ярлыки</legend>
+            <div className="studio-fieldset-heading">
+              <p>Ярлыки всегда запускают выбранную точку запуска без скрытых аргументов.</p>
+            </div>
+            <div className="studio-toggles">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={draft.shortcuts.applicationMenu}
+                  disabled={!draft.entrypoint}
+                  onChange={(event) => setDraft({
+                    ...draft,
+                    shortcuts: { ...draft.shortcuts, applicationMenu: event.target.checked },
+                  })}
+                />
+                Добавить в меню приложений
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={draft.shortcuts.desktop}
+                  disabled={!draft.entrypoint}
+                  onChange={(event) => setDraft({
+                    ...draft,
+                    shortcuts: { ...draft.shortcuts, desktop: event.target.checked },
+                  })}
+                />
+                Создать ярлык на рабочем столе
+              </label>
+            </div>
+            {!draft.entrypoint ? (
+              <p className="studio-field-hint">Сначала выберите точку запуска.</p>
+            ) : (
+              <p className="studio-field-hint">Настройка сохранится в проекте. Нативное создание ярлыков войдёт в следующий срез.</p>
+            )}
           </fieldset>
 
           <fieldset>
@@ -670,6 +715,7 @@ function ReadOnlyProject({ project }: { project: StudioProject }) {
           <Fact label="Папка установки" value={project.installDirectory} mono />
           <Fact label="Область" value={project.scope === 'user' ? 'Текущий пользователь' : 'Вся система'} />
           <Fact label="Запуск" value={project.hasEntrypoint ? project.entrypoint ?? 'Настроен' : 'Не настроен'} />
+          <Fact label="Ярлыки" value={shortcutLabel(project.shortcuts)} />
         </dl>
       </section>
       <section aria-labelledby="payload-title">
@@ -683,6 +729,13 @@ function ReadOnlyProject({ project }: { project: StudioProject }) {
       </section>
     </div>
   )
+}
+
+function shortcutLabel(shortcuts: StudioProject['shortcuts']): string {
+  if (shortcuts.applicationMenu && shortcuts.desktop) return 'Меню приложений и рабочий стол'
+  if (shortcuts.applicationMenu) return 'Меню приложений'
+  if (shortcuts.desktop) return 'Рабочий стол'
+  return 'Не создаются'
 }
 
 function StudioField({ label, hint, wide = false, children }: { label: string; hint?: string; wide?: boolean; children: React.ReactNode }) {

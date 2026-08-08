@@ -22,7 +22,7 @@ use crate::{
         BackendEvent, DefaultsResult, FinishLink, InspectResult, InstallLog, InstallResult,
         InstallResultAction, InstallScope, LaunchResult, MAX_SAFE_INTEGER, OperationKind,
         OperationMessage, PackageTrust, PrepareInstallResult, PreparedAction, PublisherRotation,
-        Target, TargetArch, TargetOs, UninstallResult, strict_value,
+        ShortcutPolicy, Target, TargetArch, TargetOs, UninstallResult, strict_value,
     },
 };
 
@@ -170,6 +170,7 @@ struct PackageSummary {
     has_entrypoint: bool,
     install_log: Option<InstallLog>,
     finish_links: Vec<FinishLink>,
+    shortcuts: ShortcutPolicy,
     files: u64,
     bytes: u64,
     trust: PackageTrust,
@@ -256,6 +257,7 @@ struct BoundPackageInfoInstall {
     has_entrypoint: bool,
     show_install_log: bool,
     finish_links: usize,
+    shortcuts: ShortcutPolicy,
 }
 
 #[derive(Debug, Serialize)]
@@ -766,7 +768,7 @@ fn package_info(package: BoundPackage, target: Target) -> BoundPackageInfo {
         summary,
     } = package;
     BoundPackageInfo {
-        schema_version: 1,
+        schema_version: 2,
         package: BoundPackageInfoPackage {
             id,
             fingerprint,
@@ -785,6 +787,7 @@ fn package_info(package: BoundPackage, target: Target) -> BoundPackageInfo {
             has_entrypoint: summary.has_entrypoint,
             show_install_log: summary.install_log.is_some(),
             finish_links: summary.finish_links.len(),
+            shortcuts: summary.shortcuts,
         },
         payload: BoundPackageInfoPayload {
             files: summary.files,
@@ -1708,9 +1711,12 @@ impl BoundPackage {
             _ => false,
         };
         if !matches!(inspected.format_version, 1..=3)
-            || !matches!(inspected.schema_version, 1..=3)
+            || !(1..=luxury_spec::MANIFEST_SCHEMA_VERSION as u8).contains(&inspected.schema_version)
             || (inspected.schema_version == 1 && inspected.install.has_entrypoint)
             || (inspected.schema_version < 3 && inspected.package.license.is_some())
+            || (inspected.install.shortcuts.application_menu || inspected.install.shortcuts.desktop)
+                && (!inspected.install.has_entrypoint
+                    || inspected.schema_version < luxury_spec::SHORTCUT_SCHEMA_VERSION as u8)
             || (inspected.format_version == 1) == signed
             || !trust_valid
             || !rotation_valid
@@ -1776,6 +1782,7 @@ impl BoundPackage {
                 has_entrypoint: inspected.install.has_entrypoint,
                 install_log: inspected.payload.install_log,
                 finish_links: inspected.install.finish_links,
+                shortcuts: inspected.install.shortcuts,
                 files: inspected.payload.files,
                 bytes: inspected.payload.bytes,
                 trust: inspected.trust,
@@ -2011,6 +2018,7 @@ mod tests {
                 has_entrypoint: false,
                 show_install_log: false,
                 finish_links: Vec::new(),
+                shortcuts: crate::backend::ShortcutPolicy::default(),
             },
             payload: Payload {
                 files: 1,
@@ -2046,11 +2054,12 @@ mod tests {
     #[test]
     fn bound_package_info_is_one_line_and_omits_authority_and_private_content() {
         let mut inspected = inspected();
-        inspected.schema_version = 3;
+        inspected.schema_version = luxury_spec::SHORTCUT_SCHEMA_VERSION as u8;
         inspected.package.description = Some("Desktop application".into());
         inspected.package.license = Some("private license body".into());
         inspected.install.has_entrypoint = true;
         inspected.install.show_install_log = true;
+        inspected.install.shortcuts.application_menu = true;
         inspected.install.finish_links = vec![FinishLink {
             label: "Support".into(),
             url: "https://example.com/private".into(),
@@ -2068,7 +2077,7 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&output).unwrap(),
             json!({
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "package": {
                     "id": "dev.luxury.demo",
                     "fingerprint": "a".repeat(64),
@@ -2086,7 +2095,8 @@ mod tests {
                     "directory": "Luxury Demo",
                     "hasEntrypoint": true,
                     "showInstallLog": true,
-                    "finishLinks": 1
+                    "finishLinks": 1,
+                    "shortcuts": {"applicationMenu": true, "desktop": false}
                 },
                 "payload": {"files": 1, "bytes": 29}
             })
@@ -2380,6 +2390,20 @@ mod tests {
         let mut invalid_schema = inspected.clone();
         invalid_schema.install.has_entrypoint = true;
         assert!(BoundPackage::from_backend("payload.luxpkg".into(), invalid_schema).is_err());
+
+        let mut legacy_shortcut = inspected.clone();
+        legacy_shortcut.schema_version = 3;
+        legacy_shortcut.install.has_entrypoint = true;
+        legacy_shortcut.install.shortcuts.application_menu = true;
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), legacy_shortcut).is_err());
+
+        let mut shortcut_without_entrypoint = inspected.clone();
+        shortcut_without_entrypoint.schema_version = luxury_spec::SHORTCUT_SCHEMA_VERSION as u8;
+        shortcut_without_entrypoint.install.shortcuts.desktop = true;
+        assert!(
+            BoundPackage::from_backend("payload.luxpkg".into(), shortcut_without_entrypoint)
+                .is_err()
+        );
 
         let mut invalid_signer = inspected;
         invalid_signer.format_version = 2;

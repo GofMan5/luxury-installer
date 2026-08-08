@@ -154,13 +154,14 @@ The backend keeps one latest progress frame behind its bounded ticker and flushe
 - Package `format_version` and manifest `schema_version` evolve independently.
 - Schema v2 adds one optional exact-file `install.entrypoint`. Windows requires `.exe`; Linux/macOS require `executable=true`. Arguments, environment, automatic run, and generic actions do not exist.
 - Schema v3 adds one optional authenticated `package.license` plain-text agreement. It is bounded to 16,384 Unicode characters / 64 KiB UTF-8 and rejects unsafe controls and bidi overrides. Install requires caller consent before package verification or platform access; CLI, JSONL, Tauri, and renderer validate that contract independently.
+- Schema v4 adds bounded `install.shortcuts` intent: application-menu and desktop booleans only. Both are bound to the existing exact receipt-owned entrypoint; packages cannot name a different target, arguments, working directory, URL, or environment. The compiler, engine receipt, JSONL, Studio and Setup understand the intent. Native mutation remains fail-closed as `unsupported` until the platform-adapter slice implements transactional creation and rollback.
 - `install.show_install_log` and `install.finish_links` are optional presentation policy with byte-compatible omitted defaults. The same bounded details projection is available during installation as an authenticated plan with factual counters and after completion as the result; it is capped at 128 relative paths plus an omitted count and never contains backend logs. At most four credential-free HTTPS links are accepted; generic commands, schemes, auto-run, arguments, and environment mutation remain forbidden.
 - Logical paths are portable forward-slash relative paths, at most 512 UTF-8 bytes overall and 255 bytes per component. Absolute, parent, UNC, device, ADS, empty/dot, backslash, NUL, device-name, and trailing-dot/space forms are rejected.
 - The reader rejects missing, extra, duplicate, linked, special, hash-mismatched, size-mismatched, and trailing compressed content.
 - V1 hashes provide integrity only and require explicit unsigned consent.
 - V2 authenticates the exact manifest through Ed25519 and an external matching SPKI trust anchor.
 - V3 adds an authenticated A→B publisher proof. It requires installed trusted A and strictly greater SemVer precedence; fresh, legacy, unsigned, replay, equal, downgrade, and self-rotation paths fail closed.
-- Ownership receipt v4 stores payload signer, authorized publisher, and optional entrypoint. Legacy receipts remain readable but cannot invent entrypoint authority.
+- Ownership receipt v5 stores payload signer, authorized publisher, optional entrypoint, and shortcut intent. Receipt v1-v4 remain readable without background migration; pre-v5 receipts cannot invent shortcuts.
 
 Package authentication and native artifact signing are separate. A key stored beside a payload in the same unsigned mutable runner is not a trust anchor. Therefore assembled runners accept unsigned v1 only until the native container has a verified external signing boundary.
 
@@ -175,7 +176,7 @@ Read-only preparation authenticates the package, detects pending state, reads th
 
 For a licensed package, `acceptLicense` is explicit caller authority, never package data. The engine fails before the install port when it is false; Tauri also rejects acceptance when no license was offered. The receipt does not persist a fabricated legal claim—each install/update/repair/recovery invocation must carry current-session acceptance again.
 
-Package and destination locks use a fixed order. Platform envelope v2, ownership receipt v4, and journal v4 bind state to package/destination/install-base identity and exact install scope; legacy journal v2/v3 is user-only. Install and state roots may live on different filesystems: payload publication occurs on the install volume and receipt cutover on the state volume.
+Package and destination locks use a fixed order. Platform envelope v2, ownership receipt v5, and journal v4 bind state to package/destination/install-base identity and exact install scope; legacy journal v2/v3 is user-only. Install and state roots may live on different filesystems: payload publication occurs on the install volume and receipt cutover on the state volume.
 
 Private-state policy is explicit adapter authority, never inferred from elevation or path. Windows user state grants only the exact user, SYSTEM, and Administrators; system state requires elevation and grants/owns only SYSTEM or Administrators. Linux/macOS user state is owned by the effective user, while system state requires root ownership; directories/files are `0700`/`0600`.
 

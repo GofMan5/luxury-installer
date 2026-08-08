@@ -25,8 +25,8 @@ use crate::{
         valid_package_id, valid_text,
     },
     backend::{
-        FinishLink, InstallScope, MAX_SAFE_INTEGER, ProjectResult, ResolvedPayloadPath, Target,
-        TargetArch, TargetOs, guard_executable,
+        FinishLink, InstallScope, MAX_SAFE_INTEGER, ProjectResult, ResolvedPayloadPath,
+        ShortcutPolicy, Target, TargetArch, TargetOs, guard_executable,
     },
 };
 
@@ -255,6 +255,7 @@ pub(crate) struct StudioProject {
     has_entrypoint: bool,
     show_install_log: bool,
     finish_links: Vec<FinishLink>,
+    shortcuts: ShortcutPolicy,
     executable_files: u64,
     files: u64,
     bytes: u64,
@@ -277,6 +278,7 @@ pub(crate) struct StudioProjectUpdate {
     entrypoint: Option<String>,
     show_install_log: bool,
     finish_links: Vec<FinishLink>,
+    shortcuts: ShortcutPolicy,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -704,6 +706,7 @@ fn update_project_sync(
                     "entrypoint": input.entrypoint,
                     "showInstallLog": input.show_install_log,
                     "finishLinks": input.finish_links,
+                    "shortcuts": input.shortcuts,
                 },
             }),
         )
@@ -1484,7 +1487,7 @@ impl StudioProject {
     fn from_backend(path: &Path, project: ProjectResult) -> Result<Self, PublicError> {
         if !path.is_absolute()
             || !matches!(project.format_version, 1..=3)
-            || !matches!(project.schema_version, 1..=3)
+            || !(1..=luxury_spec::MANIFEST_SCHEMA_VERSION as u8).contains(&project.schema_version)
             || (project.schema_version < 3 && project.package.license.is_some())
             || !valid_package_id(&project.package.id)
             || !valid_text(&project.package.name)
@@ -1506,7 +1509,12 @@ impl StudioProject {
                 .entrypoint
                 .as_deref()
                 .is_some_and(|path| !valid_portable_path(path))
+            || project.install.has_entrypoint != project.authoring.entrypoint.is_some()
+            || (project.install.has_entrypoint && project.schema_version < 2)
             || project.authoring.executable_files > project.payload.files
+            || (project.install.shortcuts.application_menu || project.install.shortcuts.desktop)
+                && (!project.install.has_entrypoint
+                    || project.schema_version < luxury_spec::SHORTCUT_SCHEMA_VERSION as u8)
             || project.payload.files > MAX_SAFE_INTEGER
             || project.payload.bytes > MAX_SAFE_INTEGER
         {
@@ -1535,6 +1543,7 @@ impl StudioProject {
             has_entrypoint: project.install.has_entrypoint,
             show_install_log: project.install.show_install_log,
             finish_links: project.install.finish_links,
+            shortcuts: project.install.shortcuts,
             executable_files: project.authoring.executable_files,
             files: project.payload.files,
             bytes: project.payload.bytes,
@@ -1559,6 +1568,8 @@ fn validate_project_update(input: &StudioProjectUpdate) -> Result<(), PublicErro
             .as_deref()
             .is_some_and(|path| !valid_portable_path(path))
         || input.finish_links.len() > 4
+        || (input.shortcuts.application_menu || input.shortcuts.desktop)
+            && input.entrypoint.is_none()
         || input.finish_links.iter().any(|link| {
             !valid_text(&link.label)
                 || link.label.chars().count() > 48
@@ -1641,6 +1652,7 @@ mod tests {
                 has_entrypoint: false,
                 show_install_log: false,
                 finish_links: Vec::new(),
+                shortcuts: crate::backend::ShortcutPolicy::default(),
             },
             payload: Payload {
                 files: 1,
@@ -1664,6 +1676,24 @@ mod tests {
         assert!(licensed.has_license);
         assert!(StudioProject::from_backend(&path, project(2, Some("Terms"))).is_err());
         assert!(StudioProject::from_backend(&path, project(3, Some("bad\0text"))).is_err());
+    }
+
+    #[test]
+    fn studio_rejects_unbound_or_legacy_shortcut_state() {
+        let path = std::env::temp_dir().join("luxury-studio-project");
+        let mut legacy = project(3, None);
+        legacy.install.has_entrypoint = true;
+        legacy.authoring.entrypoint = Some("bin/app.exe".into());
+        legacy.install.shortcuts.application_menu = true;
+        assert!(StudioProject::from_backend(&path, legacy).is_err());
+
+        let mut missing_entrypoint = project(luxury_spec::SHORTCUT_SCHEMA_VERSION as u8, None);
+        missing_entrypoint.install.shortcuts.desktop = true;
+        assert!(StudioProject::from_backend(&path, missing_entrypoint).is_err());
+
+        let mut mismatched = project(2, None);
+        mismatched.install.has_entrypoint = true;
+        assert!(StudioProject::from_backend(&path, mismatched).is_err());
     }
 
     #[test]

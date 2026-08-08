@@ -32,6 +32,7 @@ const packageSummary = {
   hasEntrypoint: true,
   installLog: null,
   finishLinks: [],
+  shortcuts: { applicationMenu: false, desktop: false },
   files: 1,
   bytes: 29,
   trust: { kind: 'unsigned' },
@@ -351,6 +352,7 @@ test('Studio paths stay display-only and absolute', () => {
     hasEntrypoint: false,
     showInstallLog: false,
     finishLinks: [],
+    shortcuts: { applicationMenu: false, desktop: false },
     executableFiles: 0,
     files: 1,
     bytes: 29,
@@ -378,6 +380,53 @@ test('Studio paths stay display-only and absolute', () => {
     }).success,
     true,
   )
+  const shortcutProject = {
+    ...project,
+    schemaVersion: 4,
+    entrypoint: 'bin/app.exe',
+    hasEntrypoint: true,
+    shortcuts: { applicationMenu: true, desktop: true },
+  }
+  assert.equal(studioProjectSchema.safeParse(shortcutProject).success, true)
+  assert.equal(
+    studioProjectSchema.safeParse({ ...shortcutProject, schemaVersion: 3 }).success,
+    false,
+  )
+  assert.equal(
+    studioProjectSchema.safeParse({ ...shortcutProject, entrypoint: null, hasEntrypoint: false }).success,
+    false,
+  )
+})
+
+test('shortcut intent is strict and visible in Studio and Setup', async () => {
+  const shortcutSummary = {
+    ...packageSummary,
+    shortcuts: { applicationMenu: true, desktop: false },
+  }
+  assert.equal(packageSummarySchema.safeParse(shortcutSummary).success, true)
+  assert.equal(
+    packageSummarySchema.safeParse({
+      ...shortcutSummary,
+      hasEntrypoint: false,
+    }).success,
+    false,
+  )
+  assert.equal(
+    packageSummarySchema.safeParse({
+      ...shortcutSummary,
+      shortcuts: { applicationMenu: true, desktop: false, target: 'other.exe' },
+    }).success,
+    false,
+  )
+  const [studio, setup] = await Promise.all([
+    readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/features/installer/ReviewView.tsx', import.meta.url), 'utf8'),
+  ])
+  assert.match(studio, /shortcuts\.applicationMenu/)
+  assert.match(studio, /shortcuts\.desktop/)
+  assert.match(studio, /Нативное создание ярлыков войдёт в следующий срез/)
+  assert.match(setup, /summary\.shortcuts\.applicationMenu/)
+  assert.match(setup, /summary\.shortcuts\.desktop/)
 })
 
 test('Studio publishes native installers from one parent-owned work directory', async () => {

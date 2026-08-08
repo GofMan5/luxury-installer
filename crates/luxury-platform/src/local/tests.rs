@@ -419,6 +419,41 @@ fn prepare_fresh_package_is_ready_without_creating_roots() {
     assert!(!state_root.exists());
 }
 
+#[test]
+fn shortcut_intent_fails_before_local_mutation_until_native_adapter_exists() {
+    let temp = tempdir().unwrap();
+    let install_base = temp.path().join("install");
+    let state_root = temp.path().join("state");
+    let (discarded, mut manifest) = bundle(&[("bin/app.exe", b"owned")]);
+    drop(discarded);
+    manifest.schema_version = luxury_spec::SHORTCUT_SCHEMA_VERSION;
+    manifest.install.entrypoint = Some(manifest.files[0].path.clone());
+    manifest.files[0].executable = true;
+    manifest.install.shortcuts.application_menu = true;
+    let payload = tempdir().unwrap();
+    let source = payload.path().join("bin").join("app.exe");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(source, b"owned").unwrap();
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, payload.path(), &manifest).unwrap();
+    let bundle = open_bundle(Cursor::new(encoded), None).unwrap();
+
+    let error = prepare_install(
+        manifest,
+        &mut LocalInstallAdapter::new(bundle, &install_base, &state_root),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        luxury_engine::install::InstallError::Port {
+            step: "preflight",
+            source,
+        } if source.kind() == luxury_engine::PortErrorKind::Unsupported
+    ));
+    assert!(!install_base.exists());
+    assert!(!state_root.exists());
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn prepare_rejects_a_non_writable_destination_without_mutating_it() {
@@ -4144,6 +4179,7 @@ fn bundle_version_in_directory_scope(
             entrypoint: None,
             show_install_log: false,
             finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy::default(),
         },
         publisher_rotation: None,
         files: files
@@ -4205,6 +4241,7 @@ fn signed_bundle_with_keys(
             entrypoint: None,
             show_install_log: false,
             finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy::default(),
         },
         publisher_rotation: None,
         files: files
@@ -4271,6 +4308,7 @@ fn rotation_bundle(
             entrypoint: None,
             show_install_log: false,
             finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy::default(),
         },
         publisher_rotation: Some(rotation),
         files: files

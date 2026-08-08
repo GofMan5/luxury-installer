@@ -583,6 +583,7 @@ fn update_project(
             entrypoint: params.install.entrypoint,
             show_install_log: params.install.show_install_log,
             finish_links: params.install.finish_links,
+            shortcuts: params.install.shortcuts.into(),
         },
         executable: params.executable,
     };
@@ -1541,6 +1542,41 @@ struct UpdateInstallParams {
     show_install_log: bool,
     #[serde(default)]
     finish_links: Vec<FinishLink>,
+    #[serde(default)]
+    shortcuts: ShortcutWire,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ShortcutWire {
+    #[serde(default)]
+    application_menu: bool,
+    #[serde(default)]
+    desktop: bool,
+}
+
+impl ShortcutWire {
+    const fn is_disabled(&self) -> bool {
+        !self.application_menu && !self.desktop
+    }
+}
+
+impl From<ShortcutWire> for luxury_spec::ShortcutPolicy {
+    fn from(value: ShortcutWire) -> Self {
+        Self {
+            application_menu: value.application_menu,
+            desktop: value.desktop,
+        }
+    }
+}
+
+impl From<luxury_spec::ShortcutPolicy> for ShortcutWire {
+    fn from(value: luxury_spec::ShortcutPolicy) -> Self {
+        Self {
+            application_menu: value.application_menu,
+            desktop: value.desktop,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1905,6 +1941,7 @@ impl ProjectResult {
                 has_entrypoint: manifest.install.entrypoint.is_some(),
                 show_install_log: manifest.install.show_install_log,
                 finish_links: manifest.install.finish_links.clone(),
+                shortcuts: manifest.install.shortcuts.into(),
             },
             payload: PayloadResult {
                 files: manifest.files.len(),
@@ -2041,6 +2078,8 @@ struct InstallResultPolicy {
     show_install_log: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     finish_links: Vec<FinishLink>,
+    #[serde(skip_serializing_if = "ShortcutWire::is_disabled")]
+    shortcuts: ShortcutWire,
 }
 
 #[derive(Serialize)]
@@ -2682,6 +2721,60 @@ mod tests {
         assert_eq!(
             validated["result"]["payload"]["installLog"],
             json!({"files": ["hello.txt"], "omittedFiles": 0})
+        );
+    }
+
+    #[test]
+    fn project_wire_round_trips_bounded_shortcut_intent() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        init_project(&project).unwrap();
+        let entrypoint = match Target::host().os {
+            OperatingSystem::Windows => "app.exe",
+            OperatingSystem::Linux | OperatingSystem::Macos => "app",
+        };
+        fs::write(project.join("payload").join(entrypoint), b"app").unwrap();
+        let config = project.join("luxury.toml");
+        let executable_list = if matches!(Target::host().os, OperatingSystem::Windows) {
+            String::from("executable = []")
+        } else {
+            format!("executable = [\"{entrypoint}\"]")
+        };
+        let source = fs::read_to_string(&config)
+            .unwrap()
+            .replacen(
+                "format_version = 1",
+                &format!(
+                    "format_version = 1\nschema_version = {}",
+                    luxury_spec::SHORTCUT_SCHEMA_VERSION
+                ),
+                1,
+            )
+            .replacen(
+                "directory = \"Luxury Demo\"",
+                &format!(
+                    "directory = \"Luxury Demo\"\nentrypoint = \"{entrypoint}\"\n\n[install.shortcuts]\napplication_menu = true\ndesktop = true"
+                ),
+                1,
+            )
+            .replacen(
+                "executable = []",
+                &executable_list,
+                1,
+            );
+        fs::write(config, source).unwrap();
+
+        let validated = stdio_request(
+            "validateProject",
+            json!({"projectPath": project.to_str().unwrap()}),
+        );
+        assert_eq!(
+            validated["result"]["schemaVersion"],
+            luxury_spec::SHORTCUT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            validated["result"]["install"]["shortcuts"],
+            json!({"applicationMenu": true, "desktop": true})
         );
     }
 

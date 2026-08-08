@@ -1169,7 +1169,7 @@ fn require_info_json(
         "Setup info-json",
         &["schemaVersion", "package", "target", "install", "payload"],
     )?;
-    if required_u64(root, "schemaVersion")? != 1 {
+    if required_u64(root, "schemaVersion")? != 2 {
         return Err("Windows Setup info-json has an unsupported schema".into());
     }
 
@@ -1242,13 +1242,24 @@ fn require_info_json(
             "hasEntrypoint",
             "showInstallLog",
             "finishLinks",
+            "shortcuts",
         ],
+    )?;
+    let shortcuts = exact_object(
+        required(install, "shortcuts")?,
+        "Setup info-json shortcuts",
+        &["applicationMenu", "desktop"],
     )?;
     if !matches!(required_string(install, "scope")?, "user" | "system")
         || required_string(install, "directory")?.is_empty()
         || required(install, "hasEntrypoint")?.as_bool().is_none()
         || required(install, "showInstallLog")?.as_bool().is_none()
         || required_u64(install, "finishLinks")? > 4
+        || required(shortcuts, "applicationMenu")?.as_bool().is_none()
+        || required(shortcuts, "desktop")?.as_bool().is_none()
+        || ((required(shortcuts, "applicationMenu")?.as_bool() == Some(true)
+            || required(shortcuts, "desktop")?.as_bool() == Some(true))
+            && required(install, "hasEntrypoint")?.as_bool() != Some(true))
     {
         return Err("Setup info-json install metadata is invalid".into());
     }

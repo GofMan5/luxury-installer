@@ -67,7 +67,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Debug with one absolute --package starts Setup
 - Default release feature studio uses a fixed backend resource and no payload
 - Release feature setup is mutually exclusive and uses fixed native backend/payload resources
-- Final bound Setup accepts only read-only --info-json, --unattended-install with explicit consent flags, --unattended-uninstall, or --help for public headless use; it accepts no path/key/downgrade/launch authority. Info validates the bound package/backend/host without preparation or authorization and emits one bounded JSON line; Windows final-container verification rechecks its exact schema and stdout/stderr transport; mutations wait for the same terminal Rust lifecycle result
+- Final bound Setup accepts only read-only --info-json, --unattended-install with explicit consent flags, --unattended-uninstall, or --help for public headless use; it accepts no path/key/downgrade/launch authority. Info validates the bound package/backend/host without preparation or authorization and emits one bounded schema-2 JSON line with required install.shortcuts; Windows final-container verification rechecks its exact schema and stdout/stderr transport; mutations wait for the same terminal Rust lifecycle result
 - --trusted-publisher-key and LUXURY_BACKEND_PATH are debug-only absolute paths
 - Setup is not a .luxpkg browser: no picker, drag-and-drop, file input, or renderer-supplied package/root path
 - Studio renderer sends typed settings plus pathless create/open/import/replace/entrypoint/reveal/reload/build/cancel-build intent; Rust shell owns native dialog results and active project/output/source paths. Cancel uses one Rust idle/active/cancelled lifecycle, reaps descendants, cleans work, and returns to the validated project.
@@ -113,7 +113,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - format_version 1: unsigned; SHA-256 integrity only; explicit unsigned consent required
 - format_version 2: Ed25519 exact-manifest signature; matching external SPKI trust anchor required; no unsigned fallback
 - format_version 3: A signs completed manifest/payload; B signs domain-separated package/version/A/B rotation proof
-- schema_version is independent; schema 2 adds exact-file install.entrypoint; schema 3 adds bounded authenticated plain-text package.license
+- schema_version is independent; schema 2 adds exact-file install.entrypoint; schema 3 adds bounded authenticated plain-text package.license; schema 4 adds bounded install.shortcuts with application_menu/desktop booleans bound to that exact entrypoint
 - Optional package.description is bounded plain text in luxury-spec, not only a Studio validation rule
 - Optional install.show_install_log keeps one collapsed bounded manifest projection available during installation and after completion; running labels it as a plan with factual counters, never raw backend logs
 - Windows entrypoint requires .exe; Linux/macOS requires executable=true
@@ -121,7 +121,8 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - luxury.toml is untrusted and capped at 1 MiB before parsing
 - Signing keys are bounded PKCS#8 PEM through stdin only; never path/argument/JSONL/log/fixture
 - A and B private keys never enter one process
-- Ownership receipt v4 stores payload signer, authorized publisher, and optional entrypoint
+- Ownership receipt v5 stores payload signer, authorized publisher, optional entrypoint, and shortcut intent; receipt v1-v4 remain readable
+- Studio, the strict Setup review contract, JSONL, and the compiler understand schema 4 shortcuts. Native creation is not advertised yet: current Setup bootstrap returns typed unsupported before the review is rendered and before mutation, until the three OS adapters and rollback lifecycle land
 - Trusted rotation requires installed A and strictly higher SemVer; fresh/legacy/unsigned/replay/equal/downgrade/self rotation fails
 
 ## JSONL protocol v3
