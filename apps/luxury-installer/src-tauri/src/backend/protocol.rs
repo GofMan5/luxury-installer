@@ -242,7 +242,7 @@ pub(crate) struct ResolvedPayloadPath {
     pub(crate) path: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum PrepareInstallResult {
     Ready {

@@ -6,6 +6,15 @@ mod linux;
 #[allow(unsafe_code)]
 mod macos;
 
+fn system_preparation(
+    manifest: luxury_spec::Manifest,
+    adapter: &mut luxury_platform::LocalInstallAdapter,
+) -> Option<crate::stdio::PrepareInstallResult> {
+    luxury_engine::install::prepare_system_install(manifest, adapter)
+        .ok()
+        .and_then(|outcome| crate::stdio::PrepareInstallResult::from_outcome(outcome).ok())
+}
+
 #[cfg(target_os = "linux")]
 pub(super) fn guard_command(command: &std::ffi::OsStr) -> std::io::Result<()> {
     linux::guard_command(command)
@@ -180,7 +189,7 @@ mod windows {
 
     use super::OsString;
 
-    const PROTOCOL_VERSION: u8 = 1;
+    const PROTOCOL_VERSION: u8 = 2;
     const MAX_FRAME_BYTES: usize = 4 * 1024;
     const PIPE_TIMEOUT: Duration = Duration::from_secs(15);
     const PIPE_PREFIX: &str = r"\\.\pipe\luxury-installer-";
@@ -347,6 +356,7 @@ mod windows {
         install_directory: &'a str,
         installed_files: u64,
         installed_bytes: u64,
+        system_preparation: Option<&'a crate::stdio::PrepareInstallResult>,
     }
 
     #[derive(Serialize)]
@@ -392,6 +402,7 @@ mod windows {
         removed_files: u64,
         missing_files: u64,
         preserved_modified_files: u64,
+        system_preparation: Option<&'a crate::stdio::PrepareInstallResult>,
     }
 
     #[derive(Serialize)]
@@ -643,6 +654,7 @@ mod windows {
         }
 
         let install_directory = manifest.install.directory.as_str().to_owned();
+        let preparation_manifest = manifest.clone();
         let command = InstallCommand::for_system(manifest)
             .with_license_acceptance(request.accept_license)
             .with_publisher_migration_approval(request.allow_publisher_migration);
@@ -683,19 +695,23 @@ mod windows {
             return Err(error);
         }
         match result {
-            Ok(outcome) => write_frame(
-                pipe,
-                &InstallCompleteFrame {
-                    protocol_version: PROTOCOL_VERSION,
-                    kind: "installComplete",
-                    operation_id,
-                    action: install_action(outcome.action),
-                    package_id: outcome.package_id.as_str(),
-                    install_directory: &install_directory,
-                    installed_files: outcome.installed_files as u64,
-                    installed_bytes: outcome.installed_bytes,
-                },
-            ),
+            Ok(outcome) => {
+                let preparation = super::system_preparation(preparation_manifest, &mut adapter);
+                write_frame(
+                    pipe,
+                    &InstallCompleteFrame {
+                        protocol_version: PROTOCOL_VERSION,
+                        kind: "installComplete",
+                        operation_id,
+                        action: install_action(outcome.action),
+                        package_id: outcome.package_id.as_str(),
+                        install_directory: &install_directory,
+                        installed_files: outcome.installed_files as u64,
+                        installed_bytes: outcome.installed_bytes,
+                        system_preparation: preparation.as_ref(),
+                    },
+                )
+            }
             Err(error) => write_frame(
                 pipe,
                 &InstallFailedFrame {
@@ -726,8 +742,10 @@ mod windows {
             &request.package_id,
             &request.package_fingerprint,
         )?;
-        let package_id = bundle.manifest().package.id.clone();
-        drop(bundle);
+        let manifest = bundle.manifest().clone();
+        let package_id = manifest.package.id.clone();
+        let mut preparation_adapter =
+            LocalInstallAdapter::for_system(bundle, install_base.clone(), state_root.clone());
 
         let mut adapter = LocalUninstallAdapter::for_system(install_base, state_root);
         let cancelled = Cell::new(false);
@@ -767,36 +785,44 @@ mod windows {
             return Err(error);
         }
         match result {
-            Ok(UninstallOutcome::NotInstalled) => write_frame(
-                pipe,
-                &UninstallCompleteFrame {
-                    protocol_version: PROTOCOL_VERSION,
-                    kind: "uninstallComplete",
-                    operation_id,
-                    status: "notInstalled",
-                    package_id: package_id.as_str(),
-                    removed_files: 0,
-                    missing_files: 0,
-                    preserved_modified_files: 0,
-                },
-            ),
+            Ok(UninstallOutcome::NotInstalled) => {
+                let preparation = super::system_preparation(manifest, &mut preparation_adapter);
+                write_frame(
+                    pipe,
+                    &UninstallCompleteFrame {
+                        protocol_version: PROTOCOL_VERSION,
+                        kind: "uninstallComplete",
+                        operation_id,
+                        status: "notInstalled",
+                        package_id: package_id.as_str(),
+                        removed_files: 0,
+                        missing_files: 0,
+                        preserved_modified_files: 0,
+                        system_preparation: preparation.as_ref(),
+                    },
+                )
+            }
             Ok(UninstallOutcome::Uninstalled {
                 removed_files,
                 missing_files,
                 preserved_modified_files,
-            }) => write_frame(
-                pipe,
-                &UninstallCompleteFrame {
-                    protocol_version: PROTOCOL_VERSION,
-                    kind: "uninstallComplete",
-                    operation_id,
-                    status: "uninstalled",
-                    package_id: package_id.as_str(),
-                    removed_files: removed_files as u64,
-                    missing_files: missing_files as u64,
-                    preserved_modified_files: preserved_modified_files as u64,
-                },
-            ),
+            }) => {
+                let preparation = super::system_preparation(manifest, &mut preparation_adapter);
+                write_frame(
+                    pipe,
+                    &UninstallCompleteFrame {
+                        protocol_version: PROTOCOL_VERSION,
+                        kind: "uninstallComplete",
+                        operation_id,
+                        status: "uninstalled",
+                        package_id: package_id.as_str(),
+                        removed_files: removed_files as u64,
+                        missing_files: missing_files as u64,
+                        preserved_modified_files: preserved_modified_files as u64,
+                        system_preparation: preparation.as_ref(),
+                    },
+                )
+            }
             Err(error) => write_frame(
                 pipe,
                 &UninstallFailedFrame {
@@ -1349,7 +1375,7 @@ mod windows {
         #[test]
         fn challenge_and_acceptance_reject_unknown_fields() {
             let challenge = serde_json::json!({
-                "protocolVersion": 1,
+                "protocolVersion": PROTOCOL_VERSION,
                 "type": "challenge",
                 "operationId": "a".repeat(32),
                 "serverPid": 1,
@@ -1379,7 +1405,7 @@ mod windows {
         #[test]
         fn install_authorization_request_is_strict_and_action_bound() {
             let value = serde_json::json!({
-                "protocolVersion": 1,
+                "protocolVersion": PROTOCOL_VERSION,
                 "type": "authorizeInstall",
                 "operationId": "a".repeat(32),
                 "action": "install",
@@ -1406,7 +1432,7 @@ mod windows {
         #[test]
         fn system_install_request_is_consent_bound_and_contains_no_paths() {
             let value = serde_json::json!({
-                "protocolVersion": 1,
+                "protocolVersion": PROTOCOL_VERSION,
                 "type": "installSystem",
                 "operationId": "a".repeat(32),
                 "action": "install",
@@ -1458,7 +1484,7 @@ mod windows {
         #[test]
         fn system_uninstall_request_is_pathless_and_action_bound() {
             let value = serde_json::json!({
-                "protocolVersion": 1,
+                "protocolVersion": PROTOCOL_VERSION,
                 "type": "uninstallSystem",
                 "operationId": "a".repeat(32),
                 "action": "uninstall",
@@ -1482,7 +1508,7 @@ mod windows {
         #[test]
         fn system_launch_request_is_pathless_and_action_bound() {
             let value = serde_json::json!({
-                "protocolVersion": 1,
+                "protocolVersion": PROTOCOL_VERSION,
                 "type": "launchSystem",
                 "operationId": "a".repeat(32),
                 "action": "launch",

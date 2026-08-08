@@ -265,6 +265,7 @@ test('operation events reject relational counter drift but keep a correlation en
     setupEventSchema.safeParse({ ...complete, review }).success,
     false,
   )
+  assert.equal(setupEventSchema.safeParse({ ...complete, review: null }).success, true)
   assert.equal(
     setupEventSchema.safeParse({
       kind: 'action',
@@ -280,6 +281,50 @@ test('operation events reject relational counter drift but keep a correlation en
       removedFiles: Number.MAX_SAFE_INTEGER,
       missingFiles: 1,
       preservedModifiedFiles: 0,
+      review: null,
+    }).success,
+    false,
+  )
+  assert.equal(
+    setupEventSchema.safeParse({
+      kind: 'uninstallComplete',
+      operationId: 'tauri-1-1',
+      removedFiles: 1,
+      missingFiles: 0,
+      preservedModifiedFiles: 0,
+      review: null,
+    }).success,
+    true,
+  )
+  const systemReview = {
+    ...review,
+    package: { ...packageSummary, scope: 'system' },
+    destination: null,
+  }
+  assert.equal(
+    setupEventSchema.safeParse({
+      kind: 'uninstallComplete',
+      operationId: 'tauri-1-1',
+      removedFiles: 1,
+      missingFiles: 0,
+      preservedModifiedFiles: 0,
+      review: systemReview,
+    }).success,
+    true,
+  )
+  assert.equal(
+    setupEventSchema.safeParse({
+      kind: 'uninstallComplete',
+      operationId: 'tauri-1-1',
+      removedFiles: 1,
+      missingFiles: 0,
+      preservedModifiedFiles: 0,
+      review: {
+        ...systemReview,
+        action: 'repair',
+        installedVersion: '1.0.0',
+        canUninstall: true,
+      },
     }).success,
     false,
   )

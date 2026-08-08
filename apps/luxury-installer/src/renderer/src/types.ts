@@ -163,7 +163,7 @@ export type SetupEvent =
       action: InstallResultAction
       installedFiles: number
       installedBytes: number
-      review?: InstallerReview | undefined
+      review: InstallerReview | null
     }
   | { kind: 'uninstallPhase'; operationId: string; phase: UninstallPhase }
   | {
@@ -178,6 +178,7 @@ export type SetupEvent =
       removedFiles: number
       missingFiles: number
       preservedModifiedFiles: number
+      review: InstallerReview | null
     }
   | {
       kind: 'error'

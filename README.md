@@ -49,6 +49,7 @@ Each Setup is bound to one reviewed payload. It shows the application descriptio
 - cancellation and failure restore the previous installation; if Setup cannot confirm the cancel request, it explains that inline and keeps **Cancel** available for an idempotent retry while the operation continues;
 - unknown files and modified obsolete files are preserved;
 - successful progress waits for an explicit **Next** before showing launch, folder, and finish-link actions; failures stay inline and retryable, while a successful launch is remembered before Setup closes so a close error cannot start the app twice; **Show in folder** works for user and system installs without giving React a native path;
+- for a system install or uninstall, privileged helper protocol v2 returns a fresh read-only maintenance state in the successful terminal frame and the renderer receives that authoritative review; Setup does not invent Install/Repair, request a second authorization prompt on completion, or retain stale state when that refresh is unavailable;
 - package authors decide whether the bounded installation-details panel is available during and after the operation.
 
 There is no built-in update-download service yet. Updating means launching a newer Setup for the same package ID and roots; the transactional upgrade itself is implemented.

@@ -316,16 +316,17 @@ export const setupEventSchema = z.discriminatedUnion('kind', [
       action: installAction,
       installedFiles: count,
       installedBytes: count,
-      review: installerReviewSchema.optional(),
+      review: installerReviewSchema.nullable(),
     })
     .strict()
     .refine(
       (value) =>
-        value.review === undefined ||
+        value.review === null ||
+        value.review.package.scope === 'system' ||
         (value.review.action === 'repair' &&
           value.review.installedVersion !== null &&
           value.review.canUninstall),
-      { path: ['review'], message: 'complete event contains stale review' },
+      { path: ['review'], message: 'complete event contains stale user review' },
     ),
   z
     .object({ kind: z.literal('uninstallPhase'), operationId: requestId, phase: uninstallPhase })
@@ -346,12 +347,21 @@ export const setupEventSchema = z.discriminatedUnion('kind', [
       removedFiles: count,
       missingFiles: count,
       preservedModifiedFiles: count,
+      review: installerReviewSchema.nullable(),
     })
     .strict()
     .refine(
       (value) =>
         value.removedFiles + value.missingFiles + value.preservedModifiedFiles <=
         Number.MAX_SAFE_INTEGER,
+    )
+    .refine(
+      (value) =>
+        value.review === null ||
+        value.review.package.scope !== 'system' ||
+        value.review.action === 'install' ||
+        value.review.action === 'recover',
+      { path: ['review'], message: 'uninstall event contains stale system review' },
     ),
   z
     .object({

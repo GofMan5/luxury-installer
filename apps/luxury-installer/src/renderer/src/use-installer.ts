@@ -161,7 +161,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
               : current,
           )
         } else if (event.kind === 'complete') {
-          if (event.review) setReview(event.review)
+          setReview(event.review)
           setPublisherMigrationAccepted(false)
           setView({
             kind: 'installFinished',
@@ -188,9 +188,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
               : current,
           )
         } else if (event.kind === 'uninstallComplete') {
-          setReview((current) =>
-            current ? { ...current, canUninstall: false } : current,
-          )
+          setReview(event.review)
           setView({
             kind: 'uninstallComplete',
             removedFiles: event.removedFiles,

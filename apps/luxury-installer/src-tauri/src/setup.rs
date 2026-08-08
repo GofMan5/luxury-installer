@@ -105,6 +105,11 @@ enum SetupOperation {
     System(crate::privilege::SystemOperation),
 }
 
+struct SetupOperationMessage {
+    message: OperationMessage,
+    system_preparation: Option<PrepareInstallResult>,
+}
+
 impl SetupOperation {
     fn operation_id(&self) -> &str {
         match self {
@@ -120,12 +125,34 @@ impl SetupOperation {
         }
     }
 
-    fn recv(&self) -> Result<OperationMessage, crate::backend::BackendError> {
+    fn recv(&self) -> Result<SetupOperationMessage, crate::backend::BackendError> {
         match self {
-            Self::User(operation) => operation.recv(),
-            Self::System(operation) => operation.recv(),
+            Self::User(operation) => operation.recv().map(|message| SetupOperationMessage {
+                message,
+                system_preparation: None,
+            }),
+            Self::System(operation) => operation.recv().and_then(system_operation_message),
         }
     }
+}
+
+fn system_operation_message(
+    message: OperationMessage,
+) -> Result<SetupOperationMessage, crate::backend::BackendError> {
+    let OperationMessage::Complete(Ok(Value::Object(mut result))) = message else {
+        return Ok(SetupOperationMessage {
+            message,
+            system_preparation: None,
+        });
+    };
+    let system_preparation = result
+        .remove("systemPreparation")
+        .and_then(|preparation| serde_json::from_value(preparation).ok())
+        .flatten();
+    Ok(SetupOperationMessage {
+        message: OperationMessage::Complete(Ok(Value::Object(result))),
+        system_preparation,
+    })
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -270,7 +297,6 @@ enum SetupEvent {
         action: InstallResultAction,
         installed_files: u64,
         installed_bytes: u64,
-        #[serde(skip_serializing_if = "Option::is_none")]
         review: Option<Box<InstallerReview>>,
     },
     UninstallPhase {
@@ -287,6 +313,7 @@ enum SetupEvent {
         removed_files: u64,
         missing_files: u64,
         preserved_modified_files: u64,
+        review: Option<Box<InstallerReview>>,
     },
     Error {
         operation_id: String,
@@ -660,7 +687,23 @@ fn bootstrap_review(state: &AppState) -> Result<InstallerReview, PublicError> {
         .clone();
     if let Some(context) = existing {
         let _starting = acquire_idle(state, &context)?;
-        return refresh_selection(state, &context, selection(&context)?);
+        let previous = context
+            .selection
+            .lock()
+            .map_err(|_| PublicError::new("internal_error", "Состояние Setup недоступно."))?
+            .clone();
+        let previous = match previous {
+            Some(previous) => previous,
+            None => {
+                let defaults = state.defaults()?;
+                SetupSelection {
+                    install_base: absolute_path(&defaults.install_base)?,
+                    state_root: absolute_path(&defaults.state_root)?,
+                    preparation: PrepareInstallResult::RecoveryRequired,
+                }
+            }
+        };
+        return refresh_selection(state, &context, previous);
     }
     review(&setup_context(state)?)
 }
@@ -1022,7 +1065,7 @@ fn wait_unattended_install(
     operation: SetupOperation,
 ) -> Result<(), PublicError> {
     loop {
-        match operation.recv().map_err(PublicError::from)? {
+        match operation.recv().map_err(PublicError::from)?.message {
             OperationMessage::Event(_) => {}
             OperationMessage::Complete(result) => {
                 let value = result.map_err(PublicError::from)?;
@@ -1045,7 +1088,7 @@ fn wait_unattended_uninstall(
     operation: SetupOperation,
 ) -> Result<(), PublicError> {
     loop {
-        match operation.recv().map_err(PublicError::from)? {
+        match operation.recv().map_err(PublicError::from)?.message {
             OperationMessage::Event(_) => {}
             OperationMessage::Complete(result) => {
                 let value = result.map_err(PublicError::from)?;
@@ -1076,9 +1119,23 @@ fn spawn_install_completion(
         .spawn(move || {
             loop {
                 match operation.recv() {
-                    Ok(OperationMessage::Event(event)) => emit_backend_event(&app, &context, event),
-                    Ok(OperationMessage::Complete(result)) => {
-                        finish_install(&app, &state, &context, &selection, &operation_id, result);
+                    Ok(SetupOperationMessage {
+                        message: OperationMessage::Event(event),
+                        ..
+                    }) => emit_backend_event(&app, &context, event),
+                    Ok(SetupOperationMessage {
+                        message: OperationMessage::Complete(result),
+                        system_preparation,
+                    }) => {
+                        finish_install(
+                            &app,
+                            &state,
+                            &context,
+                            &selection,
+                            &operation_id,
+                            result,
+                            system_preparation,
+                        );
                         return;
                     }
                     Err(error) => {
@@ -1089,6 +1146,7 @@ fn spawn_install_completion(
                             &selection,
                             &operation_id,
                             Err(error),
+                            None,
                         );
                         return;
                     }
@@ -1112,9 +1170,23 @@ fn spawn_uninstall_completion(
         .spawn(move || {
             loop {
                 match operation.recv() {
-                    Ok(OperationMessage::Event(event)) => emit_backend_event(&app, &context, event),
-                    Ok(OperationMessage::Complete(result)) => {
-                        finish_uninstall(&app, &state, &context, &selection, &operation_id, result);
+                    Ok(SetupOperationMessage {
+                        message: OperationMessage::Event(event),
+                        ..
+                    }) => emit_backend_event(&app, &context, event),
+                    Ok(SetupOperationMessage {
+                        message: OperationMessage::Complete(result),
+                        system_preparation,
+                    }) => {
+                        finish_uninstall(
+                            &app,
+                            &state,
+                            &context,
+                            &selection,
+                            &operation_id,
+                            result,
+                            system_preparation,
+                        );
                         return;
                     }
                     Err(error) => {
@@ -1125,6 +1197,7 @@ fn spawn_uninstall_completion(
                             &selection,
                             &operation_id,
                             Err(error),
+                            None,
                         );
                         return;
                     }
@@ -1142,6 +1215,7 @@ fn finish_install(
     selection: &SetupSelection,
     operation_id: &str,
     result: Result<Value, crate::backend::BackendError>,
+    system_preparation: Option<PrepareInstallResult>,
 ) {
     if !is_active(context, operation_id, ActiveKind::Install) {
         return;
@@ -1165,7 +1239,12 @@ fn finish_install(
                     *last = Some(install_path);
                 }
             }
-            let review = cache_installed_selection(context, selection);
+            let review = cache_completed_selection(
+                context,
+                selection,
+                system_preparation,
+                PreparedAction::Repair,
+            );
             clear_active(context, operation_id);
             context.install_completed.store(true, Ordering::Release);
             emit(
@@ -1199,19 +1278,34 @@ fn finish_install(
     }
 }
 
-fn cache_installed_selection(
+fn cache_completed_selection(
     context: &SetupContext,
     previous: &SetupSelection,
+    system_preparation: Option<PrepareInstallResult>,
+    user_action: PreparedAction,
 ) -> Option<InstallerReview> {
-    let next = SetupSelection {
-        install_base: previous.install_base.clone(),
-        state_root: previous.state_root.clone(),
-        preparation: PrepareInstallResult::Ready {
-            action: PreparedAction::Repair,
-            installed_version: Some(context.package.summary.version.clone()),
+    let preparation = match (context.package.summary.scope, system_preparation) {
+        (InstallScope::System, Some(preparation)) => preparation,
+        (InstallScope::System, None) => {
+            *context.selection.lock().ok()? = None;
+            return None;
+        }
+        (InstallScope::User, _) => PrepareInstallResult::Ready {
+            action: user_action,
+            installed_version: (user_action != PreparedAction::Install)
+                .then(|| context.package.summary.version.clone()),
             publisher_migration_required: false,
         },
     };
+    let next = SetupSelection {
+        install_base: previous.install_base.clone(),
+        state_root: previous.state_root.clone(),
+        preparation,
+    };
+    if validate_preparation(&next.preparation).is_err() {
+        *context.selection.lock().ok()? = None;
+        return None;
+    }
     *context.selection.lock().ok()? = Some(next);
     review(context).ok()
 }
@@ -1223,6 +1317,7 @@ fn finish_uninstall(
     selection: &SetupSelection,
     operation_id: &str,
     result: Result<Value, crate::backend::BackendError>,
+    system_preparation: Option<PrepareInstallResult>,
 ) {
     if !is_active(context, operation_id, ActiveKind::Uninstall) {
         return;
@@ -1245,14 +1340,13 @@ fn finish_uninstall(
                 *last = None;
             }
             let next = if context.package.summary.scope == InstallScope::System {
-                Some(SetupSelection {
-                    install_base: selection.install_base.clone(),
-                    state_root: selection.state_root.clone(),
-                    preparation: PrepareInstallResult::Ready {
-                        action: PreparedAction::Install,
-                        installed_version: None,
-                        publisher_migration_required: false,
-                    },
+                system_preparation.and_then(|preparation| {
+                    validate_preparation(&preparation).ok()?;
+                    Some(SetupSelection {
+                        install_base: selection.install_base.clone(),
+                        state_root: selection.state_root.clone(),
+                        preparation,
+                    })
                 })
             } else {
                 prepare_selection(
@@ -1266,6 +1360,7 @@ fn finish_uninstall(
             if let Ok(mut current) = context.selection.lock() {
                 *current = next;
             }
+            let review = review(context).ok();
             clear_active(context, operation_id);
             emit(
                 app,
@@ -1274,6 +1369,7 @@ fn finish_uninstall(
                     removed_files: removed,
                     missing_files: missing,
                     preserved_modified_files: preserved,
+                    review: review.map(Box::new),
                 },
             );
         }
@@ -2325,7 +2421,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_install_caches_maintenance_review() {
+    fn successful_user_install_caches_maintenance_review() {
         let package = BoundPackage::from_backend("payload.luxpkg".into(), inspected()).unwrap();
         let previous = SetupSelection {
             install_base: PathBuf::from(r"C:\Programs"),
@@ -2345,10 +2441,127 @@ mod tests {
             install_completed: Arc::new(AtomicBool::new(false)),
         };
 
-        let review = cache_installed_selection(&context, &previous).unwrap();
+        let review =
+            cache_completed_selection(&context, &previous, None, PreparedAction::Repair).unwrap();
         assert!(matches!(review.action, SetupAction::Repair));
         assert_eq!(review.installed_version.as_deref(), Some("1.0.0"));
         assert!(review.can_uninstall);
+    }
+
+    #[test]
+    fn successful_system_install_uses_only_terminal_preparation() {
+        let mut inspected = inspected();
+        inspected.install.scope = InstallScope::System;
+        let previous = SetupSelection {
+            install_base: PathBuf::from(r"C:\Programs"),
+            state_root: PathBuf::from(r"C:\State"),
+            preparation: PrepareInstallResult::Ready {
+                action: PreparedAction::Install,
+                installed_version: None,
+                publisher_migration_required: false,
+            },
+        };
+        let context = SetupContext {
+            package: BoundPackage::from_backend("payload.luxpkg".into(), inspected).unwrap(),
+            selection: Arc::new(Mutex::new(Some(previous.clone()))),
+            active: Arc::new(Mutex::new(None)),
+            starting: Arc::new(AtomicBool::new(false)),
+            last_install_path: Arc::new(Mutex::new(None)),
+            install_completed: Arc::new(AtomicBool::new(false)),
+        };
+
+        let review = cache_completed_selection(
+            &context,
+            &previous,
+            Some(PrepareInstallResult::RecoveryRequired),
+            PreparedAction::Repair,
+        )
+        .unwrap();
+        assert!(matches!(review.action, SetupAction::Recover));
+        assert!(!review.can_uninstall);
+
+        assert!(
+            cache_completed_selection(&context, &previous, None, PreparedAction::Repair).is_none()
+        );
+        assert!(context.selection.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn system_terminal_treats_missing_preparation_as_an_uncached_success() {
+        let result = system_operation_message(OperationMessage::Complete(Ok(json!({
+            "status": "uninstalled",
+            "packageId": "dev.luxury.demo",
+            "removedFiles": 1,
+            "missingFiles": 0,
+            "preservedModifiedFiles": 0,
+        }))));
+        let result = result.unwrap();
+        assert!(result.system_preparation.is_none());
+
+        let result = system_operation_message(OperationMessage::Complete(Ok(json!({
+            "status": "uninstalled",
+            "packageId": "dev.luxury.demo",
+            "removedFiles": 1,
+            "missingFiles": 0,
+            "preservedModifiedFiles": 0,
+            "systemPreparation": { "status": "recoveryRequired" },
+        }))));
+        let result = result.unwrap();
+        assert!(matches!(
+            result.system_preparation,
+            Some(PrepareInstallResult::RecoveryRequired)
+        ));
+        let OperationMessage::Complete(Ok(Value::Object(result))) = result.message else {
+            panic!("system terminal was not preserved");
+        };
+        assert!(result.get("systemPreparation").is_none());
+    }
+
+    #[test]
+    fn system_uninstall_event_exposes_only_the_authoritative_terminal_review() {
+        let mut inspected = inspected();
+        inspected.install.scope = InstallScope::System;
+        let selection = SetupSelection {
+            install_base: PathBuf::from(r"C:\Programs"),
+            state_root: PathBuf::from(r"C:\State"),
+            preparation: PrepareInstallResult::Ready {
+                action: PreparedAction::Repair,
+                installed_version: Some("1.0.0".into()),
+                publisher_migration_required: false,
+            },
+        };
+        let context = SetupContext {
+            package: BoundPackage::from_backend("payload.luxpkg".into(), inspected).unwrap(),
+            selection: Arc::new(Mutex::new(Some(selection.clone()))),
+            active: Arc::new(Mutex::new(None)),
+            starting: Arc::new(AtomicBool::new(false)),
+            last_install_path: Arc::new(Mutex::new(None)),
+            install_completed: Arc::new(AtomicBool::new(false)),
+        };
+
+        let next = Some(SetupSelection {
+            install_base: selection.install_base,
+            state_root: selection.state_root,
+            preparation: PrepareInstallResult::Ready {
+                action: PreparedAction::Install,
+                installed_version: None,
+                publisher_migration_required: false,
+            },
+        });
+        *context.selection.lock().unwrap() = next;
+        let event = SetupEvent::UninstallComplete {
+            operation_id: "system-uninstall".into(),
+            removed_files: 1,
+            missing_files: 0,
+            preserved_modified_files: 0,
+            review: review(&context).ok().map(Box::new),
+        };
+        let value = serde_json::to_value(event).unwrap();
+
+        assert_eq!(value["review"]["package"]["scope"], "system");
+        assert_eq!(value["review"]["action"], "install");
+        assert_eq!(value["review"]["canUninstall"], false);
+        assert!(value["review"]["destination"].is_null());
     }
 
     #[test]

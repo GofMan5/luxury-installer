@@ -12,9 +12,28 @@ use std::{
 };
 
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::backend::{BackendError, BackendEvent, MAX_SAFE_INTEGER, OperationMessage};
+
+const SYSTEM_PROTOCOL_VERSION: u8 = 2;
+
+struct SystemPreparation(Value);
+
+impl Default for SystemPreparation {
+    fn default() -> Self {
+        Self(Value::Null)
+    }
+}
+
+impl<'de> Deserialize<'de> for SystemPreparation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Value::deserialize(deserializer).map(Self)
+    }
+}
 
 pub(crate) struct SystemOperation {
     pub(crate) operation_id: String,
@@ -72,6 +91,8 @@ enum SystemOperationFrame {
         install_directory: String,
         installed_files: u64,
         installed_bytes: u64,
+        #[serde(default)]
+        system_preparation: SystemPreparation,
     },
     #[serde(rename = "installFailed")]
     Failed {
@@ -101,6 +122,8 @@ enum SystemOperationFrame {
         removed_files: u64,
         missing_files: u64,
         preserved_modified_files: u64,
+        #[serde(default)]
+        system_preparation: SystemPreparation,
     },
     #[serde(rename = "uninstallFailed")]
     UninstallFailed {
@@ -207,6 +230,7 @@ fn forward_system_operation_frame(
             install_directory,
             installed_files,
             installed_bytes,
+            system_preparation,
         } => {
             require_system_frame(protocol_version, &operation_id, expected_operation_id)?;
             if package_id != expected_package_id
@@ -224,6 +248,7 @@ fn forward_system_operation_frame(
                 "installedFiles": installed_files,
                 "installedBytes": installed_bytes,
                 "installDirectory": install_directory,
+                "systemPreparation": system_preparation.0,
             })))))
         }
         SystemOperationFrame::Failed {
@@ -286,6 +311,7 @@ fn forward_system_operation_frame(
             removed_files,
             missing_files,
             preserved_modified_files,
+            system_preparation,
         } => {
             require_system_frame(protocol_version, &operation_id, expected_operation_id)?;
             if package_id != expected_package_id
@@ -304,7 +330,11 @@ fn forward_system_operation_frame(
                         && missing_files == 0
                         && preserved_modified_files == 0 =>
                 {
-                    json!({ "status": "notInstalled", "packageId": package_id })
+                    json!({
+                        "status": "notInstalled",
+                        "packageId": package_id,
+                        "systemPreparation": system_preparation.0,
+                    })
                 }
                 "uninstalled" => json!({
                     "status": "uninstalled",
@@ -312,6 +342,7 @@ fn forward_system_operation_frame(
                     "removedFiles": removed_files,
                     "missingFiles": missing_files,
                     "preservedModifiedFiles": preserved_modified_files,
+                    "systemPreparation": system_preparation.0,
                 }),
                 _ => {
                     return Err(io::Error::new(
@@ -401,7 +432,7 @@ fn require_error_code(code: &str, action: &str) -> io::Result<()> {
 }
 
 fn require_system_frame(found: u8, operation_id: &str, expected: &str) -> io::Result<()> {
-    if found == 1 && operation_id == expected {
+    if found == SYSTEM_PROTOCOL_VERSION && operation_id == expected {
         Ok(())
     } else {
         Err(io::Error::new(

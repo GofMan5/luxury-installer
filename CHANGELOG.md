@@ -64,5 +64,6 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Versioned private user state rejects legacy broad ACL/modes without rewriting or trusting old receipts and journals.
 - Core manifest validation bounds optional package descriptions instead of relying on Studio-only checks.
 - macOS launch now keeps the verified no-follow install root as cwd through direct user spawn and post-credential-drop `launchctl asuser`; executable pathname replacement remains an explicit ceiling.
+- Successful system install/uninstall now returns a fresh privileged `prepare_system_install` state in the same terminal frame and exposes that authoritative review to the renderer, so Setup no longer fabricates post-operation Install/Repair state or triggers a second elevation prompt.
 
 > No production release has been published yet. See the blockers in [README.md](README.md#security-model).

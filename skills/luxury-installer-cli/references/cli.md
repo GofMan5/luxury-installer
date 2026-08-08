@@ -139,6 +139,8 @@ Query the final shipped Setup path. Windows packaging verifies this contract thr
 
 No package path, install root, state root, key, downgrade approval, launch, environment, or arbitrary command is accepted. The runner uses its compiled payload binding and host-native default roots, waits for terminal rollback/cleanup for mutations, and returns `0` on successful inspection/operation, `1` on an inspection/operation failure, or `64` on invalid arguments. Unattended uninstall is idempotent; system scope can still require the OS-native UAC/polkit authorization prompt. Supply each consent only when the caller explicitly authorized the currently authenticated request.
 
+System Setup uses a separate privileged helper protocol v2, not public JSONL v3. The authenticated helper repeats read-only `prepare_system_install` after a successful install/uninstall and includes the fresh state in that terminal frame, so completion needs no second authorization prompt. Setup treats the returned review as authoritative, including `recoveryRequired`, and passes it to the renderer on successful install/uninstall; an absent or invalid post-commit review preserves the committed operation result, clears cached maintenance state, and forces a new privileged refresh on the next bootstrap instead of fabricating Install/Repair.
+
 ## Install, update, repair, and removal
 
 Inspect and preflight before mutation:
