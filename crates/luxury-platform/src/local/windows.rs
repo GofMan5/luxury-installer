@@ -111,7 +111,7 @@ pub(super) fn require_private_authority(scope: InstallScope) -> io::Result<()> {
 
 pub(super) fn create_private_directory(path: &Path, scope: InstallScope) -> io::Result<()> {
     require_private_authority(scope)?;
-    let path = validate_real_parent_chain(path)?;
+    let (path, _parent_guards) = open_real_parent_chain(path)?;
     let descriptor = private_security_descriptor(scope, true)?;
     let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -172,7 +172,7 @@ fn open_acl_target(
     scope: InstallScope,
     write: bool,
 ) -> io::Result<File> {
-    let path = validate_real_parent_chain(path)?;
+    let (path, _parent_guards) = open_real_parent_chain(path)?;
     let mut options = OpenOptions::new();
     let flags = FILE_FLAG_OPEN_REPARSE_POINT
         | if directory {
@@ -211,15 +211,16 @@ fn open_acl_target(
     Ok(file)
 }
 
-fn validate_real_parent_chain(path: &Path) -> io::Result<PathBuf> {
+pub(super) fn open_real_parent_chain(path: &Path) -> io::Result<(PathBuf, Vec<File>)> {
     let absolute = absolute_local_path(path)?;
     let parent = absolute.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "private ACL target has no parent directory",
+            "Windows filesystem path has no parent directory",
         )
     })?;
     let mut current = PathBuf::new();
+    let mut guards = Vec::new();
     let mut rooted = false;
     for component in parent.components() {
         current.push(component.as_os_str());
@@ -227,15 +228,15 @@ fn validate_real_parent_chain(path: &Path) -> io::Result<PathBuf> {
             Component::Prefix(_) => {}
             Component::RootDir => {
                 rooted = true;
-                open_real_directory(&current)?;
+                guards.push(open_real_directory(&current)?);
             }
             Component::Normal(_) if rooted => {
-                open_real_directory(&current)?;
+                guards.push(open_real_directory(&current)?);
             }
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "private ACL path contains an unsupported component",
+                    "Windows filesystem path contains an unsupported component",
                 ));
             }
         }
@@ -243,10 +244,10 @@ fn validate_real_parent_chain(path: &Path) -> io::Result<PathBuf> {
     if !rooted {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "private ACL path is not rooted",
+            "Windows filesystem path is not rooted",
         ));
     }
-    Ok(absolute)
+    Ok((absolute, guards))
 }
 
 fn absolute_local_path(path: &Path) -> io::Result<PathBuf> {
@@ -256,7 +257,7 @@ fn absolute_local_path(path: &Path) -> io::Result<PathBuf> {
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "private ACL path has no Windows prefix",
+                "filesystem path has no Windows prefix",
             ));
         }
     };
@@ -266,7 +267,7 @@ fn absolute_local_path(path: &Path) -> io::Result<PathBuf> {
     ) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "private ACL path uses a device namespace",
+            "Windows filesystem path uses a device namespace",
         ));
     }
     if absolute
@@ -275,7 +276,7 @@ fn absolute_local_path(path: &Path) -> io::Result<PathBuf> {
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "private ACL path contains a parent component",
+            "Windows filesystem path contains a parent component",
         ));
     }
     Ok(absolute)
@@ -941,8 +942,10 @@ pub(super) fn volume_space(path: &Path) -> io::Result<(u64, u64, u64)> {
 }
 
 fn open_real_directory(path: &Path) -> io::Result<File> {
+    // Omitting FILE_SHARE_DELETE pins this component while the returned handle is alive.
     let file = OpenOptions::new()
         .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)?;
     let attributes = file_information(&file)?.dwFileAttributes;
@@ -1198,6 +1201,20 @@ mod tests {
 
         assert_eq!(volume_id, expected_volume);
         assert!(allocation_unit > 0);
+    }
+
+    #[test]
+    fn real_parent_chain_guards_deny_replacement_until_drop() {
+        let temp = tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let moved = temp.path().join("moved");
+        fs::create_dir(&parent).unwrap();
+        let (_, guards) = open_real_parent_chain(&parent.join("entry.exe")).unwrap();
+
+        assert!(fs::rename(&parent, &moved).is_err());
+        drop(guards);
+        fs::rename(&parent, &moved).unwrap();
+        fs::rename(&moved, &parent).unwrap();
     }
 
     #[test]

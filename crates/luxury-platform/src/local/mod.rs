@@ -911,6 +911,12 @@ fn check_install_plan(
     plan: &InstallPlan,
     previous: Option<&OwnershipReceipt>,
 ) -> Result<(), PortError> {
+    if plan.shortcuts().enabled() {
+        return Err(PortError::with_kind(
+            PortErrorKind::Unsupported,
+            "native shortcut mutation is not implemented for this adapter",
+        ));
+    }
     validate_install_directory_namespace(plan.directory())?;
     validate_directory_chain(install_base)?;
     validate_directory_chain(state_root)?;
@@ -1012,6 +1018,8 @@ fn same_receipt_identity(left: &OwnershipReceipt, right: &OwnershipReceipt) -> b
         && left.directory() == right.directory()
         && left.package_identity() == right.package_identity()
         && left.payload_signer() == right.payload_signer()
+        && left.entrypoint() == right.entrypoint()
+        && left.shortcuts() == right.shortcuts()
 }
 
 fn check_destination_files(

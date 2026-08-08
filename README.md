@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>Build a polished installer without giving up control.</strong><br>
-  A modern Studio, deterministic packages, transactional updates, and one Rust core for Windows, Linux, and macOS.
+  A modern Studio, native installers, transactional updates, and one Rust core for Windows, Linux, and macOS.
 </p>
 
 <p align="center">
@@ -30,24 +30,29 @@
 Open Studio and describe the application instead of hand-writing a setup script:
 
 - edit identity, version, publisher, target, architecture, and install scope;
-- add files or a complete folder through native dialogs;
+- reopen up to six validated recent projects without browsing for their folders again;
+- keep unsaved edits visible and protected: project switching and reload stay locked until you save or undo, and closing Studio asks before discarding the draft;
+- add files or a complete folder through native dialogs, or safely replace the whole payload with a staged new build folder;
 - choose the launch file from the real payload;
-- add a license, optional installation details, and up to four HTTPS finish links;
-- save, revalidate, and build one deterministic `.luxpkg`.
+- add a license, optional installation details, up to four HTTPS finish links, and schema 4 application-menu/desktop shortcut intent tied to the selected launch file;
+- press one build action to save and revalidate current edits, build a real `.exe`, `.deb` + `.rpm`, or `.dmg` with a human-readable product-name file/folder suggestion, then reveal it directly from Studio.
 
-Source and output paths stay in the Rust shell. React receives validated portable settings, not generic filesystem access. Imports never overwrite an existing payload entry, and a failed partial import rolls back.
+The internal package container stays between the Rust compiler and packager and is deleted with the build workspace. It is not the file a Studio user ships. Source and output paths stay in the Rust shell; React receives validated portable settings, not generic filesystem access. Replacing the complete payload clears a missing entrypoint and its now-unbound shortcut intent together.
 
 ### Setup for the person installing the application
 
-Each Setup is bound to one reviewed payload. It shows the application, publisher, version, destination, and exact operation without becoming a package browser.
+Each Setup is bound to one reviewed payload. It shows the application description, publisher, version, destination, and exact operation without becoming a package browser.
+
+Setup's strict review contract already carries authenticated shortcut intent, but current bootstrap stops at typed native preflight before that screen is shown. The review becomes visible with the Windows, Linux, and macOS transactional adapters; a schema-only project never reports a false successful integration.
 
 - a newer downloaded version becomes an update;
-- the same version with the exact file set becomes repair;
+- the same version with the exact file set, launch entrypoint, and shortcut intent becomes repair;
 - downgrade is never silently approved;
-- cancellation and failure restore the previous installation;
+- cancellation and failure restore the previous installation; if Setup cannot confirm the cancel request, it explains that inline and keeps **Cancel** available for an idempotent retry while the operation continues;
 - unknown files and modified obsolete files are preserved;
-- successful progress waits for an explicit **Next** before showing launch, folder, and finish-link actions;
-- package authors decide whether the bounded installation-details panel is available.
+- successful progress waits for an explicit **Next** before showing launch, folder, and finish-link actions; failures stay inline and retryable, while a successful launch is remembered before Setup closes so a close error cannot start the app twice; **Show in folder** works for user and system installs without giving React a native path;
+- for a system install or uninstall, privileged helper protocol v2 returns a fresh read-only maintenance state in the successful terminal frame and the renderer receives that authoritative review; Setup does not invent Install/Repair, request a second authorization prompt on completion, or retain stale state when that refresh is unavailable;
+- package authors decide whether the bounded installation-details panel is available during and after the operation.
 
 There is no built-in update-download service yet. Updating means launching a newer Setup for the same package ID and roots; the transactional upgrade itself is implemented.
 
@@ -55,13 +60,15 @@ There is no built-in update-download service yet. Updating means launching a new
 
 | | Luxury Installer |
 | --- | --- |
-| Package | Deterministic `.luxpkg` with strict portable paths and exact hashes. |
+| Output | One-click Windows `Setup.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg`; the deterministic package is internal. |
 | Trust | Unsigned development v1, Ed25519-signed v2, authenticated publisher rotation v3. |
 | Lifecycle | Read-only preflight, install, update, repair, explicit downgrade policy, rollback/recovery, uninstall, and receipt-owned launch. |
 | Ownership | Receipts live outside the removable application tree. Unknown or modified data is not claimed. |
 | Desktop | Fixed adaptive Codex-style Tauri window with a small exact ACL and no renderer shell/fs/process permission. |
 | Build speed | Core Rust and desktop graphs are separate; routine work uses targeted gates instead of a serial native matrix. |
 | Automation | Human CLI plus strict typed JSONL v3 over stdin/stdout for agents and desktop composition. |
+
+Manifest capability `schema_version` is independent of package trust `format_version`: schema 2 adds the exact entrypoint, schema 3 adds the authenticated license, and schema 4 adds bounded receipt-owned shortcut intent. Package trust formats remain v1-v3.
 
 ## Quick start
 
@@ -80,19 +87,45 @@ pnpm --dir apps/luxury-installer install --frozen-lockfile
 Start Studio:
 
 ```console
-cargo build -p luxury
+cargo build -p luxury -p xtask
 pnpm --dir apps/luxury-installer run dev:app
 ```
 
-Or create and build directly from the CLI:
+Or create a project and build the host-native installer directly:
 
 ```console
 cargo run -p luxury -- init <project-dir>
-cargo run -p luxury -- build <project-dir> <out.luxpkg>
-cargo run -p luxury -- inspect <out.luxpkg>
+cargo project-installer -- <absolute-project-dir> <absolute-native-output>
 ```
 
-Unsigned v1 installation always needs explicit consent:
+Native output is explicit:
+
+| Host | Output argument |
+| --- | --- |
+| Windows x64 | A new `Setup.exe` file. |
+| Linux x64/arm64 | A new directory containing verified `.deb` and `.rpm` files. |
+| macOS x64/arm64 | A new `.dmg` file. |
+
+The normal Studio build needs no Rust, Node, or Tauri rebuild: released Studio bundles carry a verified host template and Rust packager. The Linux packager writes and independently inspects `.deb` and RPM containers in Rust, so users do not need `dpkg`, `rpm`, Cargo, or pnpm. Its current combined input limit is 256 MiB because the pinned RPM writer buffers payloads; the build fails clearly before exhausting memory. When the form has edits, the primary action first uses the existing Rust update flow to save and revalidate them; native build starts only after that succeeds. Studio gets the exact local OS/architecture from Rust, so a Windows process does not pretend it can build Linux or macOS: the unavailable action stays disabled and points to a matching runner or the Native project build workflow. The Rust shell suggests `Product-1.0-Setup.exe`, the Linux output folder `Product-1.0-linux-x86_64`, or `Product-1.0.dmg` instead of exposing the technical package ID, while the native dialog keeps final output authority. The build surface then shows monotonic elapsed time, including hours, so a long native toolchain run does not look frozen. A visible **Cancel** button stops the active native build without closing Studio and returns to the validated project. Studio runs the packager in a bounded Windows Job Object or Unix process group, so manual cancel, timeout, window close, and primary-process exit terminate the complete descendant build tree before a result is reported. Studio owns and removes the exact temporary build folder after success, cancellation, timeout, or failure, so an ordinary cancelled build does not leave a hidden assembly tree beside the selected output. Building all platforms still uses native Windows/Linux/macOS runners because Apple signing and native containers cannot be truthfully produced by one Windows process.
+
+### Build all three desktop targets
+
+The repository includes a manual **Native project build** GitHub Actions workflow. Give it three repository-relative project directories—one Windows x64, one Linux x64, and one macOS ARM64—and it runs the same `project-installer` use case on matching native runners in parallel. Each downloaded Actions artifact contains only the host-native output plus a sorted Rust-generated `SHA256SUMS.txt`.
+
+Use separate target projects because target, architecture, payload binaries, and entrypoint are authenticated package data; the workflow never rewrites a manifest to fake portability. [`examples/matrix`](examples/matrix) is a minimal three-project layout. In the GitHub UI, choose **Actions → Native project build → Run workflow**, select the branch containing your projects, and enter their relative directories.
+
+For agents or scripts:
+
+```console
+gh workflow run native-project.yml --ref <branch> \
+  -f windows_project=installer/windows \
+  -f linux_project=installer/linux \
+  -f macos_project=installer/macos
+```
+
+Inputs are canonicalized by Rust and must remain inside the checked-out repository with a regular `luxury.toml`. These are explicitly unsigned development artifacts retained for 14 days—not a GitHub Release. Production publishing still requires the platform signing, notarization, final-byte, and Linux advisory gates below.
+
+The low-level package/lifecycle CLI remains available for signing, CI, and engine testing. Unsigned package installation always needs explicit consent:
 
 ```console
 cargo run -p luxury -- prepare-install <out.luxpkg> <install-base> <state-root>
@@ -108,6 +141,22 @@ pnpm --dir apps/luxury-installer exec tauri dev -- -- --package="<absolute-packa
 ```
 
 Signed development QA may append `--trusted-publisher-key="<absolute-public.pem>"`. Release Setup ignores debug path overrides and uses only its embedded backend and bound payload.
+
+### Unattended native Setup
+
+The shipped Setup can inspect its bound metadata or install, update, repair, recover, and remove the application without starting Tauri, GTK, or a webview:
+
+```console
+My-App-Setup.exe --info-json
+My-App-Setup.exe --unattended-install --allow-unsigned
+My-App-Setup.exe --unattended-uninstall
+```
+
+`--info-json` validates the bound payload, build fingerprint, backend, and host target, then prints one schema-2 JSON line for inventory or deployment planning. Schema 2 adds the required shortcut policy object. It is read-only, opens no window or authorization prompt, and exposes bounded display metadata and counts—not license text, finish URLs, internal package paths, or native roots. Windows packaging re-runs this command through the final outer Setup and rejects broken stdout/stderr forwarding.
+
+Current Studio builds are unsigned development artifacts, so they need explicit `--allow-unsigned`. Add `--accept-license` only when the authenticated package contains a license, and `--allow-publisher-migration` only when preflight requires that migration. Unattended removal is idempotent. Paths, keys, downgrade approval, launch, and arbitrary commands are not accepted.
+
+The same flags belong to the bound launcher inside Linux and macOS containers. System-scope operations can still show the OS-native UAC/polkit authorization prompt. Exit `0` means successful inspection or operation (including an already absent uninstall), `1` means inspection/operation failed, and `64` means invalid arguments. `--help` prints the exact surface.
 
 ## Signed packages
 
@@ -147,18 +196,21 @@ Use the smallest command that proves the work:
 | `cargo quick --locked` | Normal core Rust loop. |
 | `cargo gui-check` | Renderer contracts, strict TypeScript, Vite, and both Tauri flavors. |
 | `cargo studio-assemble` | Payload-free Studio for the current host. |
-| `cargo assemble -- <package.luxpkg>` | One package-bound unsigned development Setup for the current host. |
+| `cargo project-installer -- <project> <native-output>` | User-facing native installer; the package is a temporary internal file. |
+| `cargo assemble -- <package.luxpkg>` | Low-level package-bound runner gate. |
 | `cargo runner-smoke` | Native packaged lifecycle, cancellation, recovery, launch, cleanup, and local evidence. |
+| `gh workflow run ci.yml --ref <branch> -f native_scope=<lane>` | One native lifecycle lane (`linux-x64`, `windows-x64`, or `macos-arm64`) without paying for the full matrix. |
 
 Windows, Linux, and macOS have different final container/signing flows. Follow the exact order in the [AI build guide](docs/ai-build.md); Rust release commands do not accept signing credentials.
+Use `native_scope=all` only when all three native lanes and the merged lifecycle evidence set are required. A single lane is development evidence for that host, not release evidence.
 
 ## Platform status
 
 | Platform | Implemented | Still required before release |
 | --- | --- | --- |
-| Windows 10/11 | User lifecycle; source-level authenticated one-shot system prepare/install/uninstall/launch; NSIS development and two-phase release flow. | Signed-final native lifecycle and downloaded final-byte verification. |
-| Linux desktop | User lifecycle; fixed root-owned helper/polkit design; deterministic tar plus inspected unsigned `.deb`/RPM development packages. | Installed root-owned lifecycle, distribution signing, and removal of the GTK3 `glib 0.18.5` advisory from the final graph. |
-| macOS 13+ | User lifecycle; signed `SMAppService` helper design; deterministic app transport and DMG verification flow. | Signed/notarized native lifecycle and final downloaded artifact proof. |
+| Windows 10/11 | Standalone Studio template-packager emits and runtime-verifies one NSIS `Setup.exe`; authenticated system lifecycle and two-phase signing flow are implemented. | Authenticode-signed final lifecycle and downloaded final-byte verification. |
+| Linux desktop | Native project build emits inspected `.deb` + `.rpm`; fixed helper/polkit lifecycle exists. | Remove the GTK3 advisory, prove installed root-owned lifecycle, and add distribution signing. |
+| macOS 13+ | Native project build emits an inspected `.dmg`; signed `SMAppService` lifecycle and final DMG verification flows exist. | Developer ID signing, notarization, and downloaded final-byte proof. |
 
 Linux desktop publication remains blocked by `RUSTSEC-2024-0429` in the pinned GTK3/Wry dependency graph. The project does not hide that advisory or call the current Linux desktop artifact release-ready.
 
@@ -180,6 +232,8 @@ Read [SECURITY.md](SECURITY.md), the [architecture](docs/architecture.md), and t
 Start with [CONTRIBUTING.md](CONTRIBUTING.md). Keep changes as small vertical slices, preserve unrelated work, and report the exact gates that passed plus native/release evidence that remains unverified.
 
 Questions belong in [Discussions](https://github.com/GofMan5/luxury-installer/discussions); reproducible defects use the issue forms. See [SUPPORT.md](SUPPORT.md), [CHANGELOG.md](CHANGELOG.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+The [installer product roadmap](docs/product-roadmap.md) is the single development plan from the current preview through signed 1.0 production. It contains the competitor matrix, P0–P3 priorities, workstreams, version milestones, exact slice order, performance budgets and hard Windows/Linux/macOS release gates. It also distinguishes useful capabilities from script-era mechanisms deliberately replaced by typed, reversible Rust actions.
 
 ## License
 

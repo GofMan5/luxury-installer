@@ -16,15 +16,16 @@ use serde_json::json;
 
 #[cfg(target_os = "macos")]
 use super::{
-    APP_ID, APP_NAME, HostLayout, MACOS_HELPER_PLIST_BYTES, MACOS_ICON_BYTES, bounded_output,
-    macos_info_plist_bytes,
+    APP_ID, APP_NAME, HostLayout, MACOS_HELPER_PLIST_BYTES, MACOS_ICON_BYTES, ShellFlavor,
+    assemble_into, bounded_output, macos_info_plist_bytes, patch_setup_template_binding,
     probe::{probe_backend, probe_runner},
-    resolve_target_dir, sha256_hex,
+    require_setup_template_binding, resolve_target_dir, sha256_hex,
     staging::{
-        WorkDirectory, copy_file, ensure_real_directory, publish_directory_no_clobber,
-        require_executable, require_missing, require_only_entries, require_only_file,
-        require_regular_file, sha256_file,
+        WorkDirectory, checked_input, copy_file, ensure_real_directory,
+        publish_directory_no_clobber, publish_file_no_clobber, require_executable, require_missing,
+        require_only_entries, require_only_file, require_regular_file, sha256_file,
     },
+    validate_macos_app, validate_portable_bundle,
 };
 
 #[cfg(target_os = "macos")]
@@ -50,6 +51,25 @@ struct AppIdentity {
 struct VerifiedApp {
     path: PathBuf,
     identity: AppIdentity,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PortableAppIdentity {
+    fingerprint: String,
+    launcher_sha256: [u8; 32],
+    backend_sha256: [u8; 32],
+    payload_sha256: [u8; 32],
+    helper_sha256: [u8; 32],
+    icon_sha256: [u8; 32],
+    info_plist_sha256: [u8; 32],
+    helper_plist_sha256: [u8; 32],
+}
+
+#[cfg(target_os = "macos")]
+struct PortableApp {
+    path: PathBuf,
+    identity: PortableAppIdentity,
 }
 
 pub(super) fn verify_release_app(app: &Path) -> Result<(), String> {
@@ -78,6 +98,39 @@ pub(super) fn build_dmg(app: &Path) -> Result<(), String> {
     {
         let _ = app;
         Err("macos-dmg must run on macOS".into())
+    }
+}
+
+pub(super) fn build_project(
+    project: &Path,
+    destination: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        build_project_native(project, destination, managed_work)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (project, destination, managed_work);
+        Err("macOS project builds require a native macOS host".into())
+    }
+}
+
+pub(super) fn build_packaged_project(
+    project: &Path,
+    destination: &Path,
+    resources: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        build_packaged_project_native(project, destination, resources, managed_work)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (project, destination, resources, managed_work);
+        Err("packaged macOS project builds require a native macOS host".into())
     }
 }
 
@@ -137,6 +190,263 @@ fn build_dmg_native(app: &Path) -> Result<(), String> {
         )),
         (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn build_project_native(
+    project: &Path,
+    destination: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
+    validate_project_output(project, destination)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "macOS installer output has no parent directory".to_owned())?;
+    ensure_real_directory(parent)?;
+    require_missing(destination, "macOS installer output")?;
+
+    let host = HostLayout::new("macos", std::env::consts::ARCH)?;
+    let work = WorkDirectory::project(parent, managed_work)?;
+    let package = work.path.join("internal-package.luxpkg");
+    luxury_compiler::compile_project(project, &package)
+        .map_err(|error| format!("could not compile installer project: {error}"))?;
+    let package = checked_input(&package, "internal macOS installer payload")?;
+    let runner_output = work.path.join("runner-output");
+    fs::create_dir(&runner_output)
+        .map_err(|error| format!("could not create macOS runner output: {error}"))?;
+    let runner = assemble_into(&package, &runner_output)?;
+    let expected_info = macos_info_plist_bytes(
+        APP_NAME,
+        APP_ID,
+        APP_NAME,
+        APP_NAME,
+        env!("CARGO_PKG_VERSION"),
+    )?;
+    let source = inspect_portable_app(
+        &runner.path.join(format!("{APP_NAME}.app")),
+        host,
+        &expected_info,
+    )?;
+    build_portable_dmg(&source, host, &expected_info, destination, &work.path)?;
+    work.cleanup().map_err(|error| {
+        format!(
+            "verified macOS installer was published at `{}`, but {error}",
+            destination.display()
+        )
+    })?;
+    println!(
+        "verified unsigned macOS development DMG: {}",
+        destination.display()
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn build_packaged_project_native(
+    project: &Path,
+    destination: &Path,
+    resources: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
+    let host = HostLayout::new("macos", std::env::consts::ARCH)?;
+    validate_project_output(project, destination)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "macOS installer output has no parent directory".to_owned())?;
+    ensure_real_directory(parent)?;
+    require_missing(destination, "macOS installer output")?;
+    let expected_info = macos_info_plist_bytes(
+        APP_NAME,
+        APP_ID,
+        APP_NAME,
+        APP_NAME,
+        env!("CARGO_PKG_VERSION"),
+    )?;
+    let template = resources
+        .join("templates")
+        .join(format!("macos-{}", host.rust_arch));
+    validate_portable_bundle(
+        &template,
+        host,
+        ShellFlavor::SetupTemplate,
+        Some(&expected_info),
+    )?;
+    require_setup_template_binding(&host.launcher(&template))?;
+
+    let work = WorkDirectory::project(parent, managed_work)?;
+    let package = work.path.join("internal-package.luxpkg");
+    luxury_compiler::compile_project(project, &package)
+        .map_err(|error| format!("could not compile installer project: {error}"))?;
+    let package = checked_input(&package, "internal macOS installer payload")?;
+    let template_backend = host
+        .resources_directory(&template)
+        .join("backend")
+        .join(host.backend_name);
+    let fingerprint = probe_backend(&template_backend, &package, host)?;
+
+    let runner = work.path.join("bound-runner");
+    run_tool(
+        "/usr/bin/ditto",
+        &[
+            OsStr::new("--rsrc"),
+            OsStr::new("--extattr"),
+            OsStr::new("--acl"),
+            OsStr::new("--noqtn"),
+            template.as_os_str(),
+            runner.as_os_str(),
+        ],
+    )?;
+    let launcher = host.launcher(&runner);
+    patch_setup_template_binding(&launcher, &fingerprint)?;
+    let payload = host
+        .resources_directory(&runner)
+        .join("payload")
+        .join("package.luxpkg");
+    fs::create_dir(
+        payload
+            .parent()
+            .ok_or_else(|| "packaged macOS payload has no parent".to_owned())?,
+    )
+    .map_err(|error| format!("could not create packaged macOS payload directory: {error}"))?;
+    copy_file(&package, &payload)?;
+    validate_portable_bundle(&runner, host, ShellFlavor::Setup, Some(&expected_info))?;
+    let source = inspect_portable_app(
+        &runner.join(format!("{APP_NAME}.app")),
+        host,
+        &expected_info,
+    )?;
+    if source.identity.fingerprint != fingerprint {
+        return Err("packaged macOS template inspected a different payload".into());
+    }
+    build_portable_dmg(&source, host, &expected_info, destination, &work.path)?;
+    work.cleanup().map_err(|error| {
+        format!(
+            "verified macOS installer was published at `{}`, but {error}",
+            destination.display()
+        )
+    })?;
+    println!(
+        "verified unsigned macOS development DMG: {}",
+        destination.display()
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn validate_project_output(project: &Path, destination: &Path) -> Result<(), String> {
+    if !matches!(std::env::consts::ARCH, "x86_64" | "aarch64") {
+        return Err("macOS project builds require x86_64 or aarch64".into());
+    }
+    if !project.is_absolute() || !destination.is_absolute() {
+        return Err("project-installer paths must be absolute".into());
+    }
+    if destination.extension() != Some(OsStr::new("dmg")) {
+        return Err("macOS project-installer output must end in .dmg".into());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn build_portable_dmg(
+    source: &PortableApp,
+    host: HostLayout,
+    expected_info: &[u8],
+    destination: &Path,
+    work: &Path,
+) -> Result<(), String> {
+    let image_root = work.join("portable-image-root");
+    fs::create_dir(&image_root)
+        .map_err(|error| format!("could not create portable macOS image staging: {error}"))?;
+    let staged_app = image_root.join(format!("{APP_NAME}.app"));
+    run_tool(
+        "/usr/bin/ditto",
+        &[
+            OsStr::new("--rsrc"),
+            OsStr::new("--extattr"),
+            OsStr::new("--acl"),
+            OsStr::new("--noqtn"),
+            source.path.as_os_str(),
+            staged_app.as_os_str(),
+        ],
+    )?;
+    if inspect_portable_app(&staged_app, host, expected_info)?.identity != source.identity {
+        return Err("staged portable macOS app differs from the verified source".into());
+    }
+    symlink("/Applications", image_root.join("Applications"))
+        .map_err(|error| format!("could not create Applications link: {error}"))?;
+
+    let dmg = work.join(DMG_FILENAME);
+    require_missing(&dmg, "portable macOS development DMG")?;
+    run_tool(
+        "/usr/bin/hdiutil",
+        &[
+            OsStr::new("create"),
+            OsStr::new("-quiet"),
+            OsStr::new("-fs"),
+            OsStr::new("HFS+"),
+            OsStr::new("-format"),
+            OsStr::new("UDZO"),
+            OsStr::new("-imagekey"),
+            OsStr::new("zlib-level=9"),
+            OsStr::new("-volname"),
+            OsStr::new(APP_NAME),
+            OsStr::new("-srcfolder"),
+            image_root.as_os_str(),
+            dmg.as_os_str(),
+        ],
+    )?;
+    require_regular_file(&dmg, "portable macOS development DMG")?;
+    sync_file(&dmg)?;
+    let dmg_sha256 = sha256_file(&dmg)?;
+    let mounted = inspect_dmg_with(&dmg, &work.join("portable-dmg-check"), false, |app| {
+        inspect_portable_app(app, host, expected_info)
+    })?;
+    if mounted.identity != source.identity || sha256_file(&dmg)? != dmg_sha256 {
+        return Err("portable macOS DMG changed the verified app or image bytes".into());
+    }
+    publish_file_no_clobber(&dmg, destination)?;
+    if sha256_file(destination)? != dmg_sha256 {
+        return Err("published macOS DMG bytes changed".into());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn inspect_portable_app(
+    app: &Path,
+    host: HostLayout,
+    expected_info: &[u8],
+) -> Result<PortableApp, String> {
+    validate_macos_app(app, host, ShellFlavor::Setup, expected_info)?;
+    let app = fs::canonicalize(app)
+        .map_err(|error| format!("could not resolve portable macOS app: {error}"))?;
+    let contents = app.join("Contents");
+    let resources = contents.join("Resources");
+    let launcher = contents.join("MacOS").join(APP_NAME);
+    let backend = resources.join("backend").join("luxury");
+    let payload = resources.join("payload").join("package.luxpkg");
+    let helper = resources.join("luxury-installer-helper");
+    let icon = resources.join("icon.icns");
+    let info_plist = contents.join("Info.plist");
+    let helper_plist = contents
+        .join("Library")
+        .join("LaunchDaemons")
+        .join("software.luxury.installer.helper.plist");
+    let fingerprint = probe_backend(&backend, &payload, host)?;
+    probe_runner(&launcher)?;
+    Ok(PortableApp {
+        path: app,
+        identity: PortableAppIdentity {
+            fingerprint,
+            launcher_sha256: sha256_file(&launcher)?,
+            backend_sha256: sha256_file(&backend)?,
+            payload_sha256: sha256_file(&payload)?,
+            helper_sha256: sha256_file(&helper)?,
+            icon_sha256: sha256_file(&icon)?,
+            info_plist_sha256: sha256_file(&info_plist)?,
+            helper_plist_sha256: sha256_file(&helper_plist)?,
+        },
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -497,6 +807,16 @@ fn require_signed_contents(contents: &Path) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn inspect_dmg(dmg: &Path, work: &Path, require_signed: bool) -> Result<VerifiedApp, String> {
+    inspect_dmg_with(dmg, work, require_signed, inspect_release_app)
+}
+
+#[cfg(target_os = "macos")]
+fn inspect_dmg_with<T>(
+    dmg: &Path,
+    work: &Path,
+    require_signed: bool,
+    inspect_app: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
     let metadata = fs::symlink_metadata(dmg)
         .map_err(|error| format!("could not inspect macOS DMG: {error}"))?;
     if !metadata.is_file()
@@ -565,7 +885,7 @@ fn inspect_dmg(dmg: &Path, work: &Path, require_signed: bool) -> Result<Verified
     )?;
     let verification = (|| {
         require_dmg_root(&mount)?;
-        inspect_release_app(&mount.join(format!("{APP_NAME}.app")))
+        inspect_app(&mount.join(format!("{APP_NAME}.app")))
     })();
     let detach = detach_dmg(&mount);
     match (verification, detach) {

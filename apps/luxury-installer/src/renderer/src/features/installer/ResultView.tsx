@@ -7,7 +7,6 @@ export function CompleteView({
   action,
   canLaunch,
   canReveal,
-  launchPending,
   actionPending,
   actionError,
   finishLinks,
@@ -20,8 +19,7 @@ export function CompleteView({
   action: InstallResultAction
   canLaunch: boolean
   canReveal: boolean
-  launchPending: boolean
-  actionPending: 'reveal' | 'close' | number | null
+  actionPending: 'launch' | 'reveal' | 'close' | number | null
   actionError: string | null
   finishLinks: FinishLink[]
   onLaunch(): void
@@ -48,7 +46,7 @@ export function CompleteView({
 
       {hasLinks ? <div className="result-links" aria-label="Дополнительные действия">
         {canReveal ? (
-          <button className="secondary-button" type="button" disabled={launchPending || actionPending !== null} onClick={onReveal}>
+          <button className="secondary-button" type="button" disabled={actionPending !== null} onClick={onReveal}>
             {actionPending === 'reveal' ? <SquareDashed className="spin" size={16} /> : <FolderOpen size={16} />}
             <span>{actionPending === 'reveal' ? 'Открываем…' : 'Показать в папке'}</span>
           </button>
@@ -58,7 +56,7 @@ export function CompleteView({
             className="secondary-button"
             type="button"
             key={`${index}-${link.url}`}
-            disabled={launchPending || actionPending !== null}
+            disabled={actionPending !== null}
             onClick={() => onOpenLink(index)}
           >
             {actionPending === index ? <SquareDashed className="spin" size={16} /> : <ExternalLink size={16} />}
@@ -69,15 +67,15 @@ export function CompleteView({
 
       <div className="result-actions result-actions--complete">
         {canLaunch ? (
-          <button className="secondary-button" type="button" disabled={launchPending || actionPending !== null} onClick={onLaunch}>
-            {launchPending ? <SquareDashed className="spin" size={16} /> : <Play size={16} />}
-            {launchPending ? 'Запускаем…' : 'Запустить'}
+          <button className="secondary-button" type="button" disabled={actionPending !== null} onClick={onLaunch}>
+            {actionPending === 'launch' ? <SquareDashed className="spin" size={16} /> : <Play size={16} />}
+            {actionPending === 'launch' ? 'Запускаем…' : 'Запустить'}
           </button>
         ) : null}
         <button
           className="primary-button"
           type="button"
-          disabled={launchPending || actionPending !== null}
+          disabled={actionPending !== null}
           onClick={onClose}
         >
           {actionPending === 'close' ? <SquareDashed className="spin" size={16} /> : null}

@@ -1,0 +1,20 @@
+format_version = 1
+
+[package]
+id = "dev.luxury.matrix-demo"
+name = "Luxury Matrix Demo"
+version = "1.0.0"
+publisher = "Luxury Installer Contributors"
+
+[target]
+os = "windows"
+arch = "x86_64"
+
+[install]
+scope = "user"
+directory = "Luxury Matrix Demo"
+show_install_log = true
+
+[payload]
+directory = "payload"
+executable = []

@@ -8,9 +8,9 @@ use std::{
 use luxury_spec::{
     ENTRYPOINT_SCHEMA_VERSION, FORMAT_VERSION, InstallPolicy, LICENSE_SCHEMA_VERSION,
     MAX_PAYLOAD_BYTES, MAX_PAYLOAD_FILE_BYTES, MAX_PAYLOAD_FILES, Manifest, OperatingSystem,
-    Package, PackagePath, SpecError, Target,
+    Package, PackagePath, SHORTCUT_SCHEMA_VERSION, SpecError, Target,
 };
-use tempfile::{NamedTempFile, tempdir_in};
+use tempfile::{NamedTempFile, TempDir, tempdir_in};
 
 use super::{
     CompilerError, MAX_IMPORT_SOURCES, NEVER_CANCELLED, PROJECT_FILE, ProjectConfig, Result,
@@ -50,13 +50,7 @@ pub fn update_project_cancellable(
     }
 
     let previous_entrypoint = config.install.entrypoint.clone();
-    config.schema_version = if update.package.license.is_some() {
-        LICENSE_SCHEMA_VERSION
-    } else if update.install.entrypoint.is_some() {
-        ENTRYPOINT_SCHEMA_VERSION
-    } else {
-        1
-    };
+    config.schema_version = schema_version(&update.package, &update.install);
     config.package = update.package;
     config.target = update.target;
     config.install = update.install;
@@ -208,6 +202,120 @@ pub fn import_payload_cancellable(
     }
 }
 
+/// Replaces the complete payload with the contents of one external directory.
+/// The existing payload remains untouched until the replacement has been copied
+/// and validated, and is restored if validation or config publication fails.
+pub fn replace_payload(
+    project_root: impl AsRef<Path>,
+    source_directory: impl AsRef<Path>,
+) -> Result<Manifest> {
+    replace_payload_cancellable(project_root, source_directory, &NEVER_CANCELLED)
+}
+
+pub fn replace_payload_cancellable(
+    project_root: impl AsRef<Path>,
+    source_directory: impl AsRef<Path>,
+    cancelled: &AtomicBool,
+) -> Result<Manifest> {
+    check_cancelled(cancelled)?;
+    let project_input = project_root.as_ref();
+    validate_directory_path(project_input)?;
+    let project_root = canonicalize(project_input, "resolving project directory")?;
+    let config_path = project_root.join(PROJECT_FILE);
+    validate_regular_file(&config_path)?;
+    let source = read_project_config(&config_path, cancelled)?;
+    let mut config: ProjectConfig = toml::from_str(&source)?;
+    if config.format_version != FORMAT_VERSION || config.publisher_rotation.is_some() {
+        return Err(CompilerError::ProjectNotEditable);
+    }
+    let (payload_root, current) =
+        prepare_project_source(&project_root, &source, None, None, cancelled)?;
+
+    let staging = tempdir_in(&project_root).map_err(|error| {
+        io_error(
+            "creating payload replacement staging directory",
+            &project_root,
+            error,
+        )
+    })?;
+    let incoming = staging.path().join("incoming");
+    fs::create_dir(&incoming).map_err(|error| {
+        io_error(
+            "creating payload replacement staging directory",
+            &incoming,
+            error,
+        )
+    })?;
+    let mut imported_executables = Vec::new();
+    let mut imported_files = Vec::new();
+    let mut budget = ImportBudget {
+        files: 0,
+        bytes: 0,
+        imported_files: 0,
+    };
+    stage_replacement_directory(
+        &payload_root,
+        source_directory.as_ref(),
+        &incoming,
+        &mut imported_executables,
+        &mut imported_files,
+        &mut budget,
+        cancelled,
+    )?;
+    if budget.imported_files == 0 {
+        return Err(CompilerError::EmptyImport);
+    }
+    imported_executables.sort_unstable();
+    imported_files.sort_unstable();
+    validate_executables(&imported_executables)?;
+    config.payload.executable = imported_executables;
+
+    if let Some(entrypoint) = config.install.entrypoint.as_ref() {
+        let keep_entrypoint = imported_files.binary_search(entrypoint).is_ok()
+            && (config.target.os == OperatingSystem::Windows
+                || config.payload.executable.contains(entrypoint));
+        if !keep_entrypoint {
+            config.install.entrypoint = None;
+            config.install.shortcuts = luxury_spec::ShortcutPolicy::default();
+        }
+    }
+    config.schema_version = schema_version(&config.package, &config.install);
+    let candidate = toml::to_string_pretty(&config).map_err(|_| {
+        CompilerError::InvalidConfig("project settings could not be serialized".into())
+    })?;
+    if !existing_file_matches(&config_path, source.as_bytes())? {
+        return Err(CompilerError::ProjectChanged);
+    }
+    let (_, latest) = prepare_project_source(&project_root, &source, None, None, cancelled)?;
+    if latest != current {
+        return Err(CompilerError::ProjectChanged);
+    }
+
+    let previous = staging.path().join("previous");
+    fs::rename(&payload_root, &previous)
+        .map_err(|error| io_error("staging previous project payload", &payload_root, error))?;
+    if let Err(error) = fs::rename(&incoming, &payload_root) {
+        let cause = io_error(
+            "publishing replacement project payload",
+            &payload_root,
+            error,
+        );
+        return restore_previous_payload(&previous, &payload_root, staging).and(Err(cause));
+    }
+
+    let result = (|| {
+        let (_, manifest) =
+            prepare_project_source(&project_root, &candidate, None, None, cancelled)?;
+        replace_project_config(&config_path, source.as_bytes(), candidate.as_bytes())?;
+        Ok(manifest)
+    })();
+    match result {
+        Ok(manifest) => Ok(manifest),
+        Err(error) => rollback_payload_replacement(&payload_root, &previous, &incoming, staging)
+            .and(Err(error)),
+    }
+}
+
 pub fn resolve_payload_file(
     project_root: impl AsRef<Path>,
     selected_path: impl AsRef<Path>,
@@ -266,6 +374,14 @@ struct ImportBudget {
     files: usize,
     bytes: u64,
     imported_files: usize,
+}
+
+struct ImportCopy<'a> {
+    incoming: &'a Path,
+    executables: &'a mut Vec<PackagePath>,
+    files: Option<&'a mut Vec<PackagePath>>,
+    budget: &'a mut ImportBudget,
+    cancelled: &'a AtomicBool,
 }
 
 impl ImportBudget {
@@ -335,27 +451,68 @@ fn stage_import_source(
             ));
         }
     }
-    copy_import_entry(
-        &resolved,
-        &resolved,
-        &incoming.join(name),
+    let mut copy = ImportCopy {
         incoming,
         executables,
         budget,
         cancelled,
-    )
+        files: None,
+    };
+    copy_import_entry(&resolved, &resolved, &incoming.join(name), &mut copy)
+}
+
+fn stage_replacement_directory(
+    payload_root: &Path,
+    source: &Path,
+    incoming: &Path,
+    executables: &mut Vec<PackagePath>,
+    files: &mut Vec<PackagePath>,
+    budget: &mut ImportBudget,
+    cancelled: &AtomicBool,
+) -> Result<()> {
+    check_cancelled(cancelled)?;
+    if !source.is_absolute() {
+        return Err(CompilerError::InvalidImportSource(source.to_path_buf()));
+    }
+    let metadata = link_metadata(source)?;
+    reject_link(source, &metadata)?;
+    if !metadata.is_dir() {
+        return Err(CompilerError::InvalidImportSource(source.to_path_buf()));
+    }
+    let resolved = canonicalize(source, "resolving payload replacement source")?;
+    if resolved.starts_with(payload_root) || payload_root.starts_with(&resolved) {
+        return Err(CompilerError::InvalidImportSource(source.to_path_buf()));
+    }
+    let mut copy = ImportCopy {
+        incoming,
+        executables,
+        files: Some(files),
+        budget,
+        cancelled,
+    };
+    for entry in fs::read_dir(&resolved)
+        .map_err(|error| io_error("reading payload replacement directory", &resolved, error))?
+    {
+        check_cancelled(cancelled)?;
+        let entry = entry
+            .map_err(|error| io_error("reading payload replacement entry", &resolved, error))?;
+        copy_import_entry(
+            &resolved,
+            &entry.path(),
+            &incoming.join(entry.file_name()),
+            &mut copy,
+        )?;
+    }
+    Ok(())
 }
 
 fn copy_import_entry(
     source_root: &Path,
     source: &Path,
     destination: &Path,
-    incoming: &Path,
-    executables: &mut Vec<PackagePath>,
-    budget: &mut ImportBudget,
-    cancelled: &AtomicBool,
+    copy: &mut ImportCopy<'_>,
 ) -> Result<()> {
-    check_cancelled(cancelled)?;
+    check_cancelled(copy.cancelled)?;
     let metadata = link_metadata(source)?;
     reject_link(source, &metadata)?;
     let resolved = canonicalize(source, "resolving payload import entry")?;
@@ -371,17 +528,14 @@ fn copy_import_entry(
         for entry in fs::read_dir(source)
             .map_err(|error| io_error("reading payload import directory", source, error))?
         {
-            check_cancelled(cancelled)?;
+            check_cancelled(copy.cancelled)?;
             let entry =
                 entry.map_err(|error| io_error("reading payload import entry", source, error))?;
             copy_import_entry(
                 source_root,
                 &entry.path(),
                 &destination.join(entry.file_name()),
-                incoming,
-                executables,
-                budget,
-                cancelled,
+                copy,
             )?;
         }
         if fs::read_dir(destination)
@@ -403,12 +557,13 @@ fn copy_import_entry(
         return Err(CompilerError::SpecialEntry(source.to_path_buf()));
     }
 
-    let relative = destination
-        .strip_prefix(incoming)
-        .map_err(|_| CompilerError::OutsideRoot {
-            path: destination.to_path_buf(),
-            root: incoming.to_path_buf(),
-        })?;
+    let relative =
+        destination
+            .strip_prefix(copy.incoming)
+            .map_err(|_| CompilerError::OutsideRoot {
+                path: destination.to_path_buf(),
+                root: copy.incoming.to_path_buf(),
+            })?;
     let package_path = portable_path(relative)?;
     let input = File::open(source)
         .map_err(|error| io_error("opening payload import file", source, error))?;
@@ -418,7 +573,7 @@ fn copy_import_entry(
     if !opened_metadata.is_file() {
         return Err(CompilerError::SpecialEntry(source.to_path_buf()));
     }
-    budget.add(&package_path, opened_metadata.len())?;
+    copy.budget.add(&package_path, opened_metadata.len())?;
     let output = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -430,12 +585,15 @@ fn copy_import_entry(
                 io_error("creating staged payload file", destination, error)
             }
         })?;
-    let copied = copy_and_sync(input, output, source, destination, cancelled)?;
+    let copied = copy_and_sync(input, output, source, destination, copy.cancelled)?;
     if copied != opened_metadata.len() {
         return Err(CompilerError::ImportSourceChanged(source.to_path_buf()));
     }
+    if let Some(files) = copy.files.as_mut() {
+        files.push(package_path.clone());
+    }
     if source_is_executable(&opened_metadata) {
-        executables.push(package_path);
+        copy.executables.push(package_path);
     }
     Ok(())
 }
@@ -639,6 +797,47 @@ fn restore_starter_payload(starter: Option<&StarterBackup>) -> Result<()> {
     }
 }
 
+fn rollback_payload_replacement(
+    payload: &Path,
+    previous: &Path,
+    incoming: &Path,
+    staging: TempDir,
+) -> Result<()> {
+    if let Err(error) = fs::rename(payload, incoming) {
+        let _ = staging.keep();
+        return Err(io_error(
+            "rolling back replacement project payload",
+            payload,
+            error,
+        ));
+    }
+    restore_previous_payload(previous, payload, staging)
+}
+
+fn restore_previous_payload(previous: &Path, payload: &Path, staging: TempDir) -> Result<()> {
+    if let Err(error) = fs::rename(previous, payload) {
+        let _ = staging.keep();
+        return Err(io_error(
+            "restoring previous project payload",
+            previous,
+            error,
+        ));
+    }
+    Ok(())
+}
+
+fn schema_version(package: &Package, install: &InstallPolicy) -> u32 {
+    if install.shortcuts.enabled() {
+        SHORTCUT_SCHEMA_VERSION
+    } else if package.license.is_some() {
+        LICENSE_SCHEMA_VERSION
+    } else if install.entrypoint.is_some() {
+        ENTRYPOINT_SCHEMA_VERSION
+    } else {
+        1
+    }
+}
+
 #[cfg(unix)]
 fn source_is_executable(metadata: &Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -675,6 +874,32 @@ fn replace_project_config(path: &Path, expected: &[u8], contents: &[u8]) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_authoring_selects_schema_four() {
+        let package = Package {
+            id: luxury_spec::PackageId::parse("dev.luxury.demo").unwrap(),
+            name: "Luxury Demo".into(),
+            version: "1.0.0".parse().unwrap(),
+            publisher: "Luxury Software".into(),
+            description: None,
+            license: None,
+        };
+        let install = InstallPolicy {
+            scope: luxury_spec::InstallScope::User,
+            directory: luxury_spec::InstallDirectory::parse("Luxury Demo").unwrap(),
+            allow_downgrade: false,
+            entrypoint: Some(PackagePath::parse("bin/demo.exe").unwrap()),
+            show_install_log: false,
+            finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy {
+                application_menu: true,
+                desktop: false,
+            },
+        };
+
+        assert_eq!(schema_version(&package, &install), SHORTCUT_SCHEMA_VERSION);
+    }
 
     #[test]
     fn studio_import_applies_manifest_limits_before_copying_more_files() {

@@ -32,6 +32,12 @@ pub enum SpecError {
         "manifest schema {found} does not support package.license; schema {required} is required"
     )]
     LicenseRequiresSchema { found: u32, required: u32 },
+    #[error(
+        "manifest schema {found} does not support install.shortcuts; schema {required} is required"
+    )]
+    ShortcutsRequireSchema { found: u32, required: u32 },
+    #[error("install.shortcuts requires an exact receipt-owned entrypoint")]
+    ShortcutsRequireEntrypoint,
     #[error("install entrypoint `{0}` is not an exact manifest file")]
     EntrypointMissingFile(String),
     #[error("Windows install entrypoint `{0}` must have an .exe suffix")]

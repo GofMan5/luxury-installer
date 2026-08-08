@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use crate::{
     ENTRYPOINT_SCHEMA_VERSION, FORMAT_VERSION, InstallDirectory, LICENSE_SCHEMA_VERSION,
     MANIFEST_SCHEMA_VERSION, PUBLISHER_ROTATION_FORMAT_VERSION, PackagePath, PublisherRotation,
-    SIGNED_FORMAT_VERSION, SpecError,
+    SHORTCUT_SCHEMA_VERSION, SIGNED_FORMAT_VERSION, SpecError,
 };
 
 pub const MAX_PAYLOAD_FILES: usize = 100_000;
@@ -95,6 +95,17 @@ impl Manifest {
                 });
             }
             validate_license(license)?;
+        }
+        if self.install.shortcuts.enabled() {
+            if self.schema_version < SHORTCUT_SCHEMA_VERSION {
+                return Err(SpecError::ShortcutsRequireSchema {
+                    found: self.schema_version,
+                    required: SHORTCUT_SCHEMA_VERSION,
+                });
+            }
+            if self.install.entrypoint.is_none() {
+                return Err(SpecError::ShortcutsRequireEntrypoint);
+            }
         }
         if self.install.finish_links.len() > MAX_FINISH_LINKS {
             return Err(SpecError::TooManyFinishLinks(
@@ -400,6 +411,29 @@ pub struct InstallPolicy {
     pub show_install_log: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub finish_links: Vec<FinishLink>,
+    #[serde(default, skip_serializing_if = "ShortcutPolicy::is_disabled")]
+    pub shortcuts: ShortcutPolicy,
+}
+
+/// Portable, bounded desktop-integration intent. The target is always the
+/// manifest's exact entrypoint; packages cannot provide arguments or paths.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShortcutPolicy {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub application_menu: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub desktop: bool,
+}
+
+impl ShortcutPolicy {
+    pub const fn enabled(self) -> bool {
+        self.application_menu || self.desktop
+    }
+
+    pub const fn is_disabled(&self) -> bool {
+        !self.enabled()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,6 +549,7 @@ mod tests {
                 entrypoint: None,
                 show_install_log: false,
                 finish_links: Vec::new(),
+                shortcuts: ShortcutPolicy::default(),
             },
             publisher_rotation: None,
             files: vec![FileEntry {
@@ -537,6 +572,7 @@ mod tests {
         assert!(!encoded.contains("entrypoint"));
         assert!(!encoded.contains("show_install_log"));
         assert!(!encoded.contains("finish_links"));
+        assert!(!encoded.contains("shortcuts"));
         let decoded = Manifest::from_toml(&encoded).unwrap();
         assert_eq!(decoded, manifest);
 
@@ -652,6 +688,39 @@ mod tests {
                 max: MAX_LICENSE_CHARS
             })
         ));
+    }
+
+    #[test]
+    fn shortcuts_require_schema_four_and_an_exact_entrypoint() {
+        let mut manifest = valid_manifest();
+        manifest.install.shortcuts.application_menu = true;
+        assert!(matches!(
+            manifest.validate(),
+            Err(SpecError::ShortcutsRequireSchema {
+                found: 1,
+                required: SHORTCUT_SCHEMA_VERSION
+            })
+        ));
+
+        manifest.schema_version = SHORTCUT_SCHEMA_VERSION;
+        assert_eq!(
+            manifest.validate(),
+            Err(SpecError::ShortcutsRequireEntrypoint)
+        );
+
+        manifest.install.entrypoint = Some(manifest.files[0].path.clone());
+        if manifest.target.os != OperatingSystem::Windows {
+            manifest.files[0].executable = true;
+        } else {
+            manifest.files[0].path = PackagePath::parse("bin/demo.exe").unwrap();
+            manifest.install.entrypoint = Some(manifest.files[0].path.clone());
+        }
+        manifest.validate().unwrap();
+        let encoded = manifest.to_toml().unwrap();
+        assert!(encoded.contains("[install.shortcuts]"));
+        assert!(encoded.contains("application_menu = true"));
+        assert!(!encoded.contains("desktop = false"));
+        assert_eq!(Manifest::from_toml(&encoded).unwrap(), manifest);
     }
 
     #[test]

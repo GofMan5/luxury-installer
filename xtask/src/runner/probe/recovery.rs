@@ -730,7 +730,7 @@ fn validate_stress_receipt(
         ],
         "ownership receipt",
     )?;
-    if receipt.get("format_version").and_then(Value::as_u64) != Some(4)
+    if receipt.get("format_version").and_then(Value::as_u64) != Some(5)
         || receipt.get("package_id").and_then(Value::as_str) != Some(STRESS_PACKAGE_ID)
         || receipt.get("version").and_then(Value::as_str) != Some(expected_version)
         || receipt.get("scope").and_then(Value::as_str) != Some("user")

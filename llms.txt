@@ -14,6 +14,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - /docs/architecture.md: dependency, process, transaction, trust, runner, and evidence boundaries
 - /docs/design/design-system.md: Tauri renderer visual/accessibility contract
 - /docs/privileged-helper.md: required system-scope elevation and peer-authentication boundary
+- /docs/product-roadmap.md: single master plan from preview to production; competitor matrix, north-star metrics, full-production definition, P0-P3 workstreams, version milestones, exact vertical-slice queue, dependencies, performance budgets, release scorecard and deliberate exclusions
 - /CONTRIBUTING.md: contribution and handoff checklist
 - /SECURITY.md: security scope and known ceilings
 - /README.md: public product overview
@@ -40,7 +41,10 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - cargo ci: root fmt + locked quick + isolated desktop check
 - cargo full-test --locked: broad root workspace/all-target gate
 - cargo dist: full core tests + host backend + checked frontend; no runner/signing claim
-- cargo studio-assemble: verified payload-free authoring Studio for current host only; Linux/macOS also publish a deterministic mode-preserving tar.gz, which is the CI upload unit
+- cargo studio-assemble: verified payload-free authoring Studio with a native packager and host Setup template; Linux/macOS also publish a deterministic mode-preserving tar.gz, which is the CI upload unit
+- cargo project-installer -- <absolute-project> <absolute-native-output>: user-facing build; publishes Windows .exe, Linux .deb + .rpm directory, or macOS .dmg while keeping .luxpkg internal to the temporary work tree
+- .github/workflows/native-project.yml: manual user matrix for three repo-relative target projects; Rust confines paths to checkout, builds on Windows x64/Linux x64/macOS ARM64 in parallel, and uploads unsigned 14-day development artifacts with sorted SHA256SUMS.txt. It never rewrites target/entrypoint or creates a Release.
+- .github/workflows/ci.yml workflow_dispatch: `native_scope=linux-x64|windows-x64|macos-arm64` runs one host lifecycle lane; default `native_scope=all` runs all lanes and is the only mode that merges/verifies the three-host evidence set. A single lane is development evidence, not release evidence.
 - cargo runner-smoke: native packaged recovery/cancel/launch/lifecycle + Tauri entrypoint + cleanup + local evidence schema v2
 - cargo assemble -- <absolute-package.luxpkg>: verified unsigned-v1 runner for current host only
 - cargo windows-setup -- <absolute-package.luxpkg> <absolute-nsis-3.12.zip>: unsigned Windows development container
@@ -52,7 +56,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Renderer owns presentation/accessibility only
 - Rust Tauri shell owns native dialogs, bound project/package/path authority, backend lifecycle, transport validation, event correlation, and public error mapping
 - luxury stdio owns machine-facing composition
-- luxury-engine owns use cases/ports; luxury-platform owns mutations; luxury-bundle owns archive trust; luxury-compiler owns project/package assembly; luxury-spec owns portable values
+- luxury-engine owns use cases/ports; luxury-platform owns mutations; luxury-system-roots owns fixed Windows/Linux/macOS system roots shared by platform and Tauri; luxury-bundle owns archive trust; luxury-compiler owns project/package assembly; luxury-process owns bounded descendant-process containment; luxury-spec owns portable values
 - Compiler output uses same-directory `tempfile` atomic replacement and rejects link/reparse/non-file targets; do not reintroduce deterministic backup names or `exists -> rename` publication.
 - No business policy in renderer or shell composition
 - No common/utils dump, one-implementation factory, or speculative feature flag
@@ -63,11 +67,19 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Debug with one absolute --package starts Setup
 - Default release feature studio uses a fixed backend resource and no payload
 - Release feature setup is mutually exclusive and uses fixed native backend/payload resources
+- Final bound Setup accepts only read-only --info-json, --unattended-install with explicit consent flags, --unattended-uninstall, or --help for public headless use; it accepts no path/key/downgrade/launch authority. Info validates the bound package/backend/host without preparation or authorization and emits one bounded schema-2 JSON line with required install.shortcuts; Windows final-container verification rechecks its exact schema and stdout/stderr transport; mutations wait for the same terminal Rust lifecycle result
 - --trusted-publisher-key and LUXURY_BACKEND_PATH are debug-only absolute paths
 - Setup is not a .luxpkg browser: no picker, drag-and-drop, file input, or renderer-supplied package/root path
-- Studio renderer sends typed settings plus pathless create/open/import/entrypoint/reveal/reload/build intent; Rust shell owns native dialog results and active project/output/source paths
-- Studio authoring loop is create/open -> edit validated settings -> native file/folder import -> native entrypoint selection -> save/reload -> build. Renderer never receives source paths or generic filesystem authority
-- Setup renderer receives display review + hasEntrypoint and sends pathless destination/install/uninstall/cancel/reveal/launch intent
+- Studio renderer sends typed settings plus pathless create/open/import/replace/entrypoint/reveal/reload/build/cancel-build intent; Rust shell owns native dialog results and active project/output/source paths. Cancel uses one Rust idle/active/cancelled lifecycle, reaps descendants, cleans work, and returns to the validated project.
+- Studio primary build runs native form validity; when dirty it awaits typed `updateProject` and Rust revalidation before sending pathless `buildProject`. A save error never reaches output selection or native packager.
+- Dirty Studio state disables create/open/reload and has one explicit baseline undo. Close/Alt+F4 stays Rust-owned: `luxury://studio-close-query` carries only a correlated requestId, exact `respond_studio_close` returns requestId + dirty, absent/stale/invalid/timed-out replies fail dirty, and the native discard prompt needs no renderer dialog permission.
+- Rust derives native output suggestions from validated product name using a bounded alphanumeric/hyphen component; package ID is fallback only. Renderer sends no output name/path and no-clobber publication still revalidates the selected destination.
+- Studio local target comes only from strict pathless get_studio_host backed by Rust defaults. Renderer never guesses navigator platform; mismatch disables local build with native-project workflow guidance, while Rust build_project rechecks host equality.
+- Studio build UI shows monotonic elapsed time with tabular h:mm:ss formatting; the timer exists only in presentation, cleans its interval, is aria-hidden, and never fabricates Rust/native stages or percent.
+- Recent projects are a bounded six-item Rust-owned display list persisted atomically under app config; renderer reopens by validated index and Rust repeats validateProject before activation
+- Studio authoring loop is create/open -> edit validated settings -> native additive import or staged whole-payload replacement -> native entrypoint selection -> save/reload or save-and-build -> reveal output. Renderer never receives source paths or generic filesystem authority
+- Setup renderer receives display review + hasEntrypoint and sends pathless destination/install/uninstall/cancel/reveal/launch intent; cancel invoke failure stays in the active running state, shows one bounded inline error, and re-enables retry instead of claiming rollback. Completed user reveal uses the retained selection and completed system reveal uses luxury-system-roots, never renderer/helper path input
+- Completed Setup launch/reveal/link/close actions are serialized and fail inline. Launch success is recorded before close; a close failure removes launch and leaves pathless Done available, so retry never starts a second app instance
 - Exact capability grants event listen/unlisten, window dragging, and named app commands only
 - Renderer has no generic shell/fs/dialog/opener/process permission
 - Production CSP is local-only; loopback Vite/WebSocket origins exist only in devCsp
@@ -75,7 +87,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Normal desktop bootstrap must reject an elevated process before creating a webview; only windowless --verify-* may run elevated
 - Windows --verify-* must complete the strict one-shot packaged-backend named-pipe probe with mutual kernel PID binding; this is transport proof, not UAC/token/Authenticode/system authority
 - Before authenticated Windows runas, pin the exact helper without write/delete sharing, match its embedded signer to the process-image-bound running Tauri signer, and retain the guard through ShellExecuteExW
-- Routine CI keeps format, quick, GUI, and focused Windows luxury-windows-trust + luxury-platform jobs separate
+- Routine CI keeps format, quick, GUI, and focused Windows luxury-windows-trust + luxury-platform + luxury-system-roots + luxury-process jobs separate
 - Routine CI jobs are explicitly time-boxed; the manual native matrix is capped per host. Do not combine them into one long serial gate.
 
 ## CLI surface
@@ -91,6 +103,8 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - luxury uninstall <package-id> <install-base> <state-root>
 - luxury launch <package-id> <install-base> <state-root>
 - luxury help [command]; every public command also supports non-mutating --help/-h
+- Source/native packager command: cargo project-installer -- <absolute-project> <absolute-native-output>; luxury build remains the low-level package/signing command
+- Final bound launcher: --info-json, --unattended-install [--allow-unsigned] [--accept-license] [--allow-publisher-migration], --unattended-uninstall, or --help; exit 0 successful inspection/operation or already absent, 1 inspection/operation failure, 64 invalid arguments
 - Development prefix: cargo run -p luxury -- <command>
 - Keep state-root outside the removable install tree
 
@@ -99,20 +113,23 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - format_version 1: unsigned; SHA-256 integrity only; explicit unsigned consent required
 - format_version 2: Ed25519 exact-manifest signature; matching external SPKI trust anchor required; no unsigned fallback
 - format_version 3: A signs completed manifest/payload; B signs domain-separated package/version/A/B rotation proof
-- schema_version is independent; schema 2 adds exact-file install.entrypoint; schema 3 adds bounded authenticated plain-text package.license
+- schema_version is independent; schema 2 adds exact-file install.entrypoint; schema 3 adds bounded authenticated plain-text package.license; schema 4 adds bounded install.shortcuts with application_menu/desktop booleans bound to that exact entrypoint
 - Optional package.description is bounded plain text in luxury-spec, not only a Studio validation rule
+- Optional install.show_install_log keeps one collapsed bounded manifest projection available during installation and after completion; running labels it as a plan with factual counters, never raw backend logs
 - Windows entrypoint requires .exe; Linux/macOS requires executable=true
 - No entrypoint args, package environment, auto-run, scripts, or generic actions framework
 - luxury.toml is untrusted and capped at 1 MiB before parsing
 - Signing keys are bounded PKCS#8 PEM through stdin only; never path/argument/JSONL/log/fixture
 - A and B private keys never enter one process
-- Ownership receipt v4 stores payload signer, authorized publisher, and optional entrypoint
+- Ownership receipt v5 stores payload signer, authorized publisher, optional entrypoint, and shortcut intent; receipt v1-v4 remain readable
+- Studio, the strict Setup review contract, JSONL, and the compiler understand schema 4 shortcuts. Native creation is not advertised yet: current Setup bootstrap returns typed unsupported before the review is rendered and before mutation, until the three OS adapters and rollback lifecycle land
 - Trusted rotation requires installed A and strictly higher SemVer; fresh/legacy/unsigned/replay/equal/downgrade/self rotation fails
 
 ## JSONL protocol v3
 
 - One bounded JSON object per line on inherited stdin/stdout; stdout is protocol-only
 - Methods: defaults, initProject, validateProject, updateProject, importPayload, resolvePayloadPath, buildProject, inspect, prepareInstall, install, uninstall, launch, cancel
+- importPayload defaults to additive no-overwrite import; replace=true requires one source directory, uses its contents as the new payload root, restores ordinary failures, and preserves the staging backup when rollback itself fails
 - Studio project summaries expose bounded authoring.executableFiles, not a potentially multi-megabyte executable path list; omitted updateProject.executable preserves the list, adds a new Unix entrypoint, and removes its old marker only when the old file is gone
 - Validate protocol version, request ID, method params, absolute paths, results, errors, events, tags, bounds, and cross-field relations on both sides
 - Tauri client bounds line size and pending requests; ordinary requests and shutdown have finite deadlines
@@ -121,8 +138,9 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - prepareInstall is read-only/advisory; real install independently reopens/authenticates/recovers/reassesses/rechecks
 - allowUnsigned and acceptLicense are separate explicit consents; allowPublisherMigration is legacy/unsigned adoption authority only and never identity
 - Setup package/root/entrypoint authority stays in Rust shell
+- Privileged protocol v2 returns fresh `prepare_system_install` state in successful system install/uninstall terminal frames and exposes only that validated authoritative review with completion; Setup never fabricates post-operation Install/Repair, never opens a second prompt on that completion path, and clears the cache when post-commit preparation is unavailable
 - Uninstall is pathless from renderer and aggregate-only publicly
-- Launch is zero-argument, receipt-owned, direct, no shell/env/auto-run/forwarded streams; successful spawn is not cancellable
+- Launch is zero-argument, receipt-owned, direct, no shell/application args/auto-run/forwarded streams; successful spawn is not cancellable. Linux user/system launch opens the entrypoint beneath one retained no-follow install-root FD, uses that FD as cwd through `fchdir`, and executes kernel-owned `/proc/self/fd/N` after optional credential drop with no pathname fallback; only the read-only executable descriptor remains inherited for script compatibility. macOS user/system launch also uses a retained no-follow install-root FD as cwd, but its executable remains pathname-bound. Windows user/system launch opens every absolute parent component as a non-reparse directory without delete sharing and retains that chain plus final-file guards through process creation
 - Backend progress keeps one latest pending frame and flushes before non-progress/terminal output; shell validates counters and correlates events
 - Private signing keys never enter JSONL
 
@@ -144,7 +162,9 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 
 ## Native runner and evidence v2
 
-- Assembly is host-native, no-clobber, unsigned-v1 only
+- End-user build is host-native and no-clobber; .luxpkg is a temporary compiler-to-packager handoff, not the Studio result
+- Studio native builds use luxury-process: suspended kill-on-close Job Object on Windows, dedicated process group on Linux/macOS; cancel, timeout, failure, and primary exit terminate/reap all descendants before reporting, then Rust removes the exact parent-owned empty-sibling work directory without prefix scanning
+- Released Studio carries a payload-free Setup template with one exact patchable fingerprint slot plus a Rust native packager; Windows also carries SHA-256-pinned NSIS, and Linux creates plus independently parses deb/RPM in Rust; no user Cargo/pnpm/Tauri or system package CLI is required
 - Builds dist backend, checks frontend/Tauri, builds standalone locked Tauri release shell, stages fixed backend/payload resources, rejects trust resource, verifies hashes/identity, runs --verify-runner, publishes under ignored dist/
 - Windows layout: launcher + backend/ + payload/
 - Linux layout: usr/bin launcher + usr/lib/Luxury Installer resources
@@ -154,7 +174,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Evidence schemaVersion=2 records target, shell kind/version, package identity/fingerprint, backend/payload/frontendTree/launcher hashes, lifecycle counts, and explicit normal lifecycle/cleanup/Tauri checks
 - Evidence has no timestamp/path/signature and is not attestation
 - Recovery/cancellation/receipt-owned launch gate the command but are not separate evidence fields
-- Exact combined x86_64 set: linux-x86_64.json, windows-x86_64.json, macos-x86_64.json
+- Exact combined set: linux-x86_64.json, windows-x86_64.json, macos-aarch64.json
 - CI configuration is not runtime proof; use downloaded evidence artifacts
 
 ## Local desktop QA

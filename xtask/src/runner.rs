@@ -3,7 +3,7 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -14,7 +14,6 @@ use crate::{gui_check, workspace_root};
 
 #[cfg(unix)]
 mod archive;
-mod containment;
 mod linux_container;
 mod macos_container;
 mod probe;
@@ -40,6 +39,8 @@ const TAURI_SHELL_KIND: &str = "tauri";
 const TAURI_SHELL_VERSION: &str = "2.11.5";
 const LINUX_POLICY_BYTES: &[u8] =
     include_bytes!("../../packaging/linux/software.luxury.installer.policy");
+const LINUX_ICON_BYTES: &[u8] =
+    include_bytes!("../../apps/luxury-installer/src-tauri/icons/icon.png");
 const MACOS_HELPER_PLIST_BYTES: &[u8] =
     include_bytes!("../../packaging/macos/software.luxury.installer.helper.plist");
 const MACOS_ICON_BYTES: &[u8] =
@@ -58,7 +59,7 @@ const CANCELLATION_MARKER_FILES: u64 = 768;
 const EXPECTED_EVIDENCE: [(&str, &str, &str); 3] = [
     ("linux-x86_64.json", "linux", "x86_64"),
     ("windows-x86_64.json", "windows", "x86_64"),
-    ("macos-x86_64.json", "macos", "x86_64"),
+    ("macos-aarch64.json", "macos", "aarch64"),
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,13 +136,14 @@ struct HostLayout {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ShellFlavor {
     Setup,
+    SetupTemplate,
     Studio,
 }
 
 impl ShellFlavor {
     fn cargo_feature_args(self) -> &'static [&'static str] {
         match self {
-            Self::Setup => &["--no-default-features", "--features", "setup"],
+            Self::Setup | Self::SetupTemplate => &["--no-default-features", "--features", "setup"],
             Self::Studio => &["--features", "studio"],
         }
     }
@@ -341,6 +343,16 @@ fn validate_macos_bundle(
     }
     let app_name = format!("{APP_NAME}.app");
     let app = bundle.join(&app_name);
+    require_only_entries(bundle, &[&app_name], "portable macOS runner")?;
+    validate_macos_app(&app, host, flavor, expected_info_plist)
+}
+
+fn validate_macos_app(
+    app: &Path,
+    host: HostLayout,
+    flavor: ShellFlavor,
+    expected_info_plist: &[u8],
+) -> Result<(), String> {
     let contents = app.join("Contents");
     let executables = contents.join("MacOS");
     let resources = contents.join("Resources");
@@ -352,8 +364,7 @@ fn validate_macos_bundle(
     let helper_plist = launch_daemons.join("software.luxury.installer.helper.plist");
     let info_plist = contents.join("Info.plist");
 
-    require_only_entries(bundle, &[&app_name], "portable macOS runner")?;
-    require_only_entries(&app, &["Contents"], "macOS application bundle")?;
+    require_only_entries(app, &["Contents"], "macOS application bundle")?;
     require_only_entries(
         &contents,
         &["Info.plist", "Library", "MacOS", "Resources"],
@@ -368,7 +379,14 @@ fn validate_macos_bundle(
     require_only_file(&executables, APP_NAME)?;
     let resource_entries: &[&str] = match flavor {
         ShellFlavor::Setup => &["backend", "icon.icns", "luxury-installer-helper", "payload"],
-        ShellFlavor::Studio => &["backend", "icon.icns", "luxury-installer-helper"],
+        ShellFlavor::SetupTemplate => &["backend", "icon.icns", "luxury-installer-helper"],
+        ShellFlavor::Studio => &[
+            "backend",
+            "icon.icns",
+            "luxury-installer-helper",
+            "packager",
+            "templates",
+        ],
     };
     require_only_entries(&resources, resource_entries, "macOS bundle Resources")?;
     require_only_file(&backend, host.backend_name)?;
@@ -390,7 +408,9 @@ fn validate_macos_bundle(
     }
     match flavor {
         ShellFlavor::Setup => require_only_file(&payload, "package.luxpkg")?,
-        ShellFlavor::Studio => require_missing(&payload, "Studio payload resource")?,
+        ShellFlavor::SetupTemplate | ShellFlavor::Studio => {
+            require_missing(&payload, "payload-free resource")?
+        }
     }
     require_regular_file(&info_plist, "macOS Info.plist")?;
     let metadata = fs::metadata(&info_plist)
@@ -426,7 +446,14 @@ fn validate_portable_bundle(
                 return Err("Windows Studio must not contain a macOS Info.plist".into());
             }
             let entries: &[&str] = match flavor {
-                ShellFlavor::Studio => &["Luxury Installer.exe", "backend"],
+                ShellFlavor::SetupTemplate => &["Luxury Installer.exe", "backend"],
+                ShellFlavor::Studio => &[
+                    "Luxury Installer.exe",
+                    "backend",
+                    "packager",
+                    "templates",
+                    "tools",
+                ],
                 ShellFlavor::Setup => &["Luxury Installer.exe", "backend", "payload"],
             };
             require_only_entries(bundle, entries, "portable Windows application")?;
@@ -470,11 +497,19 @@ fn validate_portable_bundle(
                 return Err("Linux polkit policy bytes changed after staging".into());
             }
             let entries: &[&str] = match flavor {
-                ShellFlavor::Studio => &["backend"],
+                ShellFlavor::SetupTemplate => &["backend"],
+                ShellFlavor::Studio => &["backend", "icon.png", "packager", "templates"],
                 ShellFlavor::Setup => &["backend", "payload"],
             };
             require_only_entries(&resources, entries, "portable Linux application resources")?;
             require_only_file(&resources.join("backend"), host.backend_name)?;
+            if flavor == ShellFlavor::Studio
+                && fs::read(resources.join("icon.png"))
+                    .map_err(|error| format!("could not read Linux Studio icon: {error}"))?
+                    != LINUX_ICON_BYTES
+            {
+                return Err("portable Linux Studio icon bytes changed during staging".into());
+            }
         }
         "macos" => {
             let expected = expected_info_plist
@@ -485,8 +520,37 @@ fn validate_portable_bundle(
     }
     let payload = resources.join("payload");
     match flavor {
-        ShellFlavor::Studio => require_missing(&payload, "Studio payload resource")?,
+        ShellFlavor::SetupTemplate | ShellFlavor::Studio => {
+            require_missing(&payload, "payload-free resource")?
+        }
         ShellFlavor::Setup => require_only_file(&payload, "package.luxpkg")?,
+    }
+    if flavor == ShellFlavor::Studio {
+        let packager = resources
+            .join("packager")
+            .join(packaged_packager_name(host));
+        require_only_file(&resources.join("packager"), packaged_packager_name(host))?;
+        require_regular_file(&packager, "Studio native packager")?;
+        require_executable(&packager, "Studio native packager")?;
+
+        let template_name = format!("{}-{}", host.rust_os, host.rust_arch);
+        let templates = resources.join("templates");
+        require_only_entries(&templates, &[&template_name], "Studio Setup templates")?;
+        let template = templates.join(template_name);
+        validate_portable_bundle(
+            &template,
+            host,
+            ShellFlavor::SetupTemplate,
+            expected_info_plist,
+        )?;
+        require_setup_template_binding(&host.launcher(&template))?;
+
+        let tools = resources.join("tools");
+        if host.rust_os == "windows" {
+            require_only_file(&tools, "nsis-3.12.zip")?;
+        } else {
+            require_missing(&tools, "non-Windows Studio tool directory")?;
+        }
     }
     Ok(())
 }
@@ -511,6 +575,208 @@ pub(super) fn studio_assemble() -> Result<(), String> {
         archive::create(&studio)?.display()
     );
     Ok(())
+}
+
+pub(super) fn project_installer(project: &Path, output: &Path) -> Result<(), String> {
+    project_installer_with_work(project, output, None)
+}
+
+pub(super) fn workspace_project_installer(
+    relative_project: &Path,
+    output: &Path,
+) -> Result<(), String> {
+    let project = checked_workspace_project(&workspace_root(), relative_project)?;
+    project_installer(&project, output)?;
+    write_native_output_checksums(output)
+}
+
+fn checked_workspace_project(root: &Path, relative_project: &Path) -> Result<PathBuf, String> {
+    if relative_project.as_os_str().is_empty()
+        || relative_project.is_absolute()
+        || relative_project.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err("native matrix project path must be repository-relative without `..`".into());
+    }
+    let root = fs::canonicalize(root)
+        .map_err(|error| format!("could not resolve workspace root: {error}"))?;
+    let project = fs::canonicalize(root.join(relative_project))
+        .map_err(|error| format!("could not resolve native matrix project: {error}"))?;
+    if !project.starts_with(&root) || !project.is_dir() {
+        return Err("native matrix project escaped the repository or is not a directory".into());
+    }
+    let config = project.join("luxury.toml");
+    let metadata = fs::symlink_metadata(&config)
+        .map_err(|error| format!("native matrix project has no readable luxury.toml: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("native matrix luxury.toml must be a regular non-link file".into());
+    }
+    Ok(project)
+}
+
+fn write_native_output_checksums(output: &Path) -> Result<(), String> {
+    let root = output
+        .parent()
+        .ok_or_else(|| "native matrix output has no parent directory".to_owned())?;
+    let mut files = Vec::new();
+    collect_native_output_files(output, &mut files)?;
+    if files.is_empty() {
+        return Err("native matrix output contained no files".into());
+    }
+    files.sort();
+    let mut entries = Vec::with_capacity(files.len());
+    let mut contents = String::new();
+    for file in files {
+        let relative = portable_checksum_path(root, &file)?;
+        let hash = sha256_file(&file)?;
+        contents.push_str(&sha256_hex(hash));
+        contents.push_str("  ");
+        contents.push_str(&relative);
+        contents.push('\n');
+        entries.push((file, hash));
+    }
+    let manifest = root.join("SHA256SUMS.txt");
+    let mut destination = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&manifest)
+        .map_err(|error| format!("could not create `{}`: {error}", manifest.display()))?;
+    destination
+        .write_all(contents.as_bytes())
+        .map_err(|error| format!("could not write `{}`: {error}", manifest.display()))?;
+    destination
+        .sync_all()
+        .map_err(|error| format!("could not sync `{}`: {error}", manifest.display()))?;
+    drop(destination);
+    if fs::read(&manifest)
+        .map_err(|error| format!("could not reopen `{}`: {error}", manifest.display()))?
+        != contents.as_bytes()
+    {
+        return Err("native matrix checksum manifest changed after publication".into());
+    }
+    for (file, expected) in entries {
+        if sha256_file(&file)? != expected {
+            return Err(format!(
+                "native matrix output changed after hashing: {}",
+                file.display()
+            ));
+        }
+    }
+    println!("wrote native matrix checksums: {}", manifest.display());
+    Ok(())
+}
+
+fn collect_native_output_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("could not inspect native matrix output: {error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("native matrix output contains a link".into());
+    }
+    if metadata.is_file() {
+        files.push(path.to_owned());
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Err("native matrix output contains a special entry".into());
+    }
+    let mut entries = fs::read_dir(path)
+        .map_err(|error| format!("could not read native matrix output: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("could not read native matrix output entry: {error}"))?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        collect_native_output_files(&entry.path(), files)?;
+    }
+    Ok(())
+}
+
+fn portable_checksum_path(root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "native matrix output escaped its root".to_owned())?;
+    let mut output = String::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err("native matrix output path was not portable".into());
+        };
+        let component = component
+            .to_str()
+            .filter(|value| !value.contains('\\') && !value.chars().any(char::is_control))
+            .ok_or_else(|| {
+                "native matrix output path component was not portable text".to_owned()
+            })?;
+        if !output.is_empty() {
+            output.push('/');
+        }
+        output.push_str(component);
+    }
+    if output.is_empty() {
+        return Err("native matrix output path was empty".into());
+    }
+    Ok(output)
+}
+
+pub(super) fn managed_project_installer(
+    project: &Path,
+    output: &Path,
+    work: &Path,
+) -> Result<(), String> {
+    project_installer_with_work(project, output, Some(work))
+}
+
+fn project_installer_with_work(
+    project: &Path,
+    output: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
+    let packaged_resources = packaged_studio_resources()?;
+    match env::consts::OS {
+        "windows" => match packaged_resources {
+            Some(resources) => {
+                windows_container::build_packaged_project(project, output, &resources, managed_work)
+            }
+            None => windows_container::build_project(project, output, managed_work),
+        },
+        "linux" => match packaged_resources {
+            Some(resources) => {
+                linux_container::build_packaged_project(project, output, &resources, managed_work)
+            }
+            None => linux_container::build_project(project, output, managed_work),
+        },
+        "macos" => match packaged_resources {
+            Some(resources) => {
+                macos_container::build_packaged_project(project, output, &resources, managed_work)
+            }
+            None => macos_container::build_project(project, output, managed_work),
+        },
+        _ => unreachable!("HostLayout rejects unsupported operating systems"),
+    }
+}
+
+fn packaged_studio_resources() -> Result<Option<PathBuf>, String> {
+    let host = HostLayout::new(env::consts::OS, env::consts::ARCH)?;
+    let executable = env::current_exe()
+        .map_err(|error| format!("could not resolve native packager executable: {error}"))?;
+    if executable.file_name() != Some(OsStr::new(packaged_packager_name(host))) {
+        return Ok(None);
+    }
+    let packager = executable
+        .parent()
+        .ok_or_else(|| "native packager executable has no parent".to_owned())?;
+    if packager.file_name() != Some(OsStr::new("packager")) {
+        return Err("packaged native packager is outside its fixed resource directory".into());
+    }
+    let resources = packager
+        .parent()
+        .ok_or_else(|| "native packager resource directory has no parent".to_owned())?;
+    ensure_real_directory(resources)?;
+    Ok(Some(resources.to_path_buf()))
 }
 
 pub(super) fn windows_setup(package: &Path, nsis_archive: &Path) -> Result<(), String> {
@@ -1702,10 +1968,13 @@ fn assemble_studio_into(output: &Path) -> Result<PathBuf, String> {
     require_regular_file(&source_backend, "built Rust backend")?;
     require_executable(&source_backend, "built Rust backend")?;
     let backend_hash = sha256_file(&source_backend)?;
+    let source_packager = build_packager(&root, host)?;
+    let packager_hash = sha256_file(&source_packager)?;
 
     ensure_real_directory(output)?;
     let artifact = output.join(studio_artifact_name(host));
     require_missing(&artifact, "portable Studio artifact")?;
+    let work = WorkDirectory::new(output)?;
 
     gui_check()?;
     let frontend = root
@@ -1714,18 +1983,50 @@ fn assemble_studio_into(output: &Path) -> Result<PathBuf, String> {
         .join("out")
         .join("renderer");
     let frontend_hash = hash_frontend_tree(&frontend)?;
-    let source_shell = build_tauri_shell(&root, host, ShellFlavor::Studio, None)?;
+    let built_studio_shell = build_tauri_shell(&root, host, ShellFlavor::Studio, None)?;
+    let source_shell = work.path.join(if host.rust_os == "windows" {
+        "studio-shell.exe"
+    } else {
+        "studio-shell"
+    });
+    copy_file(&built_studio_shell, &source_shell)?;
     let shell_hash = sha256_file(&source_shell)?;
+    let template_binding = std::str::from_utf8(&luxury_spec::SETUP_BINDING_TEMPLATE)
+        .expect("the Setup template marker is ASCII");
+    let built_template_shell = build_tauri_shell(
+        &root,
+        host,
+        ShellFlavor::SetupTemplate,
+        Some(template_binding),
+    )?;
+    let source_template_shell = work.path.join(if host.rust_os == "windows" {
+        "setup-template-shell.exe"
+    } else {
+        "setup-template-shell"
+    });
+    copy_file(&built_template_shell, &source_template_shell)?;
+    require_setup_template_binding(&source_template_shell)?;
+    let template_shell_hash = sha256_file(&source_template_shell)?;
+    let source_nsis = if host.rust_os == "windows" {
+        let target = resolve_target_dir(&root, env::var_os("CARGO_TARGET_DIR").as_deref());
+        Some(windows_container::cached_studio_nsis(&target)?)
+    } else {
+        None
+    };
     if hash_frontend_tree(&frontend)? != frontend_hash {
         return Err("frontend build output changed while Tauri Studio was built".into());
     }
 
-    let work = WorkDirectory::new(output)?;
     let bundle = work.path.join("portable-studio");
     let resources = host.resources_directory(&bundle);
     let launcher = host.launcher(&bundle);
     let packaged_backend_dir = resources.join("backend");
     let packaged_backend = packaged_backend_dir.join(host.backend_name);
+    let packaged_packager_dir = resources.join("packager");
+    let packaged_packager = packaged_packager_dir.join(packaged_packager_name(host));
+    let template = resources
+        .join("templates")
+        .join(format!("{}-{}", host.rust_os, host.rust_arch));
     fs::create_dir_all(
         launcher
             .parent()
@@ -1734,14 +2035,39 @@ fn assemble_studio_into(output: &Path) -> Result<PathBuf, String> {
     .map_err(|error| format!("could not create portable Studio launcher directory: {error}"))?;
     fs::create_dir_all(&packaged_backend_dir)
         .map_err(|error| format!("could not create portable Studio backend directory: {error}"))?;
+    fs::create_dir_all(&packaged_packager_dir)
+        .map_err(|error| format!("could not create native packager directory: {error}"))?;
+    if host.rust_os == "linux" {
+        let icon = resources.join("icon.png");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&icon)
+            .map_err(|error| format!("could not create Linux Studio icon: {error}"))?;
+        file.write_all(LINUX_ICON_BYTES)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| format!("could not persist Linux Studio icon: {error}"))?;
+        #[cfg(unix)]
+        fs::set_permissions(&icon, std::os::unix::fs::PermissionsExt::from_mode(0o644))
+            .map_err(|error| format!("could not set Linux Studio icon permissions: {error}"))?;
+    }
     let macos_info_plist = (host.rust_os == "macos")
         .then(|| write_macos_info_plist(&bundle))
         .transpose()?;
     copy_file(&source_shell, &launcher)?;
     copy_file(&source_backend, &packaged_backend)?;
+    copy_file(&source_packager, &packaged_packager)?;
+    set_packager_permissions(&packaged_packager)?;
     set_runner_permissions(&launcher, &packaged_backend, None)?;
     stage_linux_privilege_integration(&bundle, host, &source_backend)?;
     stage_macos_privilege_integration(&bundle, host, &source_backend)?;
+    stage_setup_template(&template, host, &source_template_shell, &source_backend)?;
+    if let Some(source_nsis) = &source_nsis {
+        let tools = resources.join("tools");
+        fs::create_dir(&tools)
+            .map_err(|error| format!("could not create Studio tool directory: {error}"))?;
+        copy_file(source_nsis, &tools.join("nsis-3.12.zip"))?;
+    }
     validate_portable_bundle(
         &bundle,
         host,
@@ -1755,6 +2081,16 @@ fn assemble_studio_into(output: &Path) -> Result<PathBuf, String> {
     if sha256_file(&packaged_backend)? != backend_hash {
         return Err("portable Studio backend bytes do not match the dist build".into());
     }
+    if sha256_file(&packaged_packager)? != packager_hash
+        || sha256_file(&host.launcher(&template))? != template_shell_hash
+    {
+        return Err("portable Studio packager resources changed during staging".into());
+    }
+    if let Some(source_nsis) = &source_nsis
+        && sha256_file(&resources.join("tools").join("nsis-3.12.zip"))? != sha256_file(source_nsis)?
+    {
+        return Err("portable Studio NSIS bytes changed during staging".into());
+    }
     probe_studio(&launcher)?;
     if hash_frontend_tree(&frontend)? != frontend_hash {
         return Err("frontend build output changed during Tauri Studio verification".into());
@@ -1765,7 +2101,11 @@ fn assemble_studio_into(output: &Path) -> Result<PathBuf, String> {
         ShellFlavor::Studio,
         macos_info_plist.as_deref(),
     )?;
-    if sha256_file(&launcher)? != shell_hash || sha256_file(&packaged_backend)? != backend_hash {
+    if sha256_file(&launcher)? != shell_hash
+        || sha256_file(&packaged_backend)? != backend_hash
+        || sha256_file(&packaged_packager)? != packager_hash
+        || sha256_file(&host.launcher(&template))? != template_shell_hash
+    {
         return Err("portable Studio bytes changed during runtime verification".into());
     }
 
@@ -1777,6 +2117,44 @@ fn assemble_studio_into(output: &Path) -> Result<PathBuf, String> {
         )
     })?;
     Ok(artifact)
+}
+
+fn stage_setup_template(
+    template: &Path,
+    host: HostLayout,
+    source_shell: &Path,
+    source_backend: &Path,
+) -> Result<(), String> {
+    let resources = host.resources_directory(template);
+    let launcher = host.launcher(template);
+    let backend = resources.join("backend").join(host.backend_name);
+    fs::create_dir_all(
+        launcher
+            .parent()
+            .ok_or_else(|| "Setup template launcher has no parent".to_owned())?,
+    )
+    .map_err(|error| format!("could not create Setup template launcher directory: {error}"))?;
+    fs::create_dir_all(
+        backend
+            .parent()
+            .ok_or_else(|| "Setup template backend has no parent".to_owned())?,
+    )
+    .map_err(|error| format!("could not create Setup template backend directory: {error}"))?;
+    let macos_info_plist = (host.rust_os == "macos")
+        .then(|| write_macos_info_plist(template))
+        .transpose()?;
+    copy_file(source_shell, &launcher)?;
+    copy_file(source_backend, &backend)?;
+    set_runner_permissions(&launcher, &backend, None)?;
+    stage_linux_privilege_integration(template, host, source_backend)?;
+    stage_macos_privilege_integration(template, host, source_backend)?;
+    validate_portable_bundle(
+        template,
+        host,
+        ShellFlavor::SetupTemplate,
+        macos_info_plist.as_deref(),
+    )?;
+    require_setup_template_binding(&launcher)
 }
 
 fn assemble_checked_into(
@@ -2075,6 +2453,69 @@ fn build_backend(root: &Path, host: HostLayout) -> Result<PathBuf, String> {
     }
 }
 
+fn build_packager(root: &Path, host: HostLayout) -> Result<PathBuf, String> {
+    let host_triple = rustc_host_triple(root)?;
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let feature = if host.rust_os == "linux" {
+        " --features standalone-linux-packager"
+    } else {
+        ""
+    };
+    println!("> cargo build --locked --profile dist -p xtask --target {host_triple}{feature}");
+    let mut command = Command::new(cargo);
+    command.args([
+        "build",
+        "--locked",
+        "--profile",
+        "dist",
+        "-p",
+        "xtask",
+        "--target",
+    ]);
+    command.arg(&host_triple);
+    if host.rust_os == "linux" {
+        command.args(["--features", "standalone-linux-packager"]);
+    }
+    let status = command
+        .current_dir(root)
+        .status()
+        .map_err(|error| format!("could not start packager build: {error}"))?;
+    if !status.success() {
+        return Err(format!("host Rust packager build exited with {status}"));
+    }
+    let target_dir = resolve_target_dir(root, env::var_os("CARGO_TARGET_DIR").as_deref());
+    let packager = target_dir
+        .join(host_triple)
+        .join("dist")
+        .join(if host.rust_os == "windows" {
+            "xtask.exe"
+        } else {
+            "xtask"
+        });
+    require_regular_file(&packager, "built Rust native packager")?;
+    require_executable(&packager, "built Rust native packager")?;
+    Ok(packager)
+}
+
+fn packaged_packager_name(host: HostLayout) -> &'static str {
+    if host.rust_os == "windows" {
+        "luxury-packager.exe"
+    } else {
+        "luxury-packager"
+    }
+}
+
+fn set_packager_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .map_err(|error| format!("could not set native packager permissions: {error}"))?;
+    }
+    let _ = path;
+    Ok(())
+}
+
 fn build_tauri_shell(
     root: &Path,
     host: HostLayout,
@@ -2084,6 +2525,8 @@ fn build_tauri_shell(
     match (flavor, bound_package_fingerprint) {
         (ShellFlavor::Studio, None) => {}
         (ShellFlavor::Setup, Some(value)) if is_lower_hex_64(value) => {}
+        (ShellFlavor::SetupTemplate, Some(value))
+            if value.as_bytes() == luxury_spec::SETUP_BINDING_TEMPLATE => {}
         _ => return Err("Tauri shell flavor and package binding do not match".into()),
     }
     let host_triple = rustc_host_triple(root)?;
@@ -2176,6 +2619,63 @@ fn artifact_name(host: HostLayout, fingerprint: &str) -> Result<String, String> 
     ))
 }
 
+fn require_setup_template_binding(path: &Path) -> Result<(), String> {
+    let bytes = fs::read(path)
+        .map_err(|error| format!("could not read Setup template binding: {error}"))?;
+    binding_offset(&bytes, &luxury_spec::SETUP_BINDING_TEMPLATE).map(|_| ())
+}
+
+fn patch_setup_template_binding(path: &Path, fingerprint: &str) -> Result<(), String> {
+    if !is_lower_hex_64(fingerprint) {
+        return Err("Setup template fingerprint must be exact lower hex".into());
+    }
+    let bytes = fs::read(path)
+        .map_err(|error| format!("could not read Setup template binding: {error}"))?;
+    let offset = binding_offset(&bytes, &luxury_spec::SETUP_BINDING_TEMPLATE)?
+        + luxury_spec::SETUP_BINDING_PREFIX.len();
+    let mut file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("could not open Setup template for binding: {error}"))?;
+    file.seek(SeekFrom::Start(offset as u64))
+        .map_err(|error| format!("could not seek to Setup template binding: {error}"))?;
+    file.write_all(fingerprint.as_bytes())
+        .map_err(|error| format!("could not write Setup template binding: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("could not sync Setup template binding: {error}"))?;
+    drop(file);
+
+    let patched = fs::read(path)
+        .map_err(|error| format!("could not verify Setup template binding: {error}"))?;
+    binding_offset(&patched, fingerprint.as_bytes())?;
+    if binding_offset(&patched, &luxury_spec::SETUP_BINDING_TEMPLATE).is_ok() {
+        return Err("Setup template placeholder remained after binding".into());
+    }
+    Ok(())
+}
+
+fn binding_offset(bytes: &[u8], fingerprint: &[u8]) -> Result<usize, String> {
+    if fingerprint.len() != 64 {
+        return Err("Setup binding fingerprint length is invalid".into());
+    }
+    let width = luxury_spec::SETUP_BINDING_PREFIX.len()
+        + fingerprint.len()
+        + luxury_spec::SETUP_BINDING_SUFFIX.len();
+    let mut found = None;
+    for (offset, window) in bytes.windows(width).enumerate() {
+        if window.starts_with(&luxury_spec::SETUP_BINDING_PREFIX)
+            && window[luxury_spec::SETUP_BINDING_PREFIX.len()
+                ..luxury_spec::SETUP_BINDING_PREFIX.len() + fingerprint.len()]
+                == *fingerprint
+            && window.ends_with(&luxury_spec::SETUP_BINDING_SUFFIX)
+            && found.replace(offset).is_some()
+        {
+            return Err("Setup binary contains multiple matching bindings".into());
+        }
+    }
+    found.ok_or_else(|| "Setup binary does not contain the expected binding".into())
+}
+
 fn studio_artifact_name(host: HostLayout) -> String {
     format!(
         "luxury-installer-studio-{}-{}-{}",
@@ -2203,6 +2703,55 @@ fn bounded_output(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_matrix_project_path_stays_inside_the_repository() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("projects").join("windows");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("luxury.toml"), b"format_version = 1\n").unwrap();
+
+        assert_eq!(
+            checked_workspace_project(root.path(), Path::new("projects/windows")).unwrap(),
+            project.canonicalize().unwrap()
+        );
+        assert!(checked_workspace_project(root.path(), Path::new("../outside")).is_err());
+        assert!(checked_workspace_project(root.path(), &project).is_err());
+        assert!(checked_workspace_project(root.path(), Path::new("missing")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_matrix_project_rejects_a_link_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("luxury.toml"), b"format_version = 1\n").unwrap();
+        symlink(outside.path(), root.path().join("escaped")).unwrap();
+        assert!(checked_workspace_project(root.path(), Path::new("escaped")).is_err());
+    }
+
+    #[test]
+    fn native_matrix_checksums_are_sorted_relative_and_no_clobber() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("installers");
+        fs::create_dir(&output).unwrap();
+        fs::write(output.join("z.rpm"), b"rpm").unwrap();
+        fs::write(output.join("a.deb"), b"deb").unwrap();
+
+        write_native_output_checksums(&output).unwrap();
+        let manifest = fs::read_to_string(temp.path().join("SHA256SUMS.txt")).unwrap();
+        assert_eq!(
+            manifest,
+            format!(
+                "{}  installers/a.deb\n{}  installers/z.rpm\n",
+                sha256_hex(sha256_file(&output.join("a.deb")).unwrap()),
+                sha256_hex(sha256_file(&output.join("z.rpm")).unwrap())
+            )
+        );
+        assert!(write_native_output_checksums(&output).is_err());
+    }
 
     fn sample_evidence() -> RunnerEvidence {
         RunnerEvidence {
@@ -2252,14 +2801,15 @@ mod tests {
 
     fn platform_evidence(os: &str) -> RunnerEvidence {
         let mut evidence = sample_evidence();
-        let (triple, marker) = match os {
-            "linux" => ("x86_64-unknown-linux-gnu", '1'),
-            "windows" => ("x86_64-pc-windows-msvc", '2'),
-            "macos" => ("x86_64-apple-darwin", '3'),
+        let (triple, arch, marker) = match os {
+            "linux" => ("x86_64-unknown-linux-gnu", "x86_64", '1'),
+            "windows" => ("x86_64-pc-windows-msvc", "x86_64", '2'),
+            "macos" => ("aarch64-apple-darwin", "aarch64", '3'),
             other => panic!("unsupported test OS {other}"),
         };
         evidence.target.triple = triple.into();
         evidence.target.os = os.into();
+        evidence.target.arch = arch.into();
         evidence.package.fingerprint = marker.to_string().repeat(64);
         evidence.artifacts.payload_sha256 = marker.to_string().repeat(64);
         evidence
@@ -2407,7 +2957,7 @@ mod tests {
     fn evidence_set_rejects_missing_file() {
         let work = WorkDirectory::new(&env::temp_dir()).unwrap();
         write_evidence_set(&work.path);
-        fs::remove_file(work.path.join("macos-x86_64.json")).unwrap();
+        fs::remove_file(work.path.join("macos-aarch64.json")).unwrap();
         assert!(verify_evidence_set(&work.path).is_err());
     }
 
@@ -2451,7 +3001,7 @@ mod tests {
     fn evidence_set_rejects_mismatched_package_version() {
         let work = WorkDirectory::new(&env::temp_dir()).unwrap();
         write_evidence_set(&work.path);
-        let path = work.path.join("macos-x86_64.json");
+        let path = work.path.join("macos-aarch64.json");
         let mut evidence = platform_evidence("macos");
         evidence.package.version = "2.0.0".into();
         fs::write(path, evidence_bytes(&evidence).unwrap()).unwrap();
@@ -2538,6 +3088,30 @@ mod tests {
     }
 
     #[test]
+    fn setup_template_binding_is_unique_and_exactly_patchable() {
+        let temp = tempfile::tempdir().unwrap();
+        let template = temp.path().join("setup-template.bin");
+        let mut bytes = b"prefix".to_vec();
+        bytes.extend_from_slice(&luxury_spec::SETUP_BINDING_PREFIX);
+        bytes.extend_from_slice(&luxury_spec::SETUP_BINDING_TEMPLATE);
+        bytes.extend_from_slice(&luxury_spec::SETUP_BINDING_SUFFIX);
+        bytes.extend_from_slice(b"suffix");
+        fs::write(&template, &bytes).unwrap();
+        require_setup_template_binding(&template).unwrap();
+
+        let fingerprint = "a".repeat(64);
+        patch_setup_template_binding(&template, &fingerprint).unwrap();
+        let patched = fs::read(&template).unwrap();
+        assert!(binding_offset(&patched, fingerprint.as_bytes()).is_ok());
+        assert!(binding_offset(&patched, &luxury_spec::SETUP_BINDING_TEMPLATE).is_err());
+
+        bytes.extend_from_slice(&luxury_spec::SETUP_BINDING_PREFIX);
+        bytes.extend_from_slice(&luxury_spec::SETUP_BINDING_TEMPLATE);
+        bytes.extend_from_slice(&luxury_spec::SETUP_BINDING_SUFFIX);
+        assert!(binding_offset(&bytes, &luxury_spec::SETUP_BINDING_TEMPLATE).is_err());
+    }
+
+    #[test]
     fn studio_layout_is_payload_free_and_exact_on_each_host() {
         let work = WorkDirectory::new(&env::temp_dir()).unwrap();
         for (os, arch) in [
@@ -2557,6 +3131,28 @@ mod tests {
             set_runner_permissions(&launcher, &backend, None).unwrap();
             stage_linux_privilege_integration(&bundle, host, &backend).unwrap();
             stage_macos_privilege_integration(&bundle, host, &backend).unwrap();
+            let packager = resources
+                .join("packager")
+                .join(packaged_packager_name(host));
+            fs::create_dir_all(packager.parent().unwrap()).unwrap();
+            fs::write(&packager, b"native-packager").unwrap();
+            set_packager_permissions(&packager).unwrap();
+            if os == "linux" {
+                fs::write(resources.join("icon.png"), LINUX_ICON_BYTES).unwrap();
+            }
+            let template_source = work.path.join(format!("template-source-{os}"));
+            let mut template_bytes = b"template-prefix".to_vec();
+            template_bytes.extend_from_slice(&luxury_spec::SETUP_BINDING_PREFIX);
+            template_bytes.extend_from_slice(&luxury_spec::SETUP_BINDING_TEMPLATE);
+            template_bytes.extend_from_slice(&luxury_spec::SETUP_BINDING_SUFFIX);
+            fs::write(&template_source, template_bytes).unwrap();
+            let template = resources.join("templates").join(format!("{os}-{arch}"));
+            stage_setup_template(&template, host, &template_source, &backend).unwrap();
+            if os == "windows" {
+                let tools = resources.join("tools");
+                fs::create_dir(&tools).unwrap();
+                fs::write(tools.join("nsis-3.12.zip"), b"pinned in assembly").unwrap();
+            }
             let info_plist = (os == "macos").then(|| write_macos_info_plist(&bundle).unwrap());
 
             validate_portable_bundle(&bundle, host, ShellFlavor::Studio, info_plist.as_deref())

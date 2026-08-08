@@ -20,11 +20,15 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
   const { action, destination, view, summary } = installer
   const workspace = useRef<HTMLElement>(null)
   const resultPendingRef = useRef(false)
-  const [resultPending, setResultPending] = useState<'reveal' | 'close' | number | null>(null)
+  const [resultPending, setResultPending] = useState<
+    'launch' | 'reveal' | 'close' | number | null
+  >(null)
   const [resultError, setResultError] = useState<string | null>(null)
+  const [launchSucceeded, setLaunchSucceeded] = useState(false)
 
   useEffect(() => {
     setResultError(null)
+    if (view.kind !== 'installComplete') setLaunchSucceeded(false)
     const container = workspace.current
     if (!container) return
     container.scrollTop = 0
@@ -33,7 +37,7 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
   }, [view.kind])
 
   const runResultAction = async (
-    action: 'reveal' | 'close' | number,
+    action: 'launch' | 'reveal' | 'close' | number,
     operation: () => Promise<void>,
   ) => {
     if (resultPendingRef.current) return
@@ -100,6 +104,9 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
             completedBytes={view.completedBytes}
             totalBytes={view.totalBytes}
             cancellationRequested={view.cancellationRequested}
+            cancellationError={view.cancellationError}
+            installLog={summary.installLog}
+            destination={destination}
             onCancel={() => void installer.cancelOperation()}
           />
         ) : view.kind === 'running' && view.operation === 'uninstall' && summary ? (
@@ -110,6 +117,7 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
             processedFiles={view.processedFiles}
             totalFiles={view.totalFiles}
             cancellationRequested={view.cancellationRequested}
+            cancellationError={view.cancellationError}
             onCancel={() => void installer.cancelOperation()}
           />
         ) : view.kind === 'installFinished' && summary ? (
@@ -131,13 +139,18 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
           <CompleteView
             name={summary.name}
             action={view.action}
-            canLaunch={summary.hasEntrypoint}
-            canReveal={summary.scope === 'user'}
-            launchPending={installer.launchPending}
+            canLaunch={summary.hasEntrypoint && !launchSucceeded}
+            canReveal
             actionPending={resultPending}
             actionError={resultError}
             finishLinks={summary.finishLinks}
-            onLaunch={() => void installer.launchInstalled()}
+            onLaunch={() =>
+              void runResultAction('launch', async () => {
+                await installer.bridge.launchInstalled()
+                setLaunchSucceeded(true)
+                await installer.bridge.closeWindow()
+              })
+            }
             onReveal={() => void runResultAction('reveal', installer.bridge.revealInstalled)}
             onOpenLink={(index) =>
               void runResultAction(index, () => installer.bridge.openFinishLink(index))

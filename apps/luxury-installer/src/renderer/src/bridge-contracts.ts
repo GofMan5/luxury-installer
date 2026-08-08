@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
-const text = z.string().min(1).max(1024)
+const text = z
+  .string()
+  .min(1)
+  .refine((value) => [...value].length <= 1024)
+  .refine((value) => !/[\u0000-\u001f\u007f-\u009f]/u.test(value))
 const license = z
   .string()
   .min(1)
@@ -76,6 +80,9 @@ const installLog = z
 const finishLink = z
   .object({ label: text.max(48), url: z.string().max(2_048).refine(validHttpsUrl) })
   .strict()
+const shortcutPolicy = z
+  .object({ applicationMenu: z.boolean(), desktop: z.boolean() })
+  .strict()
 
 const trust = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unsigned') }).strict(),
@@ -92,6 +99,7 @@ export const packageSummarySchema = z
     name: text,
     publisher: text,
     version: text,
+    description: text.nullable(),
     license: license.nullable(),
     targetOs,
     targetArch,
@@ -100,6 +108,7 @@ export const packageSummarySchema = z
     hasEntrypoint: z.boolean(),
     installLog: installLog.nullable(),
     finishLinks: z.array(finishLink).max(4),
+    shortcuts: shortcutPolicy,
     files: count,
     bytes: count,
     trust,
@@ -112,6 +121,9 @@ export const packageSummarySchema = z
       value.installLog.files.length + value.installLog.omittedFiles !== value.files
     ) {
       context.addIssue({ code: 'custom', path: ['installLog'], message: 'invalid install log' })
+    }
+    if ((value.shortcuts.applicationMenu || value.shortcuts.desktop) && !value.hasEntrypoint) {
+      context.addIssue({ code: 'custom', path: ['shortcuts'], message: 'entrypoint required' })
     }
     if (
       value.publisherRotation &&
@@ -181,7 +193,7 @@ export const studioProjectSchema = z
   .object({
     projectPath: path,
     formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
     packageId,
     name: text,
     publisher: text,
@@ -198,6 +210,7 @@ export const studioProjectSchema = z
     hasEntrypoint: z.boolean(),
     showInstallLog: z.boolean(),
     finishLinks: z.array(finishLink).max(4),
+    shortcuts: shortcutPolicy,
     executableFiles: count,
     files: count,
     bytes: count,
@@ -209,6 +222,12 @@ export const studioProjectSchema = z
     }
     if (value.hasLicense !== (value.license !== null) || (value.hasLicense && value.schemaVersion < 3)) {
       context.addIssue({ code: 'custom', path: ['hasLicense'], message: 'schema mismatch' })
+    }
+    if (
+      (value.shortcuts.applicationMenu || value.shortcuts.desktop) &&
+      (!value.hasEntrypoint || value.schemaVersion < 4)
+    ) {
+      context.addIssue({ code: 'custom', path: ['shortcuts'], message: 'schema mismatch' })
     }
     if (value.executableFiles > value.files) {
       context.addIssue({ code: 'custom', path: ['executableFiles'], message: 'count mismatch' })
@@ -231,16 +250,39 @@ export const studioProjectUpdateSchema = z
     entrypoint: portablePath.nullable(),
     showInstallLog: z.boolean(),
     finishLinks: z.array(finishLink).max(4),
+    shortcuts: shortcutPolicy,
   })
   .strict()
+  .refine(
+    (value) =>
+      !(value.shortcuts.applicationMenu || value.shortcuts.desktop) || value.entrypoint !== null,
+    { path: ['shortcuts'], message: 'entrypoint required' },
+  )
 
 export const studioBuildResultSchema = z
   .object({ outputPath: path, project: studioProjectSchema })
   .strict()
 
+export const buildCancellationResultSchema = z.object({ accepted: z.boolean() }).strict()
+
+export const recentProjectSchema = z
+  .object({
+    projectPath: path,
+    name: text,
+    publisher: text,
+    version: text,
+    targetOs,
+    targetArch,
+  })
+  .strict()
+export const recentProjectIndexSchema = z.number().int().min(0).max(5)
+export const recentProjectsSchema = z.array(recentProjectSchema).max(6)
+
 export const operationStartedSchema = z.object({ operationId: requestId }).strict()
+export const studioCloseQuerySchema = z.object({ requestId }).strict()
 export const eventEnvelopeSchema = z.object({ operationId: requestId }).passthrough()
 export const appModeSchema = z.enum(['studio', 'setup'])
+export const studioHostSchema = z.object({ os: targetOs, arch: targetArch }).strict()
 export const installRequestSchema = z
   .object({
     allowUnsigned: z.boolean(),
@@ -294,16 +336,17 @@ export const setupEventSchema = z.discriminatedUnion('kind', [
       action: installAction,
       installedFiles: count,
       installedBytes: count,
-      review: installerReviewSchema.optional(),
+      review: installerReviewSchema.nullable(),
     })
     .strict()
     .refine(
       (value) =>
-        value.review === undefined ||
+        value.review === null ||
+        value.review.package.scope === 'system' ||
         (value.review.action === 'repair' &&
           value.review.installedVersion !== null &&
           value.review.canUninstall),
-      { path: ['review'], message: 'complete event contains stale review' },
+      { path: ['review'], message: 'complete event contains stale user review' },
     ),
   z
     .object({ kind: z.literal('uninstallPhase'), operationId: requestId, phase: uninstallPhase })
@@ -324,12 +367,21 @@ export const setupEventSchema = z.discriminatedUnion('kind', [
       removedFiles: count,
       missingFiles: count,
       preservedModifiedFiles: count,
+      review: installerReviewSchema.nullable(),
     })
     .strict()
     .refine(
       (value) =>
         value.removedFiles + value.missingFiles + value.preservedModifiedFiles <=
         Number.MAX_SAFE_INTEGER,
+    )
+    .refine(
+      (value) =>
+        value.review === null ||
+        value.review.package.scope !== 'system' ||
+        value.review.action === 'install' ||
+        value.review.action === 'recover',
+      { path: ['review'], message: 'uninstall event contains stale system review' },
     ),
   z
     .object({

@@ -40,7 +40,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-const PROTOCOL_VERSION: u32 = 3;
+const PROTOCOL_VERSION: u32 = luxury_spec::JSONL_PROTOCOL_VERSION;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 32_768;
 const MAX_MESSAGE_BYTES: usize = 1024;
@@ -583,6 +583,7 @@ fn update_project(
             entrypoint: params.install.entrypoint,
             show_install_log: params.install.show_install_log,
             finish_links: params.install.finish_links,
+            shortcuts: params.install.shortcuts.into(),
         },
         executable: params.executable,
     };
@@ -596,13 +597,23 @@ fn import_payload(
     cancel: &AtomicBool,
 ) -> Result<ProjectResult, WireError> {
     let project_path = absolute_path(params.project_path, "projectPath")?;
+    if params.replace && params.source_paths.len() != 1 {
+        return Err(WireError::new(
+            "invalid_params",
+            "payload replacement requires exactly one source directory",
+        ));
+    }
     let source_paths = params
         .source_paths
         .into_iter()
         .map(|path| absolute_path(path, "sourcePaths"))
         .collect::<Result<Vec<_>, _>>()?;
-    let manifest = luxury_compiler::import_payload_cancellable(project_path, &source_paths, cancel)
-        .map_err(|error| compiler_error(error, "project_import_failed"))?;
+    let manifest = if params.replace {
+        luxury_compiler::replace_payload_cancellable(project_path, &source_paths[0], cancel)
+    } else {
+        luxury_compiler::import_payload_cancellable(project_path, &source_paths, cancel)
+    }
+    .map_err(|error| compiler_error(error, "project_import_failed"))?;
     ProjectResult::from_manifest(&manifest, "project_import_failed")
 }
 
@@ -644,6 +655,8 @@ fn compiler_error(error: luxury_compiler::CompilerError, fallback: &'static str)
                 "rolling back payload import"
                     | "restoring starter payload"
                     | "inspecting starter payload restore path"
+                    | "rolling back replacement project payload"
+                    | "restoring previous project payload"
             ) =>
         {
             "rollback_failed"
@@ -1485,6 +1498,8 @@ struct UpdateProjectParams {
 struct ImportPayloadParams {
     project_path: String,
     source_paths: Vec<String>,
+    #[serde(default)]
+    replace: bool,
 }
 
 #[derive(Deserialize)]
@@ -1527,6 +1542,41 @@ struct UpdateInstallParams {
     show_install_log: bool,
     #[serde(default)]
     finish_links: Vec<FinishLink>,
+    #[serde(default)]
+    shortcuts: ShortcutWire,
+}
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ShortcutWire {
+    #[serde(default)]
+    application_menu: bool,
+    #[serde(default)]
+    desktop: bool,
+}
+
+impl ShortcutWire {
+    const fn is_disabled(&self) -> bool {
+        !self.application_menu && !self.desktop
+    }
+}
+
+impl From<ShortcutWire> for luxury_spec::ShortcutPolicy {
+    fn from(value: ShortcutWire) -> Self {
+        Self {
+            application_menu: value.application_menu,
+            desktop: value.desktop,
+        }
+    }
+}
+
+impl From<luxury_spec::ShortcutPolicy> for ShortcutWire {
+    fn from(value: luxury_spec::ShortcutPolicy) -> Self {
+        Self {
+            application_menu: value.application_menu,
+            desktop: value.desktop,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1891,6 +1941,7 @@ impl ProjectResult {
                 has_entrypoint: manifest.install.entrypoint.is_some(),
                 show_install_log: manifest.install.show_install_log,
                 finish_links: manifest.install.finish_links.clone(),
+                shortcuts: manifest.install.shortcuts.into(),
             },
             payload: PayloadResult {
                 files: manifest.files.len(),
@@ -2027,6 +2078,8 @@ struct InstallResultPolicy {
     show_install_log: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     finish_links: Vec<FinishLink>,
+    #[serde(skip_serializing_if = "ShortcutWire::is_disabled")]
+    shortcuts: ShortcutWire,
 }
 
 #[derive(Serialize)]
@@ -2602,6 +2655,41 @@ mod tests {
             b"application"
         );
 
+        let replacement = temp.path().join("replacement");
+        fs::create_dir(&replacement).unwrap();
+        fs::write(replacement.join("app.bin"), b"replacement").unwrap();
+        fs::write(replacement.join("next.bin"), b"next").unwrap();
+        let replaced = stdio_request(
+            "importPayload",
+            json!({
+                "projectPath": project_path,
+                "sourcePaths": [replacement.to_str().unwrap()],
+                "replace": true
+            }),
+        );
+        assert_eq!(replaced["type"], "result");
+        assert_eq!(replaced["result"]["payload"]["files"], 2);
+        assert!(!replaced.to_string().contains(replacement.to_str().unwrap()));
+        assert_eq!(
+            fs::read(project.join("payload/app.bin")).unwrap(),
+            b"replacement"
+        );
+        assert_eq!(fs::read(project.join("payload/next.bin")).unwrap(), b"next");
+
+        let invalid_replacement = stdio_request(
+            "importPayload",
+            json!({
+                "projectPath": project_path,
+                "sourcePaths": [replacement.to_str().unwrap(), source_path],
+                "replace": true
+            }),
+        );
+        assert_eq!(invalid_replacement["error"]["code"], "invalid_params");
+        assert_eq!(
+            fs::read(project.join("payload/app.bin")).unwrap(),
+            b"replacement"
+        );
+
         let relative = stdio_request(
             "importPayload",
             json!({"projectPath": project_path, "sourcePaths": ["relative.bin"]}),
@@ -2633,6 +2721,60 @@ mod tests {
         assert_eq!(
             validated["result"]["payload"]["installLog"],
             json!({"files": ["hello.txt"], "omittedFiles": 0})
+        );
+    }
+
+    #[test]
+    fn project_wire_round_trips_bounded_shortcut_intent() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        init_project(&project).unwrap();
+        let entrypoint = match Target::host().os {
+            OperatingSystem::Windows => "app.exe",
+            OperatingSystem::Linux | OperatingSystem::Macos => "app",
+        };
+        fs::write(project.join("payload").join(entrypoint), b"app").unwrap();
+        let config = project.join("luxury.toml");
+        let executable_list = if matches!(Target::host().os, OperatingSystem::Windows) {
+            String::from("executable = []")
+        } else {
+            format!("executable = [\"{entrypoint}\"]")
+        };
+        let source = fs::read_to_string(&config)
+            .unwrap()
+            .replacen(
+                "format_version = 1",
+                &format!(
+                    "format_version = 1\nschema_version = {}",
+                    luxury_spec::SHORTCUT_SCHEMA_VERSION
+                ),
+                1,
+            )
+            .replacen(
+                "directory = \"Luxury Demo\"",
+                &format!(
+                    "directory = \"Luxury Demo\"\nentrypoint = \"{entrypoint}\"\n\n[install.shortcuts]\napplication_menu = true\ndesktop = true"
+                ),
+                1,
+            )
+            .replacen(
+                "executable = []",
+                &executable_list,
+                1,
+            );
+        fs::write(config, source).unwrap();
+
+        let validated = stdio_request(
+            "validateProject",
+            json!({"projectPath": project.to_str().unwrap()}),
+        );
+        assert_eq!(
+            validated["result"]["schemaVersion"],
+            luxury_spec::SHORTCUT_SCHEMA_VERSION
+        );
+        assert_eq!(
+            validated["result"]["install"]["shortcuts"],
+            json!({"applicationMenu": true, "desktop": true})
         );
     }
 

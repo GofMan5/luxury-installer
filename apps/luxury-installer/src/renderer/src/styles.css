@@ -338,6 +338,17 @@ code:focus-visible {
   white-space: nowrap;
 }
 
+.package-hero__identity small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .package-hero__facts {
   display: grid;
   gap: 4px;
@@ -410,6 +421,25 @@ code:focus-visible {
 
 .destination--fixed:hover {
   background: transparent;
+}
+
+.integration-summary {
+  display: grid;
+  gap: 5px;
+  min-height: 62px;
+  padding: 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.integration-summary strong {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.integration-summary small {
+  color: var(--faint);
+  font-size: 10px;
 }
 
 .destination__icon {
@@ -1249,6 +1279,87 @@ code:focus-visible {
   margin-top: 27px;
 }
 
+.studio-recent {
+  width: 100%;
+  margin-top: 34px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+
+.studio-recent h2 {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.studio-recent__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+}
+
+.studio-recent__list > button {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 0 10px;
+  align-items: start;
+  padding: 12px 10px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+
+.studio-recent__list > button:nth-child(even) {
+  border-right: 0;
+}
+
+.studio-recent__list > button:hover,
+.studio-recent__list > button:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.studio-recent__list > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.studio-recent__list strong,
+.studio-recent__list small,
+.studio-recent__list code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-recent__list strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.studio-recent__list small,
+.studio-recent__list code {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.studio-recent__list code {
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+.studio-recent__list > button > small {
+  grid-column: 2;
+  margin-top: 6px;
+}
+
 .studio-error-message {
   padding: 13px 15px;
   border: 1px solid rgb(255 107 107 / 32%);
@@ -1388,8 +1499,24 @@ code:focus-visible {
   color: var(--accent-strong);
 }
 
+.studio-build-progress > div {
+  display: grid;
+  gap: 3px;
+}
+
+.studio-build-progress small {
+  color: var(--danger);
+}
+
+.studio-build-progress__elapsed {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 .studio-build-result {
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 14px;
   padding: 15px 17px;
   border-color: rgb(16 163 127 / 42%);
@@ -1408,6 +1535,16 @@ code:focus-visible {
   color: var(--text);
   font-size: 13px;
   font-weight: 650;
+}
+
+.studio-build-result .secondary-button {
+  align-self: center;
+  min-height: 34px;
+}
+
+.studio-build-result small {
+  color: #edacb0;
+  font-size: 10px;
 }
 
 .studio-editor {
@@ -1502,12 +1639,17 @@ code:focus-visible {
 
 .studio-field small,
 .studio-fieldset-heading p,
-.studio-empty-copy {
+.studio-empty-copy,
+.studio-field-hint {
   margin: 0;
   color: var(--faint);
   font-size: 10px;
   font-weight: 400;
   line-height: 1.45;
+}
+
+.studio-field-hint {
+  margin: 0;
 }
 
 .studio-toggles {
@@ -1611,6 +1753,8 @@ code:focus-visible {
 .studio-payload-summary > .studio-payload-actions {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 7px;
 }
 
@@ -1815,13 +1959,15 @@ code:focus-visible {
 @media (max-width: 560px) {
   .studio-project__header > .studio-project__header-actions,
   .studio-fieldset-heading,
+  .studio-build-result,
   .studio-payload-summary {
     display: grid;
     grid-auto-flow: row;
   }
 
   .studio-project__header-actions .primary-button,
-  .studio-project__header-actions .secondary-button {
+  .studio-project__header-actions .secondary-button,
+  .studio-build-result .secondary-button {
     width: 100%;
   }
 
@@ -1843,6 +1989,7 @@ code:focus-visible {
 
   .studio-payload-summary > .studio-payload-actions {
     display: flex;
+    justify-content: flex-start;
   }
 
   .result-complete__summary {

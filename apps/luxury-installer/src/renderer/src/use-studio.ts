@@ -1,6 +1,13 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-import type { LuxuryBridge, StudioBuildResult, StudioProject, StudioProjectUpdate } from './types'
+import type {
+  LuxuryBridge,
+  NativeTarget,
+  RecentProject,
+  StudioBuildResult,
+  StudioProject,
+  StudioProjectUpdate,
+} from './types'
 
 export type StudioView =
   | { kind: 'empty' }
@@ -10,28 +17,73 @@ export type StudioView =
   | { kind: 'saving'; project: StudioProject }
   | { kind: 'importing'; project: StudioProject }
   | { kind: 'choosingEntrypoint'; project: StudioProject }
-  | { kind: 'building'; project: StudioProject }
+  | {
+      kind: 'building'
+      project: StudioProject
+      cancellationRequested: boolean
+      cancellationError: string | null
+    }
   | { kind: 'built'; result: StudioBuildResult }
   | { kind: 'error'; message: string; project: StudioProject | null }
 
 export interface StudioController {
   view: StudioView
+  hostTarget: NativeTarget | null
+  hostTargetError: boolean
+  recentProjects: RecentProject[]
   folderPending: boolean
   createProject(): Promise<void>
   openProject(): Promise<void>
+  openRecentProject(index: number): Promise<void>
   reloadProject(): Promise<void>
   updateProject(input: StudioProjectUpdate): Promise<void>
-  importProject(kind: 'files' | 'directory'): Promise<void>
+  importProject(kind: 'files' | 'directory' | 'replace'): Promise<void>
   chooseProjectEntrypoint(): Promise<string | null>
   revealProject(): Promise<void>
-  buildProject(): Promise<void>
+  buildProject(input?: StudioProjectUpdate): Promise<void>
+  cancelProjectBuild(): Promise<void>
   dismissError(): void
 }
 
 export function useStudio(bridge: LuxuryBridge): StudioController {
   const [view, setView] = useState<StudioView>({ kind: 'empty' })
+  const [hostTarget, setHostTarget] = useState<NativeTarget | null>(null)
+  const [hostTargetError, setHostTargetError] = useState(false)
   const [folderPending, setFolderPending] = useState(false)
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([])
   const busy = useRef(false)
+  const recentRequest = useRef(0)
+
+  async function refreshRecentProjects() {
+    const request = ++recentRequest.current
+    try {
+      const projects = await bridge.getRecentProjects()
+      if (request === recentRequest.current) setRecentProjects(projects)
+    } catch {
+      if (request === recentRequest.current) setRecentProjects([])
+    }
+  }
+
+  useEffect(() => {
+    void refreshRecentProjects()
+  }, [bridge])
+
+  useEffect(() => {
+    let active = true
+    setHostTarget(null)
+    setHostTargetError(false)
+    void bridge
+      .getStudioHost()
+      .then((target) => {
+        if (active) setHostTarget(target)
+      })
+      .catch(() => {
+        if (active) setHostTargetError(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [bridge])
 
   async function loadProject(action: 'create' | 'open') {
     if (busy.current) return
@@ -43,8 +95,26 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
         ? bridge.createProject()
         : bridge.openProject())
       setView(project ? { kind: 'ready', project } : previous)
+      if (project) void refreshRecentProjects()
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project: projectFrom(previous) })
+    } finally {
+      busy.current = false
+    }
+  }
+
+  async function openRecentProject(index: number) {
+    if (busy.current) return
+    const previous = view
+    busy.current = true
+    setView({ kind: 'loading', action: 'open' })
+    try {
+      const project = await bridge.openRecentProject(index)
+      setView({ kind: 'ready', project })
+      void refreshRecentProjects()
+    } catch (error) {
+      setView({ kind: 'error', message: errorMessage(error), project: projectFrom(previous) })
+      void refreshRecentProjects()
     } finally {
       busy.current = false
     }
@@ -58,6 +128,7 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     setView({ kind: 'refreshing', project })
     try {
       setView({ kind: 'ready', project: await bridge.reloadProject() })
+      void refreshRecentProjects()
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project })
     } finally {
@@ -89,6 +160,7 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     setView({ kind: 'saving', project })
     try {
       setView({ kind: 'ready', project: await bridge.updateProject(input) })
+      void refreshRecentProjects()
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project })
     } finally {
@@ -96,24 +168,73 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     }
   }
 
-  async function buildProject() {
+  async function buildProject(input?: StudioProjectUpdate) {
     if (busy.current) return
     const project = projectFrom(view)
     if (!project || project.formatVersion !== 1) return
     const previous = view
+    let currentProject = project
+    let buildStarted = false
     busy.current = true
-    setView({ kind: 'building', project })
     try {
+      if (input) {
+        setView({ kind: 'saving', project })
+        currentProject = await bridge.updateProject(input)
+        void refreshRecentProjects()
+      }
+      setView({
+        kind: 'building',
+        project: currentProject,
+        cancellationRequested: false,
+        cancellationError: null,
+      })
+      buildStarted = true
       const result = await bridge.buildProject()
-      setView(result ? { kind: 'built', result } : previous)
+      setView(
+        result
+          ? { kind: 'built', result }
+          : input
+            ? { kind: 'ready', project: currentProject }
+            : previous,
+      )
+      if (result && !input) void refreshRecentProjects()
     } catch (error) {
-      setView({ kind: 'error', message: errorMessage(error), project })
+      setView(
+        buildStarted && errorCode(error) === 'project_build_cancelled'
+          ? { kind: 'ready', project: currentProject }
+          : { kind: 'error', message: errorMessage(error), project: currentProject },
+      )
     } finally {
       busy.current = false
     }
   }
 
-  async function importProject(kind: 'files' | 'directory') {
+  async function cancelProjectBuild() {
+    if (view.kind !== 'building' || view.cancellationRequested) return
+    setView({ ...view, cancellationRequested: true, cancellationError: null })
+    try {
+      const result = await bridge.cancelProjectBuild()
+      if (!result.accepted) {
+        setView((current) =>
+          current.kind === 'building'
+            ? { ...current, cancellationRequested: false }
+            : current,
+        )
+      }
+    } catch (error) {
+      setView((current) =>
+        current.kind === 'building'
+          ? {
+              ...current,
+              cancellationRequested: false,
+              cancellationError: errorMessage(error),
+            }
+          : current,
+      )
+    }
+  }
+
+  async function importProject(kind: 'files' | 'directory' | 'replace') {
     if (busy.current) return
     const project = projectFrom(view)
     if (!project || project.formatVersion !== 1) return
@@ -122,7 +243,9 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     try {
       const imported = await (kind === 'files'
         ? bridge.importProjectFiles()
-        : bridge.importProjectDirectory())
+        : kind === 'directory'
+          ? bridge.importProjectDirectory()
+          : bridge.replaceProjectPayload())
       setView({ kind: 'ready', project: imported ?? project })
     } catch (error) {
       setView({ kind: 'error', message: errorMessage(error), project })
@@ -159,15 +282,20 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
 
   return {
     view,
+    hostTarget,
+    hostTargetError,
+    recentProjects,
     folderPending,
     createProject: () => loadProject('create'),
     openProject: () => loadProject('open'),
+    openRecentProject,
     reloadProject,
     updateProject,
     importProject,
     chooseProjectEntrypoint,
     revealProject,
     buildProject,
+    cancelProjectBuild,
     dismissError,
   }
 }
@@ -192,4 +320,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim()
     ? error.message
     : 'Неизвестная ошибка Studio.'
+}
+
+function errorCode(error: unknown): string | null {
+  if (!(error instanceof Error) || !('code' in error)) return null
+  const code = (error as Error & { code?: unknown }).code
+  return typeof code === 'string' ? code : null
 }

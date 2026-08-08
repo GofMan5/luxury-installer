@@ -1,4 +1,4 @@
 interface:
   display_name: "Luxury Installer CLI"
-  short_description: "Build and automate Luxury Installer packages"
-  default_prompt: "Use $luxury-installer-cli to build and verify this installer project with the current CLI contract."
+  short_description: "Build native Luxury Installer outputs safely"
+  default_prompt: "Use $luxury-installer-cli to build and verify this native installer with the current CLI and JSONL contract."

@@ -184,12 +184,16 @@ fn missing_receipt_is_an_idempotent_noop() {
 }
 
 #[test]
-fn receipt_v4_binds_entrypoint_provenance_and_reads_v1_through_v3() {
+fn receipt_v5_binds_shortcuts_and_reads_v1_through_v4() {
     let current = receipt("dev.luxury.demo");
-    assert_eq!(current.format_version(), 4);
+    assert_eq!(
+        current.format_version(),
+        luxury_engine::uninstall::RECEIPT_FORMAT_VERSION
+    );
     assert_eq!(current.package_identity(), Some(PackageIdentity::Unsigned));
     assert_eq!(current.payload_signer(), Some(PackageIdentity::Unsigned));
     assert_eq!(current.entrypoint(), None);
+    assert_eq!(current.shortcuts(), luxury_spec::ShortcutPolicy::default());
     let current_json = serde_json::to_value(&current).unwrap();
     assert_eq!(
         current_json["authorized_publisher"],
@@ -206,6 +210,30 @@ fn receipt_v4_binds_entrypoint_provenance_and_reads_v1_through_v3() {
     let v3: OwnershipReceipt = serde_json::from_value(v3_json.clone()).unwrap();
     v3.validate().unwrap();
     assert_eq!(v3.entrypoint(), None);
+
+    let mut v4_json = current_json.clone();
+    v4_json["format_version"] = serde_json::json!(4);
+    let v4: OwnershipReceipt = serde_json::from_value(v4_json).unwrap();
+    v4.validate().unwrap();
+    assert_eq!(v4.shortcuts(), luxury_spec::ShortcutPolicy::default());
+
+    let mut legacy_shortcuts_json = current_json.clone();
+    legacy_shortcuts_json["format_version"] = serde_json::json!(4);
+    legacy_shortcuts_json["shortcuts"] = serde_json::json!({"application_menu": true});
+    let legacy_shortcuts: OwnershipReceipt = serde_json::from_value(legacy_shortcuts_json).unwrap();
+    assert_eq!(
+        legacy_shortcuts.validate(),
+        Err(ReceiptError::LegacyShortcuts)
+    );
+
+    let mut shortcuts_without_entrypoint_json = current_json.clone();
+    shortcuts_without_entrypoint_json["shortcuts"] = serde_json::json!({"desktop": true});
+    let shortcuts_without_entrypoint: OwnershipReceipt =
+        serde_json::from_value(shortcuts_without_entrypoint_json).unwrap();
+    assert_eq!(
+        shortcuts_without_entrypoint.validate(),
+        Err(ReceiptError::ShortcutsWithoutEntrypoint)
+    );
 
     let mut legacy_json = current_json.clone();
     legacy_json["format_version"] = serde_json::json!(1);
@@ -265,13 +293,13 @@ fn receipt_v4_binds_entrypoint_provenance_and_reads_v1_through_v3() {
     );
 
     let mut unsupported = current_json.clone();
-    unsupported["format_version"] = serde_json::json!(5);
+    unsupported["format_version"] = serde_json::json!(6);
     let unsupported: OwnershipReceipt = serde_json::from_value(unsupported).unwrap();
     assert_eq!(
         unsupported.validate(),
         Err(ReceiptError::UnsupportedFormat {
-            found: 5,
-            supported: 4,
+            found: 6,
+            supported: luxury_engine::uninstall::RECEIPT_FORMAT_VERSION,
         })
     );
 

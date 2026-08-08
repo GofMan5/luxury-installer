@@ -83,6 +83,7 @@ export function ReviewView({
           <span>
             {summary.publisher} · {summary.version}
           </span>
+          {summary.description ? <small title={summary.description}>{summary.description}</small> : null}
         </div>
         <div className="package-hero__facts">
           <span>{formatBytes(summary.bytes)}</span>
@@ -124,6 +125,20 @@ export function ReviewView({
             </span>
           </div>
         )}
+
+        {summary.shortcuts.applicationMenu || summary.shortcuts.desktop ? (
+          <div className="integration-summary">
+            <span className="field-label">Ярлыки из пакета</span>
+            <strong>
+              {summary.shortcuts.applicationMenu && summary.shortcuts.desktop
+                ? 'Меню приложений и рабочий стол'
+                : summary.shortcuts.applicationMenu
+                  ? 'Меню приложений'
+                  : 'Рабочий стол'}
+            </strong>
+            <small>Запрошены для проверенной точки запуска; поддержка платформы проверяется до установки.</small>
+          </div>
+        ) : null}
 
         {summary.publisherRotation ? (
           <div className="publisher-rotation">

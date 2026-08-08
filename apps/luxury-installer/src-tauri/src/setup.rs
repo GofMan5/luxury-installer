@@ -22,12 +22,37 @@ use crate::{
         BackendEvent, DefaultsResult, FinishLink, InspectResult, InstallLog, InstallResult,
         InstallResultAction, InstallScope, LaunchResult, MAX_SAFE_INTEGER, OperationKind,
         OperationMessage, PackageTrust, PrepareInstallResult, PreparedAction, PublisherRotation,
-        TargetArch, TargetOs, UninstallResult, strict_value,
+        ShortcutPolicy, Target, TargetArch, TargetOs, UninstallResult, strict_value,
     },
 };
 
-const BUILD_BOUND_PACKAGE_FINGERPRINT: Option<&str> =
-    option_env!("LUXURY_BOUND_PACKAGE_FINGERPRINT");
+#[repr(C)]
+struct BuildPackageBinding {
+    prefix: [u8; 16],
+    fingerprint: [u8; 64],
+    suffix: [u8; 16],
+}
+
+const fn build_fingerprint_bytes(value: Option<&str>) -> [u8; 64] {
+    let mut output = [0_u8; 64];
+    let Some(value) = value else {
+        return output;
+    };
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() && index < output.len() {
+        output[index] = bytes[index];
+        index += 1;
+    }
+    output
+}
+
+#[used]
+static BUILD_PACKAGE_BINDING: BuildPackageBinding = BuildPackageBinding {
+    prefix: luxury_spec::SETUP_BINDING_PREFIX,
+    fingerprint: build_fingerprint_bytes(option_env!("LUXURY_BOUND_PACKAGE_FINGERPRINT")),
+    suffix: luxury_spec::SETUP_BINDING_SUFFIX,
+};
 
 const OPERATION_EVENT: &str = "luxury://operation-event";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2 * 60);
@@ -80,6 +105,11 @@ enum SetupOperation {
     System(crate::privilege::SystemOperation),
 }
 
+struct SetupOperationMessage {
+    message: OperationMessage,
+    system_preparation: Option<PrepareInstallResult>,
+}
+
 impl SetupOperation {
     fn operation_id(&self) -> &str {
         match self {
@@ -95,12 +125,34 @@ impl SetupOperation {
         }
     }
 
-    fn recv(&self) -> Result<OperationMessage, crate::backend::BackendError> {
+    fn recv(&self) -> Result<SetupOperationMessage, crate::backend::BackendError> {
         match self {
-            Self::User(operation) => operation.recv(),
-            Self::System(operation) => operation.recv(),
+            Self::User(operation) => operation.recv().map(|message| SetupOperationMessage {
+                message,
+                system_preparation: None,
+            }),
+            Self::System(operation) => operation.recv().and_then(system_operation_message),
         }
     }
+}
+
+fn system_operation_message(
+    message: OperationMessage,
+) -> Result<SetupOperationMessage, crate::backend::BackendError> {
+    let OperationMessage::Complete(Ok(Value::Object(mut result))) = message else {
+        return Ok(SetupOperationMessage {
+            message,
+            system_preparation: None,
+        });
+    };
+    let system_preparation = result
+        .remove("systemPreparation")
+        .and_then(|preparation| serde_json::from_value(preparation).ok())
+        .flatten();
+    Ok(SetupOperationMessage {
+        message: OperationMessage::Complete(Ok(Value::Object(result))),
+        system_preparation,
+    })
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -109,6 +161,7 @@ struct PackageSummary {
     name: String,
     publisher: String,
     version: String,
+    description: Option<String>,
     license: Option<String>,
     target_os: TargetOs,
     target_arch: TargetArch,
@@ -117,6 +170,7 @@ struct PackageSummary {
     has_entrypoint: bool,
     install_log: Option<InstallLog>,
     finish_links: Vec<FinishLink>,
+    shortcuts: ShortcutPolicy,
     files: u64,
     bytes: u64,
     trust: PackageTrust,
@@ -159,6 +213,59 @@ pub(crate) struct StartInstallInput {
     allow_publisher_migration: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UnattendedCommand {
+    Help,
+    InfoJson,
+    Install {
+        allow_unsigned: bool,
+        accept_license: bool,
+        allow_publisher_migration: bool,
+    },
+    Uninstall,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BoundPackageInfo {
+    schema_version: u8,
+    package: BoundPackageInfoPackage,
+    target: Target,
+    install: BoundPackageInfoInstall,
+    payload: BoundPackageInfoPayload,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BoundPackageInfoPackage {
+    id: String,
+    fingerprint: String,
+    name: String,
+    publisher: String,
+    version: String,
+    description: Option<String>,
+    trust: PackageTrust,
+    requires_license: bool,
+    publisher_rotation: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BoundPackageInfoInstall {
+    scope: InstallScope,
+    directory: String,
+    has_entrypoint: bool,
+    show_install_log: bool,
+    finish_links: usize,
+    shortcuts: ShortcutPolicy,
+}
+
+#[derive(Debug, Serialize)]
+struct BoundPackageInfoPayload {
+    files: u64,
+    bytes: u64,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OperationStarted {
@@ -192,7 +299,6 @@ enum SetupEvent {
         action: InstallResultAction,
         installed_files: u64,
         installed_bytes: u64,
-        #[serde(skip_serializing_if = "Option::is_none")]
         review: Option<Box<InstallerReview>>,
     },
     UninstallPhase {
@@ -209,6 +315,7 @@ enum SetupEvent {
         removed_files: u64,
         missing_files: u64,
         preserved_modified_files: u64,
+        review: Option<Box<InstallerReview>>,
     },
     Error {
         operation_id: String,
@@ -498,14 +605,42 @@ pub(crate) async fn launch_installed(state: State<'_, AppState>) -> Result<(), P
 pub(crate) fn reveal_installed(state: State<'_, AppState>) -> Result<(), PublicError> {
     state.require_mode(AppMode::Setup)?;
     let context = setup_context(state.inner())?;
-    let path = context
-        .last_install_path
-        .lock()
-        .map_err(|_| PublicError::new("internal_error", "Путь приложения недоступен."))?
-        .clone()
-        .ok_or_else(|| PublicError::new("nothing_to_reveal", "Папка приложения недоступна."))?;
+    let _starting = acquire_idle(state.inner(), &context)?;
+    let path = installed_reveal_path(&context)?;
     tauri_plugin_opener::open_path(path, None::<&str>)
         .map_err(|_| PublicError::new("reveal_failed", "Не удалось открыть папку приложения."))
+}
+
+fn installed_reveal_path(context: &SetupContext) -> Result<PathBuf, PublicError> {
+    if !context.install_completed.load(Ordering::Acquire) {
+        return Err(PublicError::new(
+            "nothing_to_reveal",
+            "Папка приложения станет доступна после установки.",
+        ));
+    }
+    if context.package.summary.scope == InstallScope::User {
+        return context
+            .last_install_path
+            .lock()
+            .map_err(|_| PublicError::new("internal_error", "Путь приложения недоступен."))?
+            .clone()
+            .ok_or_else(|| PublicError::new("nothing_to_reveal", "Папка приложения недоступна."));
+    }
+
+    let (install_base, _) = luxury_system_roots::get().map_err(|_| {
+        PublicError::new(
+            "nothing_to_reveal",
+            "Системная папка приложения недоступна.",
+        )
+    })?;
+    let path = install_base.join(&context.package.summary.install_directory);
+    if path.parent() != Some(install_base.as_path()) {
+        return Err(PublicError::new(
+            "nothing_to_reveal",
+            "Системная папка приложения недоступна.",
+        ));
+    }
+    Ok(path)
 }
 
 #[tauri::command]
@@ -554,7 +689,23 @@ fn bootstrap_review(state: &AppState) -> Result<InstallerReview, PublicError> {
         .clone();
     if let Some(context) = existing {
         let _starting = acquire_idle(state, &context)?;
-        return refresh_selection(state, &context, selection(&context)?);
+        let previous = context
+            .selection
+            .lock()
+            .map_err(|_| PublicError::new("internal_error", "Состояние Setup недоступно."))?
+            .clone();
+        let previous = match previous {
+            Some(previous) => previous,
+            None => {
+                let defaults = state.defaults()?;
+                SetupSelection {
+                    install_base: absolute_path(&defaults.install_base)?,
+                    state_root: absolute_path(&defaults.state_root)?,
+                    preparation: PrepareInstallResult::RecoveryRequired,
+                }
+            }
+        };
+        return refresh_selection(state, &context, previous);
     }
     review(&setup_context(state)?)
 }
@@ -603,6 +754,48 @@ fn load_bound_package(state: &AppState) -> Result<(BoundPackage, DefaultsResult)
     ))
 }
 
+pub(crate) fn bound_package_info(state: &AppState) -> Result<BoundPackageInfo, PublicError> {
+    state.require_mode(AppMode::Setup)?;
+    let (package, defaults) = load_bound_package(state)?;
+    Ok(package_info(package, defaults.target))
+}
+
+fn package_info(package: BoundPackage, target: Target) -> BoundPackageInfo {
+    let BoundPackage {
+        path: _,
+        fingerprint,
+        id,
+        summary,
+    } = package;
+    BoundPackageInfo {
+        schema_version: 2,
+        package: BoundPackageInfoPackage {
+            id,
+            fingerprint,
+            name: summary.name,
+            publisher: summary.publisher,
+            version: summary.version,
+            description: summary.description,
+            requires_license: summary.license.is_some(),
+            trust: summary.trust,
+            publisher_rotation: summary.publisher_rotation.is_some(),
+        },
+        target,
+        install: BoundPackageInfoInstall {
+            scope: summary.scope,
+            directory: summary.install_directory,
+            has_entrypoint: summary.has_entrypoint,
+            show_install_log: summary.install_log.is_some(),
+            finish_links: summary.finish_links.len(),
+            shortcuts: summary.shortcuts,
+        },
+        payload: BoundPackageInfoPayload {
+            files: summary.files,
+            bytes: summary.bytes,
+        },
+    }
+}
+
 fn start_install_sync(
     input: StartInstallInput,
     app: AppHandle,
@@ -611,6 +804,40 @@ fn start_install_sync(
     let context = setup_context(&state)?;
     let starting = acquire_idle(&state, &context)?;
     let selection = selection(&context)?;
+    let operation = create_install_operation(&input, &state, &context, &selection)?;
+    let operation_id = operation.operation_id().to_owned();
+    let system_cancel = operation.system_cancellation();
+    *context
+        .active
+        .lock()
+        .map_err(|_| PublicError::new("internal_error", "Состояние операции недоступно."))? =
+        Some(ActiveOperation {
+            operation_id: operation_id.clone(),
+            kind: ActiveKind::Install,
+            system_cancel: system_cancel.clone(),
+            completion: Arc::new((Mutex::new(false), Condvar::new())),
+        });
+    drop(starting);
+    if let Err(error) =
+        spawn_install_completion(app, state.clone(), context.clone(), selection, operation)
+    {
+        clear_active(&context, &operation_id);
+        if let Some(cancel) = system_cancel {
+            cancel.store(true, Ordering::Release);
+        } else if let Ok(backend) = state.backend() {
+            let _ = backend.cancel(&operation_id);
+        }
+        return Err(error);
+    }
+    Ok(OperationStarted { operation_id })
+}
+
+fn create_install_operation(
+    input: &StartInstallInput,
+    state: &AppState,
+    context: &SetupContext,
+    selection: &SetupSelection,
+) -> Result<SetupOperation, PublicError> {
     let (space_available, migration_required) = match &selection.preparation {
         PrepareInstallResult::Ready {
             publisher_migration_required,
@@ -648,7 +875,7 @@ fn start_install_sync(
         input.accept_license,
     )?;
     context.install_completed.store(false, Ordering::Release);
-    let operation = match context.package.summary.scope {
+    Ok(match context.package.summary.scope {
         InstallScope::User => SetupOperation::User(
             state
                 .backend()
@@ -691,32 +918,7 @@ fn start_install_sync(
                 })?,
             )
         }
-    };
-    let operation_id = operation.operation_id().to_owned();
-    let system_cancel = operation.system_cancellation();
-    *context
-        .active
-        .lock()
-        .map_err(|_| PublicError::new("internal_error", "Состояние операции недоступно."))? =
-        Some(ActiveOperation {
-            operation_id: operation_id.clone(),
-            kind: ActiveKind::Install,
-            system_cancel: system_cancel.clone(),
-            completion: Arc::new((Mutex::new(false), Condvar::new())),
-        });
-    drop(starting);
-    if let Err(error) =
-        spawn_install_completion(app, state.clone(), context.clone(), selection, operation)
-    {
-        clear_active(&context, &operation_id);
-        if let Some(cancel) = system_cancel {
-            cancel.store(true, Ordering::Release);
-        } else if let Ok(backend) = state.backend() {
-            let _ = backend.cancel(&operation_id);
-        }
-        return Err(error);
-    }
-    Ok(OperationStarted { operation_id })
+    })
 }
 
 fn require_license_consent(license: Option<&str>, accepted: bool) -> Result<(), PublicError> {
@@ -748,7 +950,40 @@ fn start_uninstall_sync(app: AppHandle, state: AppState) -> Result<OperationStar
             "Приложение не установлено.",
         ));
     }
-    let operation = match context.package.summary.scope {
+    let operation = create_uninstall_operation(&state, &context, &selection)?;
+    let operation_id = operation.operation_id().to_owned();
+    let system_cancel = operation.system_cancellation();
+    *context
+        .active
+        .lock()
+        .map_err(|_| PublicError::new("internal_error", "Состояние операции недоступно."))? =
+        Some(ActiveOperation {
+            operation_id: operation_id.clone(),
+            kind: ActiveKind::Uninstall,
+            system_cancel: system_cancel.clone(),
+            completion: Arc::new((Mutex::new(false), Condvar::new())),
+        });
+    drop(starting);
+    if let Err(error) =
+        spawn_uninstall_completion(app, state.clone(), context.clone(), selection, operation)
+    {
+        clear_active(&context, &operation_id);
+        if let Some(cancel) = system_cancel {
+            cancel.store(true, Ordering::Release);
+        } else if let Ok(backend) = state.backend() {
+            let _ = backend.cancel(&operation_id);
+        }
+        return Err(error);
+    }
+    Ok(OperationStarted { operation_id })
+}
+
+fn create_uninstall_operation(
+    state: &AppState,
+    context: &SetupContext,
+    selection: &SetupSelection,
+) -> Result<SetupOperation, PublicError> {
+    Ok(match context.package.summary.scope {
         InstallScope::User => SetupOperation::User(
             state
                 .backend()
@@ -783,32 +1018,95 @@ fn start_uninstall_sync(app: AppHandle, state: AppState) -> Result<OperationStar
                 })?,
             )
         }
-    };
-    let operation_id = operation.operation_id().to_owned();
-    let system_cancel = operation.system_cancellation();
-    *context
-        .active
-        .lock()
-        .map_err(|_| PublicError::new("internal_error", "Состояние операции недоступно."))? =
-        Some(ActiveOperation {
-            operation_id: operation_id.clone(),
-            kind: ActiveKind::Uninstall,
-            system_cancel: system_cancel.clone(),
-            completion: Arc::new((Mutex::new(false), Condvar::new())),
-        });
-    drop(starting);
-    if let Err(error) =
-        spawn_uninstall_completion(app, state.clone(), context.clone(), selection, operation)
-    {
-        clear_active(&context, &operation_id);
-        if let Some(cancel) = system_cancel {
-            cancel.store(true, Ordering::Release);
-        } else if let Ok(backend) = state.backend() {
-            let _ = backend.cancel(&operation_id);
-        }
-        return Err(error);
+    })
+}
+
+pub(crate) fn run_unattended(
+    state: &AppState,
+    command: UnattendedCommand,
+) -> Result<(), PublicError> {
+    state.require_mode(AppMode::Setup)?;
+    match command {
+        UnattendedCommand::Help => return Ok(()),
+        UnattendedCommand::InfoJson => return bound_package_info(state).map(drop),
+        UnattendedCommand::Install { .. } | UnattendedCommand::Uninstall => {}
     }
-    Ok(OperationStarted { operation_id })
+    let context = setup_context(state)?;
+    let starting = acquire_idle(state, &context)?;
+    let selection = selection(&context)?;
+    match command {
+        UnattendedCommand::Help | UnattendedCommand::InfoJson => Ok(()),
+        UnattendedCommand::Install {
+            allow_unsigned,
+            accept_license,
+            allow_publisher_migration,
+        } => {
+            let operation = create_install_operation(
+                &StartInstallInput {
+                    allow_unsigned,
+                    accept_license,
+                    allow_publisher_migration,
+                },
+                state,
+                &context,
+                &selection,
+            )?;
+            drop(starting);
+            wait_unattended_install(&context, &selection, operation)
+        }
+        UnattendedCommand::Uninstall => {
+            let operation = create_uninstall_operation(state, &context, &selection)?;
+            drop(starting);
+            wait_unattended_uninstall(&context, operation)
+        }
+    }
+}
+
+fn wait_unattended_install(
+    context: &SetupContext,
+    selection: &SetupSelection,
+    operation: SetupOperation,
+) -> Result<(), PublicError> {
+    loop {
+        match operation.recv().map_err(PublicError::from)?.message {
+            OperationMessage::Event(_) => {}
+            OperationMessage::Complete(result) => {
+                let value = result.map_err(PublicError::from)?;
+                let result =
+                    strict_value::<InstallResult>(value, "install result").map_err(|_| {
+                        PublicError::new(
+                            "invalid_backend_output",
+                            "Компонент установки вернул неверный результат.",
+                        )
+                    })?;
+                validate_install_result(context, selection, result)?;
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn wait_unattended_uninstall(
+    context: &SetupContext,
+    operation: SetupOperation,
+) -> Result<(), PublicError> {
+    loop {
+        match operation.recv().map_err(PublicError::from)?.message {
+            OperationMessage::Event(_) => {}
+            OperationMessage::Complete(result) => {
+                let value = result.map_err(PublicError::from)?;
+                let result =
+                    strict_value::<UninstallResult>(value, "uninstall result").map_err(|_| {
+                        PublicError::new(
+                            "invalid_backend_output",
+                            "Компонент удаления вернул неверный результат.",
+                        )
+                    })?;
+                validate_uninstall_result(context, result)?;
+                return Ok(());
+            }
+        }
+    }
 }
 
 fn spawn_install_completion(
@@ -824,9 +1122,23 @@ fn spawn_install_completion(
         .spawn(move || {
             loop {
                 match operation.recv() {
-                    Ok(OperationMessage::Event(event)) => emit_backend_event(&app, &context, event),
-                    Ok(OperationMessage::Complete(result)) => {
-                        finish_install(&app, &state, &context, &selection, &operation_id, result);
+                    Ok(SetupOperationMessage {
+                        message: OperationMessage::Event(event),
+                        ..
+                    }) => emit_backend_event(&app, &context, event),
+                    Ok(SetupOperationMessage {
+                        message: OperationMessage::Complete(result),
+                        system_preparation,
+                    }) => {
+                        finish_install(
+                            &app,
+                            &state,
+                            &context,
+                            &selection,
+                            &operation_id,
+                            result,
+                            system_preparation,
+                        );
                         return;
                     }
                     Err(error) => {
@@ -837,6 +1149,7 @@ fn spawn_install_completion(
                             &selection,
                             &operation_id,
                             Err(error),
+                            None,
                         );
                         return;
                     }
@@ -860,9 +1173,23 @@ fn spawn_uninstall_completion(
         .spawn(move || {
             loop {
                 match operation.recv() {
-                    Ok(OperationMessage::Event(event)) => emit_backend_event(&app, &context, event),
-                    Ok(OperationMessage::Complete(result)) => {
-                        finish_uninstall(&app, &state, &context, &selection, &operation_id, result);
+                    Ok(SetupOperationMessage {
+                        message: OperationMessage::Event(event),
+                        ..
+                    }) => emit_backend_event(&app, &context, event),
+                    Ok(SetupOperationMessage {
+                        message: OperationMessage::Complete(result),
+                        system_preparation,
+                    }) => {
+                        finish_uninstall(
+                            &app,
+                            &state,
+                            &context,
+                            &selection,
+                            &operation_id,
+                            result,
+                            system_preparation,
+                        );
                         return;
                     }
                     Err(error) => {
@@ -873,6 +1200,7 @@ fn spawn_uninstall_completion(
                             &selection,
                             &operation_id,
                             Err(error),
+                            None,
                         );
                         return;
                     }
@@ -890,6 +1218,7 @@ fn finish_install(
     selection: &SetupSelection,
     operation_id: &str,
     result: Result<Value, crate::backend::BackendError>,
+    system_preparation: Option<PrepareInstallResult>,
 ) {
     if !is_active(context, operation_id, ActiveKind::Install) {
         return;
@@ -913,7 +1242,12 @@ fn finish_install(
                     *last = Some(install_path);
                 }
             }
-            let review = cache_installed_selection(context, selection);
+            let review = cache_completed_selection(
+                context,
+                selection,
+                system_preparation,
+                PreparedAction::Repair,
+            );
             clear_active(context, operation_id);
             context.install_completed.store(true, Ordering::Release);
             emit(
@@ -947,19 +1281,34 @@ fn finish_install(
     }
 }
 
-fn cache_installed_selection(
+fn cache_completed_selection(
     context: &SetupContext,
     previous: &SetupSelection,
+    system_preparation: Option<PrepareInstallResult>,
+    user_action: PreparedAction,
 ) -> Option<InstallerReview> {
-    let next = SetupSelection {
-        install_base: previous.install_base.clone(),
-        state_root: previous.state_root.clone(),
-        preparation: PrepareInstallResult::Ready {
-            action: PreparedAction::Repair,
-            installed_version: Some(context.package.summary.version.clone()),
+    let preparation = match (context.package.summary.scope, system_preparation) {
+        (InstallScope::System, Some(preparation)) => preparation,
+        (InstallScope::System, None) => {
+            *context.selection.lock().ok()? = None;
+            return None;
+        }
+        (InstallScope::User, _) => PrepareInstallResult::Ready {
+            action: user_action,
+            installed_version: (user_action != PreparedAction::Install)
+                .then(|| context.package.summary.version.clone()),
             publisher_migration_required: false,
         },
     };
+    let next = SetupSelection {
+        install_base: previous.install_base.clone(),
+        state_root: previous.state_root.clone(),
+        preparation,
+    };
+    if validate_preparation(&next.preparation).is_err() {
+        *context.selection.lock().ok()? = None;
+        return None;
+    }
     *context.selection.lock().ok()? = Some(next);
     review(context).ok()
 }
@@ -971,6 +1320,7 @@ fn finish_uninstall(
     selection: &SetupSelection,
     operation_id: &str,
     result: Result<Value, crate::backend::BackendError>,
+    system_preparation: Option<PrepareInstallResult>,
 ) {
     if !is_active(context, operation_id, ActiveKind::Uninstall) {
         return;
@@ -993,14 +1343,13 @@ fn finish_uninstall(
                 *last = None;
             }
             let next = if context.package.summary.scope == InstallScope::System {
-                Some(SetupSelection {
-                    install_base: selection.install_base.clone(),
-                    state_root: selection.state_root.clone(),
-                    preparation: PrepareInstallResult::Ready {
-                        action: PreparedAction::Install,
-                        installed_version: None,
-                        publisher_migration_required: false,
-                    },
+                system_preparation.and_then(|preparation| {
+                    validate_preparation(&preparation).ok()?;
+                    Some(SetupSelection {
+                        install_base: selection.install_base.clone(),
+                        state_root: selection.state_root.clone(),
+                        preparation,
+                    })
                 })
             } else {
                 prepare_selection(
@@ -1014,6 +1363,7 @@ fn finish_uninstall(
             if let Ok(mut current) = context.selection.lock() {
                 *current = next;
             }
+            let review = review(context).ok();
             clear_active(context, operation_id);
             emit(
                 app,
@@ -1022,6 +1372,7 @@ fn finish_uninstall(
                     removed_files: removed,
                     missing_files: missing,
                     preserved_modified_files: preserved,
+                    review: review.map(Box::new),
                 },
             );
         }
@@ -1334,7 +1685,7 @@ impl BoundPackage {
         if cfg!(feature = "setup")
             && !cfg!(debug_assertions)
             && !compiled_binding_matches(
-                BUILD_BOUND_PACKAGE_FINGERPRINT,
+                build_bound_package_fingerprint(),
                 &inspected.package_fingerprint,
             )
         {
@@ -1360,9 +1711,12 @@ impl BoundPackage {
             _ => false,
         };
         if !matches!(inspected.format_version, 1..=3)
-            || !matches!(inspected.schema_version, 1..=3)
+            || !(1..=luxury_spec::MANIFEST_SCHEMA_VERSION as u8).contains(&inspected.schema_version)
             || (inspected.schema_version == 1 && inspected.install.has_entrypoint)
             || (inspected.schema_version < 3 && inspected.package.license.is_some())
+            || (inspected.install.shortcuts.application_menu || inspected.install.shortcuts.desktop)
+                && (!inspected.install.has_entrypoint
+                    || inspected.schema_version < luxury_spec::SHORTCUT_SCHEMA_VERSION as u8)
             || (inspected.format_version == 1) == signed
             || !trust_valid
             || !rotation_valid
@@ -1371,6 +1725,11 @@ impl BoundPackage {
             || !valid_text(&inspected.package.name)
             || !valid_text(&inspected.package.publisher)
             || !valid_text(&inspected.package.version)
+            || inspected
+                .package
+                .description
+                .as_deref()
+                .is_some_and(|description| !valid_text(description))
             || inspected
                 .package
                 .license
@@ -1414,6 +1773,7 @@ impl BoundPackage {
                 name: inspected.package.name,
                 publisher: inspected.package.publisher,
                 version: inspected.package.version,
+                description: inspected.package.description,
                 license: inspected.package.license,
                 target_os: inspected.target.os,
                 target_arch: inspected.target.arch,
@@ -1422,6 +1782,7 @@ impl BoundPackage {
                 has_entrypoint: inspected.install.has_entrypoint,
                 install_log: inspected.payload.install_log,
                 finish_links: inspected.install.finish_links,
+                shortcuts: inspected.install.shortcuts,
                 files: inspected.payload.files,
                 bytes: inspected.payload.bytes,
                 trust: inspected.trust,
@@ -1433,6 +1794,12 @@ impl BoundPackage {
 
 fn compiled_binding_matches(expected: Option<&str>, actual: &str) -> bool {
     expected.is_some_and(|expected| valid_hash(expected) && expected == actual)
+}
+
+fn build_bound_package_fingerprint() -> Option<&'static str> {
+    std::str::from_utf8(&BUILD_PACKAGE_BINDING.fingerprint)
+        .ok()
+        .filter(|value| valid_hash(value))
 }
 
 fn validate_preparation(preparation: &PrepareInstallResult) -> Result<(), PublicError> {
@@ -1573,17 +1940,7 @@ fn valid_install_log(show: bool, log: Option<&InstallLog>, total_files: u64) -> 
 }
 
 fn valid_install_log_path(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 512
-        && !value.starts_with('/')
-        && !value.contains(['\\', '\0', ':', '<', '>', '"', '|', '?', '*'])
-        && value.split('/').all(|component| {
-            !component.is_empty()
-                && component != "."
-                && component != ".."
-                && !component.ends_with(['.', ' '])
-                && !component.chars().any(char::is_control)
-        })
+    luxury_spec::PackagePath::parse(value).is_ok()
 }
 
 fn valid_https_url(value: &str) -> bool {
@@ -1661,6 +2018,7 @@ mod tests {
                 has_entrypoint: false,
                 show_install_log: false,
                 finish_links: Vec::new(),
+                shortcuts: crate::backend::ShortcutPolicy::default(),
             },
             payload: Payload {
                 files: 1,
@@ -1694,8 +2052,64 @@ mod tests {
     }
 
     #[test]
+    fn bound_package_info_is_one_line_and_omits_authority_and_private_content() {
+        let mut inspected = inspected();
+        inspected.schema_version = luxury_spec::SHORTCUT_SCHEMA_VERSION as u8;
+        inspected.package.description = Some("Desktop application".into());
+        inspected.package.license = Some("private license body".into());
+        inspected.install.has_entrypoint = true;
+        inspected.install.show_install_log = true;
+        inspected.install.shortcuts.application_menu = true;
+        inspected.install.finish_links = vec![FinishLink {
+            label: "Support".into(),
+            url: "https://example.com/private".into(),
+        }];
+        inspected.payload.install_log = Some(InstallLog {
+            files: vec!["hello.txt".into()],
+            omitted_files: 0,
+        });
+        let target = inspected.target.clone();
+        let package =
+            BoundPackage::from_backend("private/package.luxpkg".into(), inspected).unwrap();
+        let output = serde_json::to_string(&package_info(package, target)).unwrap();
+
+        assert!(!output.contains('\n'));
+        assert_eq!(
+            serde_json::from_str::<Value>(&output).unwrap(),
+            json!({
+                "schemaVersion": 2,
+                "package": {
+                    "id": "dev.luxury.demo",
+                    "fingerprint": "a".repeat(64),
+                    "name": "Luxury Demo",
+                    "publisher": "Luxury Software",
+                    "version": "1.0.0",
+                    "description": "Desktop application",
+                    "trust": {"kind": "unsigned"},
+                    "requiresLicense": true,
+                    "publisherRotation": false
+                },
+                "target": {"os": "windows", "arch": "x86_64"},
+                "install": {
+                    "scope": "user",
+                    "directory": "Luxury Demo",
+                    "hasEntrypoint": true,
+                    "showInstallLog": true,
+                    "finishLinks": 1,
+                    "shortcuts": {"applicationMenu": true, "desktop": false}
+                },
+                "payload": {"files": 1, "bytes": 29}
+            })
+        );
+        assert!(!output.contains("private license body"));
+        assert!(!output.contains("example.com"));
+        assert!(!output.contains("package.luxpkg"));
+    }
+
+    #[test]
     fn install_presentation_metadata_is_bounded_and_cross_checked() {
         let mut value = inspected();
+        value.package.description = Some("Human-facing application summary.".into());
         value.install.show_install_log = true;
         value.install.finish_links = vec![FinishLink {
             label: "Документация".into(),
@@ -1706,6 +2120,10 @@ mod tests {
             omitted_files: 0,
         });
         let package = BoundPackage::from_backend("payload.luxpkg".into(), value.clone()).unwrap();
+        assert_eq!(
+            package.summary.description.as_deref(),
+            Some("Human-facing application summary.")
+        );
         assert_eq!(package.summary.finish_links.len(), 1);
         assert_eq!(package.summary.install_log.unwrap().files, ["hello.txt"]);
 
@@ -1721,6 +2139,14 @@ mod tests {
             .unwrap()
             .omitted_files = 1;
         assert!(BoundPackage::from_backend("payload.luxpkg".into(), mismatched).is_err());
+
+        let mut invalid_description = value.clone();
+        invalid_description.package.description = Some("bad\ndescription".into());
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), invalid_description).is_err());
+
+        let mut unicode_description = value.clone();
+        unicode_description.package.description = Some("я".repeat(1024));
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), unicode_description).is_ok());
 
         value.payload.install_log.as_mut().unwrap().files[0] = "../escape".into();
         assert!(BoundPackage::from_backend("payload.luxpkg".into(), value).is_err());
@@ -1826,6 +2252,7 @@ mod tests {
             mode: AppMode::Setup,
             backend: Err(crate::backend::BackendError::new("unused", "unused")),
             package_path: None,
+            packager_path: None,
             studio: Arc::new(crate::studio::StudioState::default()),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(Some(context.clone()))),
@@ -1850,6 +2277,7 @@ mod tests {
             mode: AppMode::Setup,
             backend: Err(crate::backend::BackendError::new("unused", "unused")),
             package_path: None,
+            packager_path: None,
             studio: Arc::new(crate::studio::StudioState::default()),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(None)),
@@ -1880,6 +2308,7 @@ mod tests {
             mode: AppMode::Setup,
             backend: Err(crate::backend::BackendError::new("unused", "unused")),
             package_path: None,
+            packager_path: None,
             studio: Arc::new(crate::studio::StudioState::default()),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(Some(context.clone()))),
@@ -1921,6 +2350,7 @@ mod tests {
             mode: AppMode::Setup,
             backend: Err(crate::backend::BackendError::new("unused", "unused")),
             package_path: None,
+            packager_path: None,
             studio: Arc::new(crate::studio::StudioState::default()),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(Some(context.clone()))),
@@ -1960,6 +2390,20 @@ mod tests {
         let mut invalid_schema = inspected.clone();
         invalid_schema.install.has_entrypoint = true;
         assert!(BoundPackage::from_backend("payload.luxpkg".into(), invalid_schema).is_err());
+
+        let mut legacy_shortcut = inspected.clone();
+        legacy_shortcut.schema_version = 3;
+        legacy_shortcut.install.has_entrypoint = true;
+        legacy_shortcut.install.shortcuts.application_menu = true;
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), legacy_shortcut).is_err());
+
+        let mut shortcut_without_entrypoint = inspected.clone();
+        shortcut_without_entrypoint.schema_version = luxury_spec::SHORTCUT_SCHEMA_VERSION as u8;
+        shortcut_without_entrypoint.install.shortcuts.desktop = true;
+        assert!(
+            BoundPackage::from_backend("payload.luxpkg".into(), shortcut_without_entrypoint)
+                .is_err()
+        );
 
         let mut invalid_signer = inspected;
         invalid_signer.format_version = 2;
@@ -2001,7 +2445,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_install_caches_maintenance_review() {
+    fn successful_user_install_caches_maintenance_review() {
         let package = BoundPackage::from_backend("payload.luxpkg".into(), inspected()).unwrap();
         let previous = SetupSelection {
             install_base: PathBuf::from(r"C:\Programs"),
@@ -2021,10 +2465,127 @@ mod tests {
             install_completed: Arc::new(AtomicBool::new(false)),
         };
 
-        let review = cache_installed_selection(&context, &previous).unwrap();
+        let review =
+            cache_completed_selection(&context, &previous, None, PreparedAction::Repair).unwrap();
         assert!(matches!(review.action, SetupAction::Repair));
         assert_eq!(review.installed_version.as_deref(), Some("1.0.0"));
         assert!(review.can_uninstall);
+    }
+
+    #[test]
+    fn successful_system_install_uses_only_terminal_preparation() {
+        let mut inspected = inspected();
+        inspected.install.scope = InstallScope::System;
+        let previous = SetupSelection {
+            install_base: PathBuf::from(r"C:\Programs"),
+            state_root: PathBuf::from(r"C:\State"),
+            preparation: PrepareInstallResult::Ready {
+                action: PreparedAction::Install,
+                installed_version: None,
+                publisher_migration_required: false,
+            },
+        };
+        let context = SetupContext {
+            package: BoundPackage::from_backend("payload.luxpkg".into(), inspected).unwrap(),
+            selection: Arc::new(Mutex::new(Some(previous.clone()))),
+            active: Arc::new(Mutex::new(None)),
+            starting: Arc::new(AtomicBool::new(false)),
+            last_install_path: Arc::new(Mutex::new(None)),
+            install_completed: Arc::new(AtomicBool::new(false)),
+        };
+
+        let review = cache_completed_selection(
+            &context,
+            &previous,
+            Some(PrepareInstallResult::RecoveryRequired),
+            PreparedAction::Repair,
+        )
+        .unwrap();
+        assert!(matches!(review.action, SetupAction::Recover));
+        assert!(!review.can_uninstall);
+
+        assert!(
+            cache_completed_selection(&context, &previous, None, PreparedAction::Repair).is_none()
+        );
+        assert!(context.selection.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn system_terminal_treats_missing_preparation_as_an_uncached_success() {
+        let result = system_operation_message(OperationMessage::Complete(Ok(json!({
+            "status": "uninstalled",
+            "packageId": "dev.luxury.demo",
+            "removedFiles": 1,
+            "missingFiles": 0,
+            "preservedModifiedFiles": 0,
+        }))));
+        let result = result.unwrap();
+        assert!(result.system_preparation.is_none());
+
+        let result = system_operation_message(OperationMessage::Complete(Ok(json!({
+            "status": "uninstalled",
+            "packageId": "dev.luxury.demo",
+            "removedFiles": 1,
+            "missingFiles": 0,
+            "preservedModifiedFiles": 0,
+            "systemPreparation": { "status": "recoveryRequired" },
+        }))));
+        let result = result.unwrap();
+        assert!(matches!(
+            result.system_preparation,
+            Some(PrepareInstallResult::RecoveryRequired)
+        ));
+        let OperationMessage::Complete(Ok(Value::Object(result))) = result.message else {
+            panic!("system terminal was not preserved");
+        };
+        assert!(result.get("systemPreparation").is_none());
+    }
+
+    #[test]
+    fn system_uninstall_event_exposes_only_the_authoritative_terminal_review() {
+        let mut inspected = inspected();
+        inspected.install.scope = InstallScope::System;
+        let selection = SetupSelection {
+            install_base: PathBuf::from(r"C:\Programs"),
+            state_root: PathBuf::from(r"C:\State"),
+            preparation: PrepareInstallResult::Ready {
+                action: PreparedAction::Repair,
+                installed_version: Some("1.0.0".into()),
+                publisher_migration_required: false,
+            },
+        };
+        let context = SetupContext {
+            package: BoundPackage::from_backend("payload.luxpkg".into(), inspected).unwrap(),
+            selection: Arc::new(Mutex::new(Some(selection.clone()))),
+            active: Arc::new(Mutex::new(None)),
+            starting: Arc::new(AtomicBool::new(false)),
+            last_install_path: Arc::new(Mutex::new(None)),
+            install_completed: Arc::new(AtomicBool::new(false)),
+        };
+
+        let next = Some(SetupSelection {
+            install_base: selection.install_base,
+            state_root: selection.state_root,
+            preparation: PrepareInstallResult::Ready {
+                action: PreparedAction::Install,
+                installed_version: None,
+                publisher_migration_required: false,
+            },
+        });
+        *context.selection.lock().unwrap() = next;
+        let event = SetupEvent::UninstallComplete {
+            operation_id: "system-uninstall".into(),
+            removed_files: 1,
+            missing_files: 0,
+            preserved_modified_files: 0,
+            review: review(&context).ok().map(Box::new),
+        };
+        let value = serde_json::to_value(event).unwrap();
+
+        assert_eq!(value["review"]["package"]["scope"], "system");
+        assert_eq!(value["review"]["action"], "install");
+        assert_eq!(value["review"]["canUninstall"], false);
+        assert!(value["review"]["destination"].is_null());
     }
 
     #[test]
@@ -2041,6 +2602,7 @@ mod tests {
                 publisher_migration_required: false,
             },
         };
+        let untrusted_selection_base = selection.install_base.clone();
         let context = SetupContext {
             package,
             selection: Arc::new(Mutex::new(Some(selection))),
@@ -2053,5 +2615,18 @@ mod tests {
         let review = review(&context).unwrap();
         assert!(review.destination.is_none());
         assert!(review.can_uninstall);
+        assert_eq!(
+            installed_reveal_path(&context).unwrap_err().code,
+            "nothing_to_reveal"
+        );
+
+        context.install_completed.store(true, Ordering::Release);
+        let path = installed_reveal_path(&context).unwrap();
+        let (system_base, _) = luxury_system_roots::get().unwrap();
+        assert_eq!(
+            path,
+            system_base.join(&context.package.summary.install_directory)
+        );
+        assert!(!path.starts_with(untrusted_selection_base));
     }
 }

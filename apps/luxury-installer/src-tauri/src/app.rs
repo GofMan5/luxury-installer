@@ -42,7 +42,7 @@ impl From<BackendError> for PublicError {
 }
 
 impl PublicError {
-    pub(crate) fn new(code: &'static str, message: &'static str) -> Self {
+    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -75,6 +75,7 @@ pub(crate) struct AppState {
     pub(crate) mode: AppMode,
     pub(crate) backend: Result<BackendClient, BackendError>,
     pub(crate) package_path: Option<PathBuf>,
+    pub(crate) packager_path: Option<PathBuf>,
     pub(crate) studio: Arc<StudioState>,
     pub(crate) dialog_open: Arc<AtomicBool>,
     pub(crate) setup: Arc<Mutex<Option<crate::setup::SetupContext>>>,
@@ -84,6 +85,26 @@ pub(crate) struct AppState {
 
 impl AppState {
     pub(crate) fn new<R: Runtime>(app: &AppHandle<R>) -> Self {
+        let setup_build = cfg!(feature = "setup");
+        let resources = (setup_build || !cfg!(debug_assertions))
+            .then(|| app.path().resource_dir().ok())
+            .flatten();
+        let recent_projects_path = app
+            .path()
+            .app_config_dir()
+            .ok()
+            .map(|directory| directory.join("recent-projects-v1.json"));
+        Self::from_runtime(resources, recent_projects_path)
+    }
+
+    pub(crate) fn new_headless() -> Result<Self, BackendError> {
+        let resources = (cfg!(feature = "setup") || !cfg!(debug_assertions))
+            .then(headless_resource_dir)
+            .transpose()?;
+        Ok(Self::from_runtime(resources, None))
+    }
+
+    fn from_runtime(resources: Option<PathBuf>, recent_projects_path: Option<PathBuf>) -> Self {
         let package_requested = package_requested();
         let (arguments, argument_error) = match parse_arguments() {
             Ok(arguments) => (arguments, None),
@@ -96,9 +117,6 @@ impl AppState {
         } else {
             AppMode::Studio
         };
-        let resources = (setup_build || !cfg!(debug_assertions))
-            .then(|| app.path().resource_dir().ok())
-            .flatten();
         let package_path = if setup_build {
             resources
                 .as_ref()
@@ -135,11 +153,35 @@ impl AppState {
             },
             Err,
         );
+        let packager_path = if mode == AppMode::Studio {
+            if cfg!(debug_assertions) {
+                arguments.packager_path.or_else(|| {
+                    workspace_root().map(|root| {
+                        root.join("target").join("debug").join(if cfg!(windows) {
+                            "xtask.exe"
+                        } else {
+                            "xtask"
+                        })
+                    })
+                })
+            } else {
+                resources.as_ref().map(|resources| {
+                    resources.join("packager").join(if cfg!(windows) {
+                        "luxury-packager.exe"
+                    } else {
+                        "luxury-packager"
+                    })
+                })
+            }
+        } else {
+            None
+        };
         Self {
             mode,
             backend,
             package_path,
-            studio: Arc::new(StudioState::default()),
+            packager_path,
+            studio: Arc::new(StudioState::new(recent_projects_path)),
             dialog_open: Arc::new(AtomicBool::new(false)),
             setup: Arc::new(Mutex::new(None)),
             close_started: Arc::new(AtomicBool::new(false)),
@@ -225,6 +267,34 @@ impl AppState {
     }
 }
 
+fn headless_resource_dir() -> Result<PathBuf, BackendError> {
+    let executable = env::current_exe().map_err(|_| {
+        BackendError::new(
+            "invalid_backend_path",
+            "could not resolve the Setup executable",
+        )
+    })?;
+    headless_resource_dir_from(&executable)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| BackendError::new("invalid_backend_path", "Setup resources are unavailable"))
+}
+
+fn headless_resource_dir_from(executable: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let resources = executable.parent().map(Path::to_path_buf);
+    #[cfg(target_os = "linux")]
+    let resources = executable
+        .parent()
+        .and_then(Path::parent)
+        .map(|prefix| prefix.join("lib").join("Luxury Installer"));
+    #[cfg(target_os = "macos")]
+    let resources = executable
+        .parent()
+        .and_then(Path::parent)
+        .map(|contents| contents.join("Resources"));
+    resources
+}
+
 pub(crate) fn package_requested() -> bool {
     env::args_os().any(|argument| {
         argument == "--package"
@@ -235,31 +305,15 @@ pub(crate) fn package_requested() -> bool {
 }
 
 pub(crate) fn valid_package_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && !value.starts_with('.')
-        && !value.ends_with('.')
-        && value.contains('.')
-        && value.split('.').all(|part| {
-            !part.is_empty()
-                && !part.starts_with('-')
-                && !part.ends_with('-')
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        })
+    luxury_spec::PackageId::parse(value).is_ok()
 }
 
 pub(crate) fn valid_text(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 1024 && !value.chars().any(char::is_control)
+    !value.is_empty() && value.chars().count() <= 1024 && !value.chars().any(char::is_control)
 }
 
 pub(crate) fn valid_install_directory(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 255
-        && !matches!(value, "." | "..")
-        && !value.contains(['/', '\\', ':', '\0'])
-        && !value.ends_with(['.', ' '])
+    luxury_spec::InstallDirectory::parse(value).is_ok()
 }
 
 #[derive(Default)]
@@ -267,6 +321,7 @@ struct Arguments {
     package_path: Option<PathBuf>,
     trusted_publisher_key: Option<PathBuf>,
     backend_path: Option<PathBuf>,
+    packager_path: Option<PathBuf>,
 }
 
 fn parse_arguments() -> Result<Arguments, BackendError> {
@@ -297,10 +352,25 @@ fn parse_arguments() -> Result<Arguments, BackendError> {
     } else {
         None
     };
+    let packager_path = if cfg!(debug_assertions) {
+        match env::var_os("LUXURY_PACKAGER_PATH").map(PathBuf::from) {
+            Some(path) if path.is_absolute() => Some(path),
+            Some(_) => {
+                return Err(BackendError::new(
+                    "invalid_backend_path",
+                    "LUXURY_PACKAGER_PATH must be absolute",
+                ));
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
     Ok(Arguments {
         package_path,
         trusted_publisher_key,
         backend_path,
+        packager_path,
     })
 }
 
@@ -453,7 +523,33 @@ pub(crate) fn valid_license(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{public_backend_message, valid_license, valid_package_id};
+    use std::path::Path;
+
+    use super::{
+        headless_resource_dir_from, public_backend_message, valid_license, valid_package_id,
+    };
+
+    #[test]
+    fn headless_resources_follow_the_verified_native_layout() {
+        #[cfg(windows)]
+        assert_eq!(
+            headless_resource_dir_from(Path::new(r"C:\Setup\Luxury Installer.exe")).unwrap(),
+            Path::new(r"C:\Setup")
+        );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            headless_resource_dir_from(Path::new("/opt/setup/usr/bin/luxury-installer")).unwrap(),
+            Path::new("/opt/setup/usr/lib/Luxury Installer")
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            headless_resource_dir_from(Path::new(
+                "/Applications/Luxury Installer.app/Contents/MacOS/Luxury Installer"
+            ))
+            .unwrap(),
+            Path::new("/Applications/Luxury Installer.app/Contents/Resources")
+        );
+    }
 
     #[test]
     fn package_id_contract_matches_core_hyphen_rules() {

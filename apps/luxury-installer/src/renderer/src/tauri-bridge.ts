@@ -4,26 +4,41 @@ import type { ZodType } from 'zod'
 
 import {
   appModeSchema,
+  buildCancellationResultSchema,
   eventEnvelopeSchema,
   installRequestSchema,
   installerReviewSchema,
   operationStartedSchema,
   portablePath,
   publicErrorSchema,
+  recentProjectIndexSchema,
+  recentProjectsSchema,
   setupEventSchema,
+  studioCloseQuerySchema,
   studioBuildResultSchema,
+  studioHostSchema,
   studioProjectSchema,
   studioProjectUpdateSchema,
 } from './bridge-contracts'
 import type { LuxuryBridge, SetupEvent } from './types'
 
 const OPERATION_EVENT = 'luxury://operation-event'
+const STUDIO_CLOSE_QUERY_EVENT = 'luxury://studio-close-query'
+
+class LuxuryInvokeError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message)
+    this.name = 'LuxuryInvokeError'
+  }
+}
 
 export function createTauriBridge(): LuxuryBridge {
   const subscribers = new Set<(event: SetupEvent) => void>()
   let unlisten: UnlistenFn | undefined
+  let unlistenStudioClose: UnlistenFn | undefined
   let disposed = false
   let eventFailure: Error | undefined
+  let studioDraftDirty = false
   const eventReady = listen<unknown>(OPERATION_EVENT, ({ payload }) => {
     const parsed = setupEventSchema.safeParse(payload)
     if (parsed.success) {
@@ -45,21 +60,39 @@ export function createTauriBridge(): LuxuryBridge {
   }).catch(() => {
     eventFailure = new Error('Не удалось запустить защищённый канал событий установщика.')
   })
+  void listen<unknown>(STUDIO_CLOSE_QUERY_EVENT, ({ payload }) => {
+    const parsed = studioCloseQuerySchema.safeParse(payload)
+    if (!parsed.success) return
+    void invokeCommand('respond_studio_close', {
+      requestId: parsed.data.requestId,
+      dirty: studioDraftDirty,
+    }).catch(() => undefined)
+  }).then((dispose) => {
+    if (disposed) dispose()
+    else unlistenStudioClose = dispose
+  }).catch(() => undefined)
 
   window.addEventListener(
     'beforeunload',
     () => {
       disposed = true
       unlisten?.()
+      unlistenStudioClose?.()
     },
     { once: true },
   )
 
   const bridge: LuxuryBridge = {
     getAppMode: () => parsedInvoke('get_app_mode', appModeSchema),
+    getStudioHost: () => parsedInvoke('get_studio_host', studioHostSchema),
     getBootstrap: () => parsedInvoke('get_bootstrap', installerReviewSchema),
     createProject: () => parsedInvoke('create_project', studioProjectSchema.nullable()),
     openProject: () => parsedInvoke('open_project', studioProjectSchema.nullable()),
+    getRecentProjects: () => parsedInvoke('get_recent_projects', recentProjectsSchema),
+    openRecentProject: (index) =>
+      parsedInvoke('open_recent_project', studioProjectSchema, {
+        index: recentProjectIndexSchema.parse(index),
+      }),
     reloadProject: () => parsedInvoke('reload_project', studioProjectSchema),
     updateProject: (input) =>
       parsedInvoke('update_project', studioProjectSchema, {
@@ -67,11 +100,15 @@ export function createTauriBridge(): LuxuryBridge {
       }),
     importProjectFiles: () => parsedInvoke('import_project_files', studioProjectSchema.nullable()),
     importProjectDirectory: () =>
-      parsedInvoke('import_project_directory', studioProjectSchema.nullable()),
+      parsedInvoke('import_project_directory', studioProjectSchema.nullable(), { replace: false }),
+    replaceProjectPayload: () =>
+      parsedInvoke('import_project_directory', studioProjectSchema.nullable(), { replace: true }),
     chooseProjectEntrypoint: () =>
       parsedInvoke('choose_project_entrypoint', portablePath.nullable()),
     revealProject: () => invokeCommand('reveal_project'),
+    revealBuildOutput: () => invokeCommand('reveal_build_output'),
     buildProject: () => parsedInvoke('build_project', studioBuildResultSchema.nullable()),
+    cancelProjectBuild: () => parsedInvoke('cancel_project_build', buildCancellationResultSchema),
     chooseDirectory: () => parsedInvoke('choose_directory', installerReviewSchema.nullable()),
     startInstall: async (input) => {
       await ensureEventReady()
@@ -91,6 +128,9 @@ export function createTauriBridge(): LuxuryBridge {
     launchInstalled: () => invokeCommand('launch_installed'),
     revealInstalled: () => invokeCommand('reveal_installed'),
     openFinishLink: (index) => invokeCommand('open_finish_link', { index }),
+    setStudioDraftDirty: (dirty) => {
+      studioDraftDirty = dirty === true
+    },
     minimizeWindow: () => invokeCommand('minimize_window'),
     closeWindow: () => invokeCommand('close_window'),
   }
@@ -124,7 +164,7 @@ async function invokeCommand(command: string, args?: Record<string, unknown>): P
 
 function publicError(error: unknown): Error {
   const parsed = publicErrorSchema.safeParse(error)
-  return new Error(
-    parsed.success ? parsed.data.message : 'Компоненты Luxury Installer несовместимы или недоступны.',
-  )
+  return parsed.success
+    ? new LuxuryInvokeError(parsed.data.code, parsed.data.message)
+    : new Error('Компоненты Luxury Installer несовместимы или недоступны.')
 }

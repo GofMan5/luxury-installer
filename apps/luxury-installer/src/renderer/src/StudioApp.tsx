@@ -12,14 +12,18 @@ import {
   Terminal,
   Trash2,
   TriangleAlert,
+  Undo2,
+  X,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import { BrandMark } from './components/BrandMark'
 import { WindowChrome } from './components/WindowChrome'
-import { formatBytes, formatFileCount } from './features/installer/format'
+import { formatBytes, formatElapsedTime, formatFileCount } from './features/installer/format'
 import type {
   LuxuryBridge,
+  NativeTarget,
+  RecentProject,
   StudioBuildResult,
   StudioProject,
   StudioProjectUpdate,
@@ -32,15 +36,21 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
     <StudioView
       bridge={bridge}
       state={studio.view}
+      hostTarget={studio.hostTarget}
+      hostTargetError={studio.hostTargetError}
       onCreate={() => void studio.createProject()}
       onOpen={() => void studio.openProject()}
+      recentProjects={studio.recentProjects}
+      onOpenRecent={(index) => void studio.openRecentProject(index)}
       onReload={() => void studio.reloadProject()}
       onReveal={() => void studio.revealProject()}
       onSave={(input) => void studio.updateProject(input)}
       onImportFiles={() => void studio.importProject('files')}
       onImportDirectory={() => void studio.importProject('directory')}
+      onReplacePayload={() => void studio.importProject('replace')}
       onChooseEntrypoint={studio.chooseProjectEntrypoint}
-      onBuild={() => void studio.buildProject()}
+      onBuild={(input) => void studio.buildProject(input)}
+      onCancelBuild={() => void studio.cancelProjectBuild()}
       folderPending={studio.folderPending}
       onDismissError={studio.dismissError}
     />
@@ -50,15 +60,21 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
 interface StudioViewProps {
   bridge: LuxuryBridge
   state: StudioState
+  hostTarget: NativeTarget | null
+  hostTargetError: boolean
   onCreate(): void
   onOpen(): void
+  recentProjects: RecentProject[]
+  onOpenRecent(index: number): void
   onReload(): void
   onReveal(): void
   onSave(input: StudioProjectUpdate): void
   onImportFiles(): void
   onImportDirectory(): void
+  onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
-  onBuild(): void
+  onBuild(input?: StudioProjectUpdate): void
+  onCancelBuild(): void
   folderPending: boolean
   onDismissError(): void
 }
@@ -66,15 +82,21 @@ interface StudioViewProps {
 export function StudioView({
   bridge,
   state,
+  hostTarget,
+  hostTargetError,
   onCreate,
   onOpen,
+  recentProjects,
+  onOpenRecent,
   onReload,
   onReveal,
   onSave,
   onImportFiles,
   onImportDirectory,
+  onReplacePayload,
   onChooseEntrypoint,
   onBuild,
+  onCancelBuild,
   folderPending,
   onDismissError,
 }: StudioViewProps) {
@@ -88,6 +110,11 @@ export function StudioView({
     state.kind === 'building' ||
     folderPending
   const workspace = useRef<HTMLElement>(null)
+  const [draftDirty, setDraftDirty] = useState(false)
+  const onDraftDirtyChange = useCallback((dirty: boolean) => {
+    setDraftDirty(dirty)
+    bridge.setStudioDraftDirty(dirty)
+  }, [bridge])
 
   useEffect(() => {
     workspace.current
@@ -102,11 +129,11 @@ export function StudioView({
         <BrandMark />
         <nav className="studio-rail__actions" aria-label="Действия с проектом">
           <span className="rail-label">Проект</span>
-          <button type="button" disabled={busy} onClick={onCreate}>
+          <button type="button" disabled={busy || draftDirty} onClick={onCreate}>
             <FilePlus2 size={17} aria-hidden="true" />
             Новый проект
           </button>
-          <button type="button" disabled={busy} onClick={onOpen}>
+          <button type="button" disabled={busy || draftDirty} onClick={onOpen}>
             <FolderOpen size={17} aria-hidden="true" />
             Открыть проект
           </button>
@@ -120,7 +147,7 @@ export function StudioView({
                 )}
                 {folderPending ? 'Открываем…' : 'Папка проекта'}
               </button>
-              <button type="button" disabled={busy} onClick={onReload}>
+              <button type="button" disabled={busy || draftDirty} onClick={onReload}>
                 <RefreshCw
                   className={state.kind === 'refreshing' ? 'spin' : undefined}
                   size={17}
@@ -144,19 +171,30 @@ export function StudioView({
             title={state.action === 'create' ? 'Создаём проект' : 'Открываем проект'}
           />
         ) : state.kind === 'empty' ? (
-          <EmptyStudioView onCreate={onCreate} onOpen={onOpen} />
+          <EmptyStudioView
+            recentProjects={recentProjects}
+            onCreate={onCreate}
+            onOpen={onOpen}
+            onOpenRecent={onOpenRecent}
+          />
         ) : state.kind === 'error' && !state.project ? (
           <EmptyErrorView message={state.message} onDismiss={onDismissError} />
         ) : project ? (
           <ProjectView
             project={project}
             state={state}
+            hostTarget={hostTarget}
+            hostTargetError={hostTargetError}
             busy={busy}
             onSave={onSave}
             onImportFiles={onImportFiles}
             onImportDirectory={onImportDirectory}
+            onReplacePayload={onReplacePayload}
             onChooseEntrypoint={onChooseEntrypoint}
             onBuild={onBuild}
+            onCancelBuild={onCancelBuild}
+            onRevealBuildOutput={bridge.revealBuildOutput}
+            onDirtyChange={onDraftDirtyChange}
             onDismissError={onDismissError}
           />
         ) : null}
@@ -165,7 +203,17 @@ export function StudioView({
   )
 }
 
-function EmptyStudioView({ onCreate, onOpen }: { onCreate(): void; onOpen(): void }) {
+function EmptyStudioView({
+  recentProjects,
+  onCreate,
+  onOpen,
+  onOpenRecent,
+}: {
+  recentProjects: RecentProject[]
+  onCreate(): void
+  onOpen(): void
+  onOpenRecent(index: number): void
+}) {
   return (
     <section className="studio-empty" aria-labelledby="studio-empty-title">
       <FileCode2 size={28} strokeWidth={1.6} aria-hidden="true" />
@@ -181,6 +229,29 @@ function EmptyStudioView({ onCreate, onOpen }: { onCreate(): void; onOpen(): voi
           Открыть проект
         </button>
       </div>
+      {recentProjects.length ? (
+        <section className="studio-recent" aria-labelledby="studio-recent-title">
+          <h2 id="studio-recent-title">Недавние проекты</h2>
+          <div className="studio-recent__list">
+            {recentProjects.map((project, index) => (
+              <button
+                key={project.projectPath}
+                type="button"
+                title={project.projectPath}
+                onClick={() => onOpenRecent(index)}
+              >
+                <FolderOpen size={18} aria-hidden="true" />
+                <span>
+                  <strong>{project.name}</strong>
+                  <small>{project.publisher} · {project.version}</small>
+                  <code>{project.projectPath}</code>
+                </span>
+                <small>{targetLabel(project)}</small>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </section>
   )
 }
@@ -224,31 +295,45 @@ function projectUpdateFrom(project: StudioProject): StudioProjectUpdate {
     entrypoint: project.entrypoint,
     showInstallLog: project.showInstallLog,
     finishLinks: project.finishLinks.map((link) => ({ ...link })),
+    shortcuts: { ...project.shortcuts },
   }
 }
 
 function ProjectView({
   project,
   state,
+  hostTarget,
+  hostTargetError,
   busy,
   onSave,
   onImportFiles,
   onImportDirectory,
+  onReplacePayload,
   onChooseEntrypoint,
   onBuild,
+  onCancelBuild,
+  onRevealBuildOutput,
+  onDirtyChange,
   onDismissError,
 }: {
   project: StudioProject
   state: StudioState
+  hostTarget: NativeTarget | null
+  hostTargetError: boolean
   busy: boolean
   onSave(input: StudioProjectUpdate): void
   onImportFiles(): void
   onImportDirectory(): void
+  onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
-  onBuild(): void
+  onBuild(input?: StudioProjectUpdate): void
+  onCancelBuild(): void
+  onRevealBuildOutput(): Promise<void>
+  onDirtyChange(dirty: boolean): void
   onDismissError(): void
 }) {
   const building = state.kind === 'building'
+  const buildElapsed = useBuildElapsed(building)
   const saving = state.kind === 'saving'
   const importing = state.kind === 'importing'
   const choosingEntrypoint = state.kind === 'choosingEntrypoint'
@@ -258,8 +343,19 @@ function ProjectView({
   const baseline = useMemo(() => projectUpdateFrom(project), [project])
   const [draft, setDraft] = useState(baseline)
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline)
+  const hostCompatible =
+    hostTarget?.os === draft.targetOs && hostTarget.arch === draft.targetArch
+  const buildNote = !buildable
+    ? 'studio-signed-build-note'
+    : hostCompatible
+      ? undefined
+      : 'studio-host-build-note'
 
   useEffect(() => setDraft(baseline), [baseline])
+  useLayoutEffect(() => {
+    onDirtyChange(dirty)
+    return () => onDirtyChange(false)
+  }, [dirty, onDirtyChange])
 
   const updateLink = (index: number, field: 'label' | 'url', value: string) => {
     setDraft((current) => ({
@@ -286,21 +382,51 @@ function ProjectView({
           <code tabIndex={0} title={project.projectPath}>{project.projectPath}</code>
         </div>
         <div className="studio-project__header-actions">
-          {buildable ? (
-            <button className="secondary-button" type="submit" disabled={busy || !dirty}>
-              {saving ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Save size={17} aria-hidden="true" />}
-              {saving ? 'Сохраняем…' : 'Сохранить'}
+          {building ? (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={state.cancellationRequested}
+              onClick={onCancelBuild}
+            >
+              {state.cancellationRequested ? (
+                <SquareDashed className="spin" size={17} aria-hidden="true" />
+              ) : (
+                <X size={17} aria-hidden="true" />
+              )}
+              {state.cancellationRequested ? 'Отменяем…' : 'Отменить'}
             </button>
+          ) : null}
+          {buildable && !building ? (
+            <>
+              <button className="secondary-button" type="button" disabled={busy || !dirty} onClick={() => setDraft(baseline)}>
+                <Undo2 size={17} aria-hidden="true" />
+                Отменить изменения
+              </button>
+              <button className="secondary-button" type="submit" disabled={busy || !dirty}>
+                {saving ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Save size={17} aria-hidden="true" />}
+                {saving ? 'Сохраняем…' : 'Сохранить'}
+              </button>
+            </>
           ) : null}
           <button
             className="primary-button"
             type="button"
-            disabled={busy || !buildable || dirty}
-            aria-describedby={buildable ? undefined : 'studio-signed-build-note'}
-            onClick={onBuild}
+            disabled={busy || !buildable || !hostCompatible}
+            aria-describedby={buildNote}
+            onClick={(event) => {
+              if (!event.currentTarget.form?.reportValidity()) return
+              onBuild(dirty ? draft : undefined)
+            }}
           >
-            {building ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Hammer size={17} aria-hidden="true" />}
-            {building ? 'Собираем…' : 'Собрать'}
+            {saving || building ? <SquareDashed className="spin" size={17} aria-hidden="true" /> : <Hammer size={17} aria-hidden="true" />}
+            {saving
+              ? 'Сохраняем…'
+              : building
+                ? 'Собираем…'
+                : dirty
+                  ? `Сохранить и ${nativeBuildLabel(draft.targetOs).toLowerCase()}`
+                  : nativeBuildLabel(draft.targetOs)}
           </button>
         </div>
       </header>
@@ -321,14 +447,39 @@ function ProjectView({
       {!buildable ? (
         <p className="studio-build-note" id="studio-signed-build-note">
           <Terminal size={17} aria-hidden="true" />
-          Подписанные пакеты v2/v3 собираются в командной строке; закрытый ключ передаётся только через stdin.
+          Подписанные проекты собираются в командной строке; закрытый ключ передаётся только через stdin.
+        </p>
+      ) : null}
+
+      {buildable && !hostCompatible ? (
+        <p className="studio-build-note" id="studio-host-build-note">
+          <Terminal size={17} aria-hidden="true" />
+          {hostTargetError
+            ? 'Локальная система не определена. Перезапустите Studio перед сборкой.'
+            : hostTarget
+              ? `Проект: ${nativeTargetLabel(draft.targetOs, draft.targetArch)}. Этот Studio: ${nativeTargetLabel(hostTarget.os, hostTarget.arch)}. Откройте проект на подходящем runner или запустите Native project build в GitHub Actions.`
+              : 'Определяем локальную систему…'}
         </p>
       ) : null}
 
       {building ? (
         <div className="studio-build-progress" role="status" aria-live="polite">
           <SquareDashed className="spin" size={19} aria-hidden="true" />
-          Rust проверяет проект и собирает пакет…
+          <div>
+            <span>
+              {state.cancellationRequested
+                ? 'Останавливаем native-сборку и очищаем временные файлы…'
+                : 'Rust проверяет проект и собирает готовый установщик…'}
+            </span>
+            <time
+              className="studio-build-progress__elapsed"
+              dateTime={`PT${buildElapsed}S`}
+              aria-hidden="true"
+            >
+              Прошло {formatElapsedTime(buildElapsed)}
+            </time>
+            {state.cancellationError ? <small role="alert">{state.cancellationError}</small> : null}
+          </div>
         </div>
       ) : null}
 
@@ -342,11 +493,13 @@ function ProjectView({
       {importing ? (
         <div className="studio-build-progress" role="status" aria-live="polite">
           <SquareDashed className="spin" size={19} aria-hidden="true" />
-          Rust проверяет и добавляет выбранные файлы…
+          Rust проверяет файлы приложения…
         </div>
       ) : null}
 
-      {result ? <BuildResult result={result} /> : null}
+      {result ? (
+        <BuildResult key={result.outputPath} result={result} onReveal={onRevealBuildOutput} />
+      ) : null}
 
       {buildable ? (
         <div className="studio-editor">
@@ -359,7 +512,7 @@ function ProjectView({
               <StudioField label="Версия">
                 <input required maxLength={1024} value={draft.version} onChange={(event) => setDraft({ ...draft, version: event.target.value })} placeholder="1.0.0" />
               </StudioField>
-              <StudioField label="ID пакета" wide>
+              <StudioField label="ID приложения" wide>
                 <input required maxLength={128} value={draft.packageId} onChange={(event) => setDraft({ ...draft, packageId: event.target.value })} placeholder="com.company.app" />
               </StudioField>
               <StudioField label="Издатель" wide>
@@ -399,7 +552,13 @@ function ProjectView({
               <div className="studio-field studio-field--wide">
                 <label htmlFor="studio-entrypoint">Точка запуска</label>
                 <div className="studio-entrypoint">
-                  <input id="studio-entrypoint" aria-describedby="studio-entrypoint-hint" maxLength={4096} value={draft.entrypoint ?? ''} onChange={(event) => setDraft({ ...draft, entrypoint: event.target.value || null })} placeholder="bin/app.exe" />
+                  <input id="studio-entrypoint" aria-describedby="studio-entrypoint-hint" maxLength={4096} value={draft.entrypoint ?? ''} onChange={(event) => setDraft({
+                    ...draft,
+                    entrypoint: event.target.value || null,
+                    shortcuts: event.target.value
+                      ? draft.shortcuts
+                      : { applicationMenu: false, desktop: false },
+                  })} placeholder="bin/app.exe" />
                   <button
                     className="secondary-button"
                     type="button"
@@ -421,6 +580,44 @@ function ProjectView({
               <label><input type="checkbox" checked={draft.showInstallLog} onChange={(event) => setDraft({ ...draft, showInstallLog: event.target.checked })} />Показывать пользователю детали установки</label>
               <label><input type="checkbox" checked={draft.allowDowngrade} onChange={(event) => setDraft({ ...draft, allowDowngrade: event.target.checked })} />Разрешить установку более старой версии</label>
             </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Ярлыки</legend>
+            <div className="studio-fieldset-heading">
+              <p>Ярлыки всегда запускают выбранную точку запуска без скрытых аргументов.</p>
+            </div>
+            <div className="studio-toggles">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={draft.shortcuts.applicationMenu}
+                  disabled={!draft.entrypoint}
+                  onChange={(event) => setDraft({
+                    ...draft,
+                    shortcuts: { ...draft.shortcuts, applicationMenu: event.target.checked },
+                  })}
+                />
+                Добавить в меню приложений
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={draft.shortcuts.desktop}
+                  disabled={!draft.entrypoint}
+                  onChange={(event) => setDraft({
+                    ...draft,
+                    shortcuts: { ...draft.shortcuts, desktop: event.target.checked },
+                  })}
+                />
+                Создать ярлык на рабочем столе
+              </label>
+            </div>
+            {!draft.entrypoint ? (
+              <p className="studio-field-hint">Сначала выберите точку запуска.</p>
+            ) : (
+              <p className="studio-field-hint">Настройка сохранится в проекте. Нативное создание ярлыков войдёт в следующий срез.</p>
+            )}
           </fieldset>
 
           <fieldset>
@@ -455,7 +652,7 @@ function ProjectView({
 
           <section className="studio-payload-summary" aria-labelledby="payload-title">
             <div>
-              <h2 id="payload-title">Файлы пакета</h2>
+              <h2 id="payload-title">Файлы приложения</h2>
               <p>{formatFileCount(project.files)} · {formatBytes(project.bytes)}</p>
             </div>
             <div>
@@ -469,6 +666,15 @@ function ProjectView({
               <button className="secondary-button" type="button" disabled={busy || dirty} onClick={onImportDirectory}>
                 <Folder size={15} aria-hidden="true" />Папка
               </button>
+              <button
+                className="secondary-button"
+                type="button"
+                title="Текущие файлы приложения будут полностью заменены содержимым выбранной папки"
+                disabled={busy || dirty}
+                onClick={onReplacePayload}
+              >
+                <RefreshCw size={15} aria-hidden="true" />Заменить всё
+              </button>
             </div>
           </section>
         </div>
@@ -477,19 +683,39 @@ function ProjectView({
   )
 }
 
+function useBuildElapsed(active: boolean): number {
+  const [seconds, setSeconds] = useState(0)
+
+  useEffect(() => {
+    if (!active) {
+      setSeconds(0)
+      return
+    }
+    const started = performance.now()
+    setSeconds(0)
+    const timer = window.setInterval(() => {
+      setSeconds(Math.max(0, Math.floor((performance.now() - started) / 1000)))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [active])
+
+  return seconds
+}
+
 function ReadOnlyProject({ project }: { project: StudioProject }) {
   return (
     <div className="studio-sections">
       <section aria-labelledby="manifest-title">
         <h2 id="manifest-title">Манифест</h2>
         <dl className="studio-facts">
-          <Fact label="ID пакета" value={project.packageId} mono />
-          <Fact label="Формат пакета" value={`luxpkg v${project.formatVersion}`} />
+          <Fact label="ID приложения" value={project.packageId} mono />
+          <Fact label="Подпись" value={project.formatVersion === 1 ? 'Не подписан' : 'Подписанный проект'} />
           <Fact label="Лицензия" value={project.hasLicense ? 'Требует принятия' : 'Не задана'} />
           {project.formatVersion === 3 ? <Fact label="Ротация ключа" value="Проверяется при CLI build текущим ключом" /> : null}
           <Fact label="Папка установки" value={project.installDirectory} mono />
           <Fact label="Область" value={project.scope === 'user' ? 'Текущий пользователь' : 'Вся система'} />
           <Fact label="Запуск" value={project.hasEntrypoint ? project.entrypoint ?? 'Настроен' : 'Не настроен'} />
+          <Fact label="Ярлыки" value={shortcutLabel(project.shortcuts)} />
         </dl>
       </section>
       <section aria-labelledby="payload-title">
@@ -505,6 +731,13 @@ function ReadOnlyProject({ project }: { project: StudioProject }) {
   )
 }
 
+function shortcutLabel(shortcuts: StudioProject['shortcuts']): string {
+  if (shortcuts.applicationMenu && shortcuts.desktop) return 'Меню приложений и рабочий стол'
+  if (shortcuts.applicationMenu) return 'Меню приложений'
+  if (shortcuts.desktop) return 'Рабочий стол'
+  return 'Не создаются'
+}
+
 function StudioField({ label, hint, wide = false, children }: { label: string; hint?: string; wide?: boolean; children: React.ReactNode }) {
   return (
     <label className={wide ? 'studio-field studio-field--wide' : 'studio-field'}>
@@ -515,14 +748,38 @@ function StudioField({ label, hint, wide = false, children }: { label: string; h
   )
 }
 
-function BuildResult({ result }: { result: StudioBuildResult }) {
+function BuildResult({ result, onReveal }: { result: StudioBuildResult; onReveal(): Promise<void> }) {
+  const pendingRef = useRef(false)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const reveal = async () => {
+    if (pendingRef.current) return
+    pendingRef.current = true
+    setPending(true)
+    setError(null)
+    try {
+      await onReveal()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Не удалось показать установщик.')
+    } finally {
+      pendingRef.current = false
+      setPending(false)
+    }
+  }
+
   return (
     <section className="studio-build-result" aria-labelledby="studio-build-result-title" aria-live="polite">
       <Check size={21} strokeWidth={2.5} aria-hidden="true" />
       <div>
-        <h2 id="studio-build-result-title">Пакет собран</h2>
+        <h2 id="studio-build-result-title">Установщик готов</h2>
         <code tabIndex={0} title={result.outputPath}>{result.outputPath}</code>
+        {error ? <small role="alert">{error}</small> : null}
       </div>
+      <button className="secondary-button" type="button" disabled={pending} onClick={() => void reveal()}>
+        {pending ? <SquareDashed className="spin" size={15} aria-hidden="true" /> : <FolderOpen size={15} aria-hidden="true" />}
+        {pending ? 'Открываем…' : 'Показать результат'}
+      </button>
     </section>
   )
 }
@@ -536,7 +793,18 @@ function Fact({ label, value, mono = false }: { label: string; value: string; mo
   )
 }
 
-function targetLabel(project: StudioProject): string {
-  const os = { windows: 'Windows', linux: 'Linux', macos: 'macOS' }[project.targetOs]
-  return `${os} · ${project.targetArch}`
+function targetLabel(project: Pick<StudioProject, 'targetOs' | 'targetArch'>): string {
+  return nativeTargetLabel(project.targetOs, project.targetArch)
+}
+
+function nativeTargetLabel(os: NativeTarget['os'], arch: NativeTarget['arch']): string {
+  return `${{ windows: 'Windows', linux: 'Linux', macos: 'macOS' }[os]} · ${arch}`
+}
+
+function nativeBuildLabel(target: StudioProject['targetOs']): string {
+  return {
+    windows: 'Собрать .exe',
+    linux: 'Собрать .deb / .rpm',
+    macos: 'Собрать .dmg',
+  }[target]
 }

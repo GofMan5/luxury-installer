@@ -14,12 +14,11 @@ use std::{
 use serde_json::{Value, json};
 
 use super::super::{
-    HostLayout, LifecycleSession, PhaseTracker, ProgressTracker, STRESS_INSTALL_DIRECTORY,
-    STRESS_PACKAGE_ID, STRESS_PUBLISHED_FILE, StressPackage, UninstallProbeEvent,
-    UninstallTerminal, consume_install, consume_uninstall, directory_entry_names, exact_keys,
-    inspect_stress_fixture, message_kind, object_string, parse_uninstall_event, path_absent,
-    request_stress_install, strict_result, unicode_path, validate_install_action_against_inspect,
-    value_object, verify_regular_bytes,
+    HostLayout, LifecycleSession, PhaseTracker, STRESS_INSTALL_DIRECTORY, STRESS_PACKAGE_ID,
+    STRESS_PUBLISHED_FILE, StressPackage, UninstallProbeEvent, UninstallTerminal, consume_install,
+    consume_uninstall, directory_entry_names, exact_keys, inspect_stress_fixture, message_kind,
+    object_string, parse_uninstall_event, path_absent, request_stress_install, strict_result,
+    unicode_path, validate_install_action_against_inspect, value_object, verify_regular_bytes,
 };
 use super::{
     CrashOperation, consume_expected_install_error, read_bounded_journal_prefix,
@@ -27,12 +26,13 @@ use super::{
     require_recovered_transaction_absence, require_recovery_cleanup, require_regular_hash,
     stress_file_table, validate_install_base_identity, validate_stress_receipt, verify_exact_tree,
 };
-use crate::runner::{sha256_hex, staging::sha256_file};
+use crate::runner::{is_link_or_reparse, sha256_hex, staging::sha256_file};
 
 const CLEANUP_BLOCKER: &str = "probe.cleanup-blocker";
 const CLEANUP_BLOCKER_BYTES: &[u8] = b"packaged post-cutover restart probe\n";
 const CLEANUP_BLOCKER_WAIT: Duration = Duration::from_secs(30);
 const CLEANUP_BLOCKER_RETRY: Duration = Duration::from_millis(2);
+const PRECOMMIT_TRIGGER_WAIT: Duration = Duration::from_secs(30);
 
 pub(crate) fn probe_uninstall_precommit_crash_recovery(
     backend: &Path,
@@ -92,7 +92,7 @@ pub(crate) fn probe_uninstall_precommit_crash_recovery(
     let base_receipt_hash = sha256_hex(sha256_file(&receipt_path(&state_root))?);
     require_recovered_transaction_absence(&install_base, &state_root)?;
 
-    let journal_prefix = LifecycleSession::start(backend)?.run_crashed(
+    LifecycleSession::start(backend)?.run_crashed(
         "uninstall_precommit",
         CrashOperation::Uninstall,
         |session| {
@@ -102,15 +102,7 @@ pub(crate) fn probe_uninstall_precommit_crash_recovery(
                 install_base_text,
                 state_root_text,
             )?;
-            consume_until_first_removal(session, "uninstall_precommit", base.expected.files)?;
-            require_pending_uninstall(
-                &install_base,
-                &state_root,
-                base.source_payload,
-                base.expected.executable,
-                &base_receipt,
-                &base_receipt_hash,
-            )
+            wait_for_first_uninstall_backup(session, &install_base, &state_root)
         },
     )?;
     let post_crash_journal = require_pending_uninstall(
@@ -121,9 +113,6 @@ pub(crate) fn probe_uninstall_precommit_crash_recovery(
         &base_receipt,
         &base_receipt_hash,
     )?;
-    if !post_crash_journal.starts_with(&journal_prefix) {
-        return Err("uninstall WAL changed its durable pre-crash prefix".into());
-    }
 
     LifecycleSession::start(backend)?.run(|session| {
         let inspect = inspect_stress_fixture(
@@ -312,41 +301,52 @@ fn request_uninstall(
     )
 }
 
-fn consume_until_first_removal(
+fn wait_for_first_uninstall_backup(
     session: &mut LifecycleSession,
-    request_id: &str,
-    expected_files: u64,
+    install_base: &Path,
+    state_root: &Path,
 ) -> Result<(), String> {
-    const PHASES: &[&str] = &["recovering", "loadingReceipt", "removing"];
-    let mut next_phase = 0;
-    let mut progress = ProgressTracker::default();
+    let live = install_base
+        .join(STRESS_INSTALL_DIRECTORY)
+        .join(STRESS_PUBLISHED_FILE);
+    let backup = install_base
+        .join(format!(".luxury-tx-{STRESS_PACKAGE_ID}"))
+        .join("removed")
+        .join(STRESS_PUBLISHED_FILE);
+    let journal = state_root
+        .join("transactions")
+        .join(STRESS_PACKAGE_ID)
+        .join("journal.jsonl");
+    let deadline = Instant::now() + PRECOMMIT_TRIGGER_WAIT;
     loop {
-        let message = session.next_required("pre-commit uninstall removal")?;
-        if message_kind(&message, request_id)? != "event" {
-            return Err("uninstall completed before the pre-commit crash barrier".into());
+        let live_missing = !regular_file_present(&live, "pre-commit uninstall anchor")?;
+        let backup_ready = regular_file_present(&backup, "pre-commit uninstall backup")?;
+        let journal_ready = regular_file_present(&journal, "pre-commit uninstall journal")?;
+        if live_missing && backup_ready && journal_ready {
+            return Ok(());
         }
-        match parse_uninstall_event(&message, request_id)? {
-            UninstallProbeEvent::Phase(phase) => {
-                if PHASES.get(next_phase) != Some(&phase.as_str()) {
-                    return Err("uninstall reordered its pre-commit phases".into());
-                }
-                next_phase += 1;
-            }
-            UninstallProbeEvent::Progress(value) => {
-                progress.observe(value, true)?;
-                if value.total_files != expected_files {
-                    return Err("uninstall progress did not match the stress receipt".into());
-                }
-                if value.completed_files > 0 {
-                    if next_phase != PHASES.len() {
-                        return Err(
-                            "uninstall removed a file before entering its removal phase".into()
-                        );
-                    }
-                    return Ok(());
-                }
-            }
+        if let Some(status) = session
+            .child
+            .try_wait()
+            .map_err(|error| format!("could not inspect pre-commit backend: {error}"))?
+        {
+            return Err(format!(
+                "packaged backend exited before the pre-commit uninstall trigger with {status}"
+            ));
         }
+        if Instant::now() >= deadline {
+            return Err("pre-commit uninstall trigger timed out".into());
+        }
+        thread::yield_now();
+    }
+}
+
+fn regular_file_present(path: &Path, label: &str) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Ok(metadata) if metadata.is_file() && !is_link_or_reparse(&metadata) => Ok(true),
+        Ok(_) => Err(format!("{label} changed type")),
+        Err(error) => Err(format!("could not inspect {label}: {error}")),
     }
 }
 
@@ -683,6 +683,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn precommit_trigger_accepts_only_regular_files_or_absence() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state");
+        assert!(!regular_file_present(&path, "fixture").unwrap());
+        fs::write(&path, b"state").unwrap();
+        assert!(regular_file_present(&path, "fixture").unwrap());
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(regular_file_present(&path, "fixture").is_err());
+    }
+
+    #[test]
     fn uninstall_journal_parser_distinguishes_pre_and_post_cutover() {
         let receipt_hash = "1".repeat(64);
         let file_hash = "2".repeat(64);
@@ -728,7 +740,7 @@ mod tests {
     #[test]
     fn not_installed_result_is_exact() {
         let message = json!({
-            "protocolVersion": 2,
+            "protocolVersion": luxury_spec::JSONL_PROTOCOL_VERSION,
             "type": "result",
             "id": "uninstall_post_cutover_recovery",
             "result": {

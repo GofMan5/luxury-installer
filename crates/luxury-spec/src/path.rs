@@ -6,6 +6,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::SpecError;
 
 const MAX_PATH_BYTES: usize = 512;
+const MAX_COMPONENT_BYTES: usize = 255;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
@@ -111,6 +112,9 @@ fn validate_portable_path(value: &str, single_component: bool) -> Result<(), Spe
                 "empty, current and parent components are forbidden",
             ));
         }
+        if component.len() > MAX_COMPONENT_BYTES {
+            return Err(invalid("path component is longer than 255 bytes"));
+        }
         if component.ends_with(['.', ' ']) {
             return Err(invalid("components ending in a dot or space are forbidden"));
         }
@@ -173,6 +177,14 @@ mod tests {
     fn accepts_portable_nested_path() {
         let path = PackagePath::parse("bin/Luxury Installer.exe").unwrap();
         assert_eq!(path.as_str(), "bin/Luxury Installer.exe");
+    }
+
+    #[test]
+    fn keeps_every_component_within_common_filesystem_limits() {
+        assert!(PackagePath::parse("a".repeat(MAX_COMPONENT_BYTES)).is_ok());
+        assert!(PackagePath::parse("a".repeat(MAX_COMPONENT_BYTES + 1)).is_err());
+        assert!(InstallDirectory::parse("a".repeat(MAX_COMPONENT_BYTES + 1)).is_err());
+        assert!(PackagePath::parse(format!("{}/{}", "a".repeat(255), "b".repeat(255))).is_ok());
     }
 
     #[test]
