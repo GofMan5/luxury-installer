@@ -204,13 +204,6 @@ fn escape_desktop_string(value: &str) -> io::Result<String> {
     for character in value.chars() {
         match character {
             '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\t' => escaped.push_str("\\t"),
-            '\r' | '\0' => {
-                return Err(invalid_input(
-                    "desktop-entry string contains an invalid control",
-                ));
-            }
             character if character.is_control() => {
                 return Err(invalid_input(
                     "desktop-entry string contains an invalid control",
@@ -332,7 +325,7 @@ mod tests {
 
     #[test]
     fn codec_rejects_newlines_controls_bidi_and_relative_paths() {
-        for name in ["line\nbreak", "bad\u{202e}name"] {
+        for name in ["line\nbreak", "tab\tbreak", "bad\u{202e}name"] {
             assert!(desktop_entry_bytes(name, Path::new("/opt/app"), Path::new("/opt")).is_err());
         }
         for entrypoint in [Path::new("relative/app"), Path::new("/opt/line\nbreak")] {
