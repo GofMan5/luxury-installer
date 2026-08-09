@@ -6,9 +6,10 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Added
 
-- An evidence-based master roadmap from preview to signed 1.0 production: competitor matrix, best-in-class metrics, product workstreams, version milestones, exact vertical-slice queue, performance budgets, release scorecard, typed shortcuts/associations/components/prerequisites/updater priorities, and deliberate exclusion of arbitrary package scripts.
-- Manifest schema 4 adds bounded application-menu/desktop shortcut intent tied to the exact entrypoint. Compiler, plan, ownership receipt v5, JSONL, Studio authoring and the strict Setup review contract preserve it; Setup bootstrap fails as unsupported before rendering that review or mutating state until native adapters land.
+- An evidence-based master roadmap from preview to signed 1.0 production: a dated current-competitor snapshot, normalized capability states, dependency-ordered vertical slices, durable maintenance/fleet/container work, typed desktop/components/prerequisite/updater priorities, enforced performance and compatibility gates, and separate Studio/generated-installer final-byte release contracts.
+- Manifest schema 4 adds bounded application-menu/desktop shortcut intent tied to the exact entrypoint. Compiler, plan, legacy receipt v5 intent, JSONL, Studio authoring and the strict Setup review contract preserve it; Setup bootstrap remains unsupported before review/mutation until WAL v5 external-root publication lands, while macOS additionally requires a real product `.app`.
 - Bound Setup `--info-json` response schema is now v2 and requires the strict shortcut policy object; final Windows container verification rejects older or drifted response shapes.
+- Ownership receipt v6 adds exact native shortcut artifact authority and explicit engine reconciliation/removal ports. Isolated Windows `.lnk` and Linux `.desktop` codecs are verified; external publication still fails closed pending WAL v5, and macOS remains gated on a real product `.app`.
 - Rust-first `.luxpkg` compiler, verifier, transactional installer, repair, uninstall, rollback/recovery, receipts, and explicit receipt-owned launch.
 - Tauri 2 Studio and bound-payload Setup for Windows, Linux, and macOS development workflows.
 - Publisher-authenticated v2 packages, v3 key rotation, and schema-v3 plain-text license consent.

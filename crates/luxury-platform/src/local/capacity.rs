@@ -132,7 +132,9 @@ fn planned_receipt_bytes(plan: &InstallPlan) -> Result<u64, PortError> {
         install_base: InstallBaseIdentity::maximum_serialized_size_placeholder(),
         receipt: plan.ownership_receipt(),
     };
-    let bytes = stored_receipt_bytes(&stored)?.len() as u64;
+    let bytes = (stored_receipt_bytes(&stored)?.len() as u64)
+        .checked_add(plan.shortcut_receipt_capacity_reserve_bytes())
+        .ok_or_else(|| state_error("ownership receipt size estimate overflow"))?;
     if bytes > MAX_RECEIPT_BYTES {
         return Err(state_error("ownership receipt exceeds the size limit"));
     }

@@ -846,6 +846,20 @@ pub(super) fn open_pinned_nofollow(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
+/// Open one leaf for read while denying every writer and pathname replacement.
+///
+/// `FILE_SHARE_READ` is intentionally the only share flag: Windows share checks are
+/// reciprocal, so this both rejects a pre-existing write/delete-capable peer and keeps
+/// later write/delete opens from succeeding while the returned guard is alive.
+pub(super) fn open_immutable_read_nofollow(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
 pub(super) fn open_launch_guards_nofollow(path: &Path) -> io::Result<(File, File)> {
     let write_guard = OpenOptions::new()
         .read(true)

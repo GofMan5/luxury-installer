@@ -7,7 +7,7 @@ use std::{
 
 use luxury_spec::{
     FileEntry, InstallDirectory, InstallScope, OperatingSystem, PackageId, PackagePath,
-    ShortcutPolicy, SpecError, validate_entrypoint,
+    Sha256Digest, ShortcutPolicy, SpecError, validate_entrypoint,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -22,8 +22,77 @@ const LEGACY_RECEIPT_FORMAT_VERSION: u32 = 1;
 const IDENTITY_RECEIPT_FORMAT_VERSION: u32 = 2;
 const PROVENANCE_RECEIPT_FORMAT_VERSION: u32 = 3;
 const ENTRYPOINT_RECEIPT_FORMAT_VERSION: u32 = 4;
-pub const RECEIPT_FORMAT_VERSION: u32 = 5;
+const SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION: u32 = 5;
+pub const RECEIPT_FORMAT_VERSION: u32 = 6;
 const MAX_RECEIPT_FILES: usize = 100_000;
+const MAX_SHORTCUT_ARTIFACTS: usize = 2;
+const MAX_SHORTCUT_DISPLAY_NAME_CHARS: usize = 128;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortcutLocation {
+    ApplicationMenu,
+    Desktop,
+}
+
+/// Exact native shortcut artifact owned by a receipt. The platform adapter
+/// supplies this only after creating or reconciling the artifact transactionally.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShortcutArtifact {
+    location: ShortcutLocation,
+    leaf: PackagePath,
+    size: u64,
+    sha256: Sha256Digest,
+    executable: bool,
+}
+
+impl ShortcutArtifact {
+    pub fn new(
+        location: ShortcutLocation,
+        leaf: PackagePath,
+        size: u64,
+        sha256: Sha256Digest,
+        executable: bool,
+    ) -> Result<Self, ReceiptError> {
+        let artifact = Self {
+            location,
+            leaf,
+            size,
+            sha256,
+            executable,
+        };
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    fn validate(&self) -> Result<(), ReceiptError> {
+        if self.leaf.as_str().contains('/') {
+            return Err(ReceiptError::InvalidShortcutLeaf(self.leaf.to_string()));
+        }
+        Ok(())
+    }
+
+    pub const fn location(&self) -> ShortcutLocation {
+        self.location
+    }
+
+    pub fn leaf(&self) -> &PackagePath {
+        &self.leaf
+    }
+
+    pub const fn size(&self) -> u64 {
+        self.size
+    }
+
+    pub fn sha256(&self) -> &Sha256Digest {
+        &self.sha256
+    }
+
+    pub const fn executable(&self) -> bool {
+        self.executable
+    }
+}
 
 /// Durable ownership data. Adapters persist it outside the removable app tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,10 +113,21 @@ pub struct OwnershipReceipt {
     entrypoint: Option<PackagePath>,
     #[serde(default, skip_serializing_if = "ShortcutPolicy::is_disabled")]
     shortcuts: ShortcutPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shortcut_display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    shortcut_artifacts: Vec<ShortcutArtifact>,
     files: Vec<FileEntry>,
 }
 
 impl OwnershipReceipt {
+    pub(crate) fn validate_install_plan(plan: &InstallPlan) -> Result<(), ReceiptError> {
+        if plan.shortcuts().enabled() && !valid_shortcut_display_name(plan.display_name()) {
+            return Err(ReceiptError::InvalidShortcutDisplayName);
+        }
+        Ok(())
+    }
+
     pub fn new(
         package_id: PackageId,
         version: Version,
@@ -67,14 +147,20 @@ impl OwnershipReceipt {
             payload_signer: Some(package_identity),
             entrypoint: None,
             shortcuts: ShortcutPolicy::default(),
+            shortcut_display_name: None,
+            shortcut_artifacts: Vec::new(),
             files,
         };
         receipt.validate()?;
         Ok(receipt)
     }
 
-    pub(crate) fn from_install_plan(plan: &InstallPlan) -> Self {
-        Self {
+    pub(crate) fn from_install_plan(
+        plan: &InstallPlan,
+        shortcut_artifacts: Vec<ShortcutArtifact>,
+    ) -> Result<Self, ReceiptError> {
+        Self::validate_install_plan(plan)?;
+        let receipt = Self {
             format_version: RECEIPT_FORMAT_VERSION,
             package_id: plan.package_id().clone(),
             version: plan.version().clone(),
@@ -85,6 +171,31 @@ impl OwnershipReceipt {
             payload_signer: Some(plan.payload_signer()),
             entrypoint: plan.entrypoint().cloned(),
             shortcuts: plan.shortcuts(),
+            shortcut_display_name: plan
+                .shortcuts()
+                .enabled()
+                .then(|| plan.display_name().to_owned()),
+            shortcut_artifacts,
+            files: plan.files().to_vec(),
+        };
+        receipt.validate()?;
+        Ok(receipt)
+    }
+
+    pub(crate) fn from_install_plan_without_shortcuts(plan: &InstallPlan) -> Self {
+        Self {
+            format_version: RECEIPT_FORMAT_VERSION,
+            package_id: plan.package_id().clone(),
+            version: plan.version().clone(),
+            scope: plan.scope(),
+            directory: plan.directory().clone(),
+            package_identity: None,
+            authorized_publisher: Some(plan.package_identity()),
+            payload_signer: Some(plan.payload_signer()),
+            entrypoint: plan.entrypoint().cloned(),
+            shortcuts: ShortcutPolicy::default(),
+            shortcut_display_name: None,
+            shortcut_artifacts: Vec::new(),
             files: plan.files().to_vec(),
         }
     }
@@ -101,6 +212,7 @@ impl OwnershipReceipt {
             | (
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(PackageIdentity::Unsigned),
@@ -109,6 +221,7 @@ impl OwnershipReceipt {
             | (
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(PackageIdentity::TrustedPublisher { .. }),
@@ -126,6 +239,7 @@ impl OwnershipReceipt {
             (
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 Some(_),
                 _,
@@ -136,6 +250,7 @@ impl OwnershipReceipt {
             (
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 None,
@@ -146,6 +261,7 @@ impl OwnershipReceipt {
             (
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(_),
@@ -156,6 +272,7 @@ impl OwnershipReceipt {
             (
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(_),
@@ -191,7 +308,9 @@ impl OwnershipReceipt {
             {
                 return Err(ReceiptError::LegacyEntrypoint);
             }
-            ENTRYPOINT_RECEIPT_FORMAT_VERSION | RECEIPT_FORMAT_VERSION => {
+            ENTRYPOINT_RECEIPT_FORMAT_VERSION
+            | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
+            | RECEIPT_FORMAT_VERSION => {
                 validate_entrypoint(
                     OperatingSystem::host(),
                     self.entrypoint.as_ref(),
@@ -201,11 +320,62 @@ impl OwnershipReceipt {
             }
             _ => {}
         }
-        if self.format_version < RECEIPT_FORMAT_VERSION && self.shortcuts.enabled() {
+        if self.format_version < SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION && self.shortcuts.enabled()
+        {
             return Err(ReceiptError::LegacyShortcuts);
         }
         if self.shortcuts.enabled() && self.entrypoint.is_none() {
             return Err(ReceiptError::ShortcutsWithoutEntrypoint);
+        }
+        if self.format_version < RECEIPT_FORMAT_VERSION
+            && (self.shortcut_display_name.is_some() || !self.shortcut_artifacts.is_empty())
+        {
+            return Err(ReceiptError::LegacyShortcutArtifacts);
+        }
+        if self.format_version == RECEIPT_FORMAT_VERSION {
+            self.validate_shortcut_artifacts()?;
+        }
+        Ok(())
+    }
+
+    fn validate_shortcut_artifacts(&self) -> Result<(), ReceiptError> {
+        if !self.shortcuts.enabled() {
+            if self.shortcut_display_name.is_some() || !self.shortcut_artifacts.is_empty() {
+                return Err(ReceiptError::UnexpectedShortcutArtifacts);
+            }
+            return Ok(());
+        }
+
+        let display_name = self
+            .shortcut_display_name
+            .as_deref()
+            .ok_or(ReceiptError::MissingShortcutDisplayName)?;
+        if !valid_shortcut_display_name(display_name) {
+            return Err(ReceiptError::InvalidShortcutDisplayName);
+        }
+        let expected =
+            usize::from(self.shortcuts.application_menu) + usize::from(self.shortcuts.desktop);
+        if self.shortcut_artifacts.len() != expected
+            || self.shortcut_artifacts.len() > MAX_SHORTCUT_ARTIFACTS
+        {
+            return Err(ReceiptError::ShortcutArtifactCount {
+                expected,
+                found: self.shortcut_artifacts.len(),
+            });
+        }
+        let mut application_menu = 0;
+        let mut desktop = 0;
+        for artifact in &self.shortcut_artifacts {
+            artifact.validate()?;
+            match artifact.location {
+                ShortcutLocation::ApplicationMenu => application_menu += 1,
+                ShortcutLocation::Desktop => desktop += 1,
+            }
+        }
+        if application_menu != usize::from(self.shortcuts.application_menu)
+            || desktop != usize::from(self.shortcuts.desktop)
+        {
+            return Err(ReceiptError::ShortcutArtifactLocations);
         }
         Ok(())
     }
@@ -253,6 +423,14 @@ impl OwnershipReceipt {
         self.shortcuts
     }
 
+    pub fn shortcut_display_name(&self) -> Option<&str> {
+        self.shortcut_display_name.as_deref()
+    }
+
+    pub fn shortcut_artifacts(&self) -> &[ShortcutArtifact] {
+        &self.shortcut_artifacts
+    }
+
     pub fn files(&self) -> &[FileEntry] {
         &self.files
     }
@@ -288,6 +466,37 @@ pub enum ReceiptError {
     TooManyFiles(usize),
     #[error("receipt contains duplicate or case-colliding path `{0}`")]
     DuplicatePath(String),
+    #[error("receipt formats 1 through 5 must not contain shortcut artifact authority")]
+    LegacyShortcutArtifacts,
+    #[error("disabled shortcut intent must not contain shortcut artifact authority")]
+    UnexpectedShortcutArtifacts,
+    #[error("enabled shortcut intent is missing its authenticated display name")]
+    MissingShortcutDisplayName,
+    #[error("shortcut display name is invalid")]
+    InvalidShortcutDisplayName,
+    #[error("shortcut artifact count must be exactly {expected}; found {found}")]
+    ShortcutArtifactCount { expected: usize, found: usize },
+    #[error("shortcut artifact locations do not exactly match shortcut intent")]
+    ShortcutArtifactLocations,
+    #[error("shortcut artifact `{0}` must be a portable leaf name")]
+    InvalidShortcutLeaf(String),
+}
+
+pub(crate) fn valid_shortcut_display_name(value: &str) -> bool {
+    let length = value.chars().count();
+    length != 0
+        && length <= MAX_SHORTCUT_DISPLAY_NAME_CHARS
+        && !value.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '\u{061c}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                )
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -355,6 +564,38 @@ pub enum RemoveFileOutcome {
     PreservedModified,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShortcutRemovalSummary {
+    pub removed: usize,
+    pub missing: usize,
+    pub preserved_modified: usize,
+}
+
+impl ShortcutRemovalSummary {
+    fn validate(self, receipt: &OwnershipReceipt) -> Result<Self, PortError> {
+        let total = self
+            .removed
+            .checked_add(self.missing)
+            .and_then(|count| count.checked_add(self.preserved_modified))
+            .ok_or_else(|| {
+                PortError::with_kind(
+                    crate::PortErrorKind::State,
+                    "shortcut removal count overflow",
+                )
+            })?;
+        if total != receipt.shortcut_artifacts.len() {
+            return Err(PortError::with_kind(
+                crate::PortErrorKind::State,
+                format!(
+                    "shortcut removal count {total} does not match receipt artifact count {}",
+                    receipt.shortcut_artifacts.len()
+                ),
+            ));
+        }
+        Ok(self)
+    }
+}
+
 /// The engine never asks this port to delete a directory tree or an unknown
 /// path: only receipt-owned regular files can reach `remove_if_unchanged`.
 pub trait UninstallPort {
@@ -370,6 +611,22 @@ pub trait UninstallPort {
 
     /// Acquire the destination lock and create durable undo state.
     fn begin(&mut self, receipt: &OwnershipReceipt) -> Result<(), PortError>;
+
+    /// Remove only the exact receipt-owned shortcut artifacts, preserving
+    /// modified artifacts. The adapter must journal removals for rollback.
+    fn remove_shortcuts(
+        &mut self,
+        receipt: &OwnershipReceipt,
+    ) -> Result<ShortcutRemovalSummary, PortError> {
+        if !receipt.shortcut_artifacts().is_empty() {
+            Err(PortError::with_kind(
+                crate::PortErrorKind::Unsupported,
+                "shortcut removal is not implemented by this adapter",
+            ))
+        } else {
+            Ok(ShortcutRemovalSummary::default())
+        }
+    }
 
     /// Re-check the current file atomically and remove it only if it still
     /// matches the receipt digest. Links, aliases and non-regular files must fail closed.
@@ -494,6 +751,28 @@ where
                 },
                 &mut emit,
             );
+            emit_terminal_error(&error, &mut emit);
+            return Err(error);
+        }
+
+        if let Err(source) = port
+            .remove_shortcuts(&receipt)
+            .and_then(|summary| summary.validate(&receipt))
+        {
+            let error = rollback(
+                port,
+                UninstallError::Port {
+                    step: "remove owned shortcuts",
+                    source,
+                },
+                &mut emit,
+            );
+            emit_terminal_error(&error, &mut emit);
+            return Err(error);
+        }
+
+        if is_cancelled() {
+            let error = rollback(port, UninstallError::Cancelled, &mut emit);
             emit_terminal_error(&error, &mut emit);
             return Err(error);
         }

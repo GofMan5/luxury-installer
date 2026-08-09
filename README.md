@@ -43,10 +43,10 @@ The internal package container stays between the Rust compiler and packager and 
 
 Each Setup is bound to one reviewed payload. It shows the application description, publisher, version, destination, and exact operation without becoming a package browser.
 
-Setup's strict review contract already carries authenticated shortcut intent, but current bootstrap stops at typed native preflight before that screen is shown. The review becomes visible with the Windows, Linux, and macOS transactional adapters; a schema-only project never reports a false successful integration.
+Setup's strict review contract already carries authenticated shortcut intent, but current bootstrap stops at typed native preflight before that screen is shown. The review becomes visible after WAL v5 provides transactional external-root publication and macOS has a real signed product `.app`; isolated Windows/Linux codecs alone never report a false successful integration.
 
 - a newer downloaded version becomes an update;
-- the same version with the exact file set, launch entrypoint, and shortcut intent becomes repair;
+- the same version with the exact file set, launch entrypoint, shortcut intent, and authenticated display name becomes repair;
 - downgrade is never silently approved;
 - cancellation and failure restore the previous installation; if Setup cannot confirm the cancel request, it explains that inline and keeps **Cancel** available for an idempotent retry while the operation continues;
 - unknown files and modified obsolete files are preserved;
@@ -69,6 +69,8 @@ There is no built-in update-download service yet. Updating means launching a new
 | Automation | Human CLI plus strict typed JSONL v3 over stdin/stdout for agents and desktop composition. |
 
 Manifest capability `schema_version` is independent of package trust `format_version`: schema 2 adds the exact entrypoint, schema 3 adds the authenticated license, and schema 4 adds bounded receipt-owned shortcut intent. Package trust formats remain v1-v3.
+
+Receipt format 6 now reserves exact native shortcut ownership—typed location, portable leaf, size, mode, SHA-256 and authenticated display name—while legacy receipt 5 remains readable as intent without native-artifact authority. Windows `.lnk` and Linux `.desktop` codecs are implemented and independently verified, but publication stays fail-closed until WAL v5 can roll external known-folder mutations back. macOS remains blocked on a real signed product `.app`; a symlink or alias to a bare executable is not presented as LaunchServices support.
 
 ## Quick start
 
@@ -233,7 +235,7 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md). Keep changes as small vertical sl
 
 Questions belong in [Discussions](https://github.com/GofMan5/luxury-installer/discussions); reproducible defects use the issue forms. See [SUPPORT.md](SUPPORT.md), [CHANGELOG.md](CHANGELOG.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-The [installer product roadmap](docs/product-roadmap.md) is the single development plan from the current preview through signed 1.0 production. It contains the competitor matrix, P0–P3 priorities, workstreams, version milestones, exact slice order, performance budgets and hard Windows/Linux/macOS release gates. It also distinguishes useful capabilities from script-era mechanisms deliberately replaced by typed, reversible Rust actions.
+The [installer product roadmap](docs/product-roadmap.md) is the single development plan from the current preview through signed 1.0 production. Its dated competitor snapshot, normalized capability states, dependency-ordered vertical slices, measurable performance protocol and separate Studio/generated-installer final-byte gates keep release claims honest. The plan explicitly covers durable native maintenance, fleet automation, product-derived containers, desktop integration, components, prerequisite chaining and secure updates while replacing script-era escape hatches with typed reversible Rust actions.
 
 ## License
 

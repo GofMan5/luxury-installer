@@ -4,8 +4,9 @@ use luxury_engine::{
     PortError,
     install::PackageIdentity,
     uninstall::{
-        OwnershipReceipt, ReceiptError, RemoveFileOutcome, UninstallCommand, UninstallError,
-        UninstallEvent, UninstallOutcome, UninstallPhase, UninstallPort, uninstall,
+        OwnershipReceipt, ReceiptError, RemoveFileOutcome, ShortcutArtifact, ShortcutLocation,
+        ShortcutRemovalSummary, UninstallCommand, UninstallError, UninstallEvent, UninstallOutcome,
+        UninstallPhase, UninstallPort, uninstall,
     },
 };
 use luxury_spec::{
@@ -22,6 +23,7 @@ struct FakeUninstallPort {
     fail_at: Option<&'static str>,
     rollback_fails: bool,
     processed: Rc<Cell<usize>>,
+    shortcut_removal: ShortcutRemovalSummary,
 }
 
 impl FakeUninstallPort {
@@ -34,6 +36,7 @@ impl FakeUninstallPort {
             fail_at: None,
             rollback_fails: false,
             processed,
+            shortcut_removal: ShortcutRemovalSummary::default(),
         }
     }
 
@@ -64,6 +67,15 @@ impl UninstallPort for FakeUninstallPort {
     fn begin(&mut self, _receipt: &OwnershipReceipt) -> Result<(), PortError> {
         self.calls.push("begin".into());
         self.fail("begin")
+    }
+
+    fn remove_shortcuts(
+        &mut self,
+        _receipt: &OwnershipReceipt,
+    ) -> Result<ShortcutRemovalSummary, PortError> {
+        self.calls.push("remove shortcuts".into());
+        self.fail("remove shortcuts")?;
+        Ok(self.shortcut_removal)
     }
 
     fn remove_if_unchanged(
@@ -134,6 +146,25 @@ fn removes_only_unchanged_owned_files_and_preserves_everything_else() {
             preserved_modified_files: 1,
         }
     );
+    assert!(
+        port.calls.iter().position(|call| call == "begin").unwrap()
+            < port
+                .calls
+                .iter()
+                .position(|call| call == "remove shortcuts")
+                .unwrap()
+    );
+    assert!(
+        port.calls
+            .iter()
+            .position(|call| call == "remove shortcuts")
+            .unwrap()
+            < port
+                .calls
+                .iter()
+                .position(|call| call.starts_with("remove:"))
+                .unwrap()
+    );
     assert!(!port.files.contains_key("bin/demo.exe"));
     assert!(port.files.contains_key("share/readme.txt"));
     assert!(port.files.contains_key("notes/user.txt"));
@@ -184,7 +215,7 @@ fn missing_receipt_is_an_idempotent_noop() {
 }
 
 #[test]
-fn receipt_v5_binds_shortcuts_and_reads_v1_through_v4() {
+fn receipt_v6_binds_shortcut_artifacts_and_reads_v1_through_v5() {
     let current = receipt("dev.luxury.demo");
     assert_eq!(
         current.format_version(),
@@ -293,12 +324,12 @@ fn receipt_v5_binds_shortcuts_and_reads_v1_through_v4() {
     );
 
     let mut unsupported = current_json.clone();
-    unsupported["format_version"] = serde_json::json!(6);
+    unsupported["format_version"] = serde_json::json!(7);
     let unsupported: OwnershipReceipt = serde_json::from_value(unsupported).unwrap();
     assert_eq!(
         unsupported.validate(),
         Err(ReceiptError::UnsupportedFormat {
-            found: 6,
+            found: 7,
             supported: luxury_engine::uninstall::RECEIPT_FORMAT_VERSION,
         })
     );
@@ -352,6 +383,157 @@ fn receipt_v5_binds_shortcuts_and_reads_v1_through_v4() {
     .unwrap();
     assert!(matches!(outcome, UninstallOutcome::Uninstalled { .. }));
     assert!(port.receipt.is_none());
+}
+
+#[test]
+fn receipt_v5_keeps_intent_without_authority_and_v6_requires_exact_artifacts() {
+    let artifact = ShortcutArtifact::new(
+        ShortcutLocation::ApplicationMenu,
+        PackagePath::parse("Luxury Demo.lnk").unwrap(),
+        17,
+        digest('d'),
+        false,
+    )
+    .unwrap();
+    let current = receipt("dev.luxury.demo");
+    let mut v6 = serde_json::to_value(&current).unwrap();
+    v6["entrypoint"] = serde_json::json!("bin/demo.exe");
+    v6["shortcuts"] = serde_json::json!({"application_menu": true});
+    v6["shortcut_display_name"] = serde_json::json!("Luxury Demo");
+    v6["shortcut_artifacts"] = serde_json::to_value([artifact.clone()]).unwrap();
+    let receipt: OwnershipReceipt = serde_json::from_value(v6.clone()).unwrap();
+    receipt.validate().unwrap();
+    assert_eq!(receipt.shortcut_display_name(), Some("Luxury Demo"));
+    assert_eq!(receipt.shortcut_artifacts(), [artifact]);
+
+    let mut v5 = v6.clone();
+    v5["format_version"] = serde_json::json!(5);
+    v5.as_object_mut().unwrap().remove("shortcut_display_name");
+    v5.as_object_mut().unwrap().remove("shortcut_artifacts");
+    let legacy_intent: OwnershipReceipt = serde_json::from_value(v5.clone()).unwrap();
+    legacy_intent.validate().unwrap();
+    assert!(legacy_intent.shortcuts().application_menu);
+    assert_eq!(legacy_intent.shortcut_display_name(), None);
+    assert!(legacy_intent.shortcut_artifacts().is_empty());
+
+    v5["shortcut_display_name"] = serde_json::json!("Luxury Demo");
+    let legacy_authority: OwnershipReceipt = serde_json::from_value(v5).unwrap();
+    assert_eq!(
+        legacy_authority.validate(),
+        Err(ReceiptError::LegacyShortcutArtifacts)
+    );
+
+    let mut missing_display = v6.clone();
+    missing_display
+        .as_object_mut()
+        .unwrap()
+        .remove("shortcut_display_name");
+    let missing_display: OwnershipReceipt = serde_json::from_value(missing_display).unwrap();
+    assert_eq!(
+        missing_display.validate(),
+        Err(ReceiptError::MissingShortcutDisplayName)
+    );
+
+    let mut missing_artifact = v6.clone();
+    missing_artifact["shortcut_artifacts"] = serde_json::json!([]);
+    let missing_artifact: OwnershipReceipt = serde_json::from_value(missing_artifact).unwrap();
+    assert_eq!(
+        missing_artifact.validate(),
+        Err(ReceiptError::ShortcutArtifactCount {
+            expected: 1,
+            found: 0,
+        })
+    );
+
+    let mut wrong_location = v6.clone();
+    wrong_location["shortcut_artifacts"][0]["location"] = serde_json::json!("desktop");
+    let wrong_location: OwnershipReceipt = serde_json::from_value(wrong_location).unwrap();
+    assert_eq!(
+        wrong_location.validate(),
+        Err(ReceiptError::ShortcutArtifactLocations)
+    );
+
+    let mut nested_leaf = v6.clone();
+    nested_leaf["shortcut_artifacts"][0]["leaf"] = serde_json::json!("nested/Luxury Demo.lnk");
+    let nested_leaf: OwnershipReceipt = serde_json::from_value(nested_leaf).unwrap();
+    assert_eq!(
+        nested_leaf.validate(),
+        Err(ReceiptError::InvalidShortcutLeaf(
+            "nested/Luxury Demo.lnk".into()
+        ))
+    );
+
+    let mut invalid_display = v6;
+    invalid_display["shortcut_display_name"] = serde_json::json!("Luxury\u{202e}Demo");
+    let invalid_display: OwnershipReceipt = serde_json::from_value(invalid_display).unwrap();
+    assert_eq!(
+        invalid_display.validate(),
+        Err(ReceiptError::InvalidShortcutDisplayName)
+    );
+}
+
+#[test]
+fn default_port_uninstalls_v5_intent_without_inventing_artifact_authority() {
+    struct LegacyPort(FakeUninstallPort);
+
+    impl UninstallPort for LegacyPort {
+        fn recover_pending(&mut self, package_id: &PackageId) -> Result<(), PortError> {
+            self.0.recover_pending(package_id)
+        }
+
+        fn load_receipt(
+            &mut self,
+            package_id: &PackageId,
+        ) -> Result<Option<OwnershipReceipt>, PortError> {
+            self.0.load_receipt(package_id)
+        }
+
+        fn begin(&mut self, receipt: &OwnershipReceipt) -> Result<(), PortError> {
+            self.0.begin(receipt)
+        }
+
+        fn remove_if_unchanged(
+            &mut self,
+            receipt: &OwnershipReceipt,
+            file: &FileEntry,
+        ) -> Result<RemoveFileOutcome, PortError> {
+            self.0.remove_if_unchanged(receipt, file)
+        }
+
+        fn commit(&mut self) -> Result<(), PortError> {
+            self.0.commit()
+        }
+
+        fn rollback(&mut self) -> Result<(), PortError> {
+            self.0.rollback()
+        }
+    }
+
+    let mut value = serde_json::to_value(receipt("dev.luxury.demo")).unwrap();
+    value["format_version"] = serde_json::json!(5);
+    value["entrypoint"] = serde_json::json!("bin/demo.exe");
+    value["shortcuts"] = serde_json::json!({"application_menu": true});
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("shortcut_display_name");
+    value.as_object_mut().unwrap().remove("shortcut_artifacts");
+    let legacy: OwnershipReceipt = serde_json::from_value(value).unwrap();
+    legacy.validate().unwrap();
+
+    let mut port = LegacyPort(FakeUninstallPort::new(Some(legacy), Rc::new(Cell::new(0))));
+    port.0.files.insert("bin/demo.exe".into(), digest('a'));
+    let outcome = uninstall(
+        UninstallCommand::new(PackageId::parse("dev.luxury.demo").unwrap()),
+        &mut port,
+        || false,
+        |_| {},
+    )
+    .unwrap();
+
+    assert!(matches!(outcome, UninstallOutcome::Uninstalled { .. }));
+    assert!(port.0.receipt.is_none());
+    assert!(!port.0.files.contains_key("bin/demo.exe"));
 }
 
 #[test]
@@ -427,6 +609,41 @@ fn commit_failure_rolls_back_removed_files_and_keeps_receipt() {
     assert!(port.files.contains_key("share/readme.txt"));
     assert!(port.receipt.is_some());
     assert_eq!(port.calls.last().map(String::as_str), Some("rollback"));
+}
+
+#[test]
+fn shortcut_removal_failure_or_invalid_summary_rolls_back_before_payload_files() {
+    for (fail_at, summary) in [
+        (Some("remove shortcuts"), ShortcutRemovalSummary::default()),
+        (
+            None,
+            ShortcutRemovalSummary {
+                removed: 1,
+                ..ShortcutRemovalSummary::default()
+            },
+        ),
+    ] {
+        let receipt = receipt("dev.luxury.demo");
+        let mut port = FakeUninstallPort::new(Some(receipt), Rc::new(Cell::new(0)));
+        port.fail_at = fail_at;
+        port.shortcut_removal = summary;
+        let error = uninstall(
+            UninstallCommand::new(PackageId::parse("dev.luxury.demo").unwrap()),
+            &mut port,
+            || false,
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            UninstallError::Port {
+                step: "remove owned shortcuts",
+                ..
+            }
+        ));
+        assert_eq!(port.calls.last().map(String::as_str), Some("rollback"));
+        assert!(!port.calls.iter().any(|call| call.starts_with("remove:")));
+    }
 }
 
 #[test]

@@ -112,7 +112,7 @@ directory = "payload"
 executable = []
 ```
 
-Optional authoring fields include a 1-1024-character plain-text `package.description`, `package.license`, `install.allow_downgrade`, `install.entrypoint`, `install.show_install_log`, schema 4 `[install.shortcuts]`, and up to four `[[install.finish_links]]` HTTPS links. Shortcut intent is exactly `application_menu` plus `desktop` and always targets `install.entrypoint`; target/args/cwd/URL are not accepted. Windows entrypoints must end in `.exe`; Linux/macOS entrypoints must also appear in `payload.executable`. When enabled, Setup keeps the collapsed bounded manifest projection available during installation as a plan with factual counters and after completion as the result; it never exposes raw backend logs. Native shortcut creation is the next platform slice; current preflight returns typed `unsupported` before mutation.
+Optional authoring fields include a 1-1024-character plain-text `package.description`, `package.license`, `install.allow_downgrade`, `install.entrypoint`, `install.show_install_log`, schema 4 `[install.shortcuts]`, and up to four `[[install.finish_links]]` HTTPS links. Shortcut intent is exactly `application_menu` plus `desktop` and always targets `install.entrypoint`; target/args/cwd/URL are not accepted. Windows entrypoints must end in `.exe`; Linux/macOS entrypoints must also appear in `payload.executable`. When enabled, Setup keeps the collapsed bounded manifest projection available during installation as a plan with factual counters and after completion as the result; it never exposes raw backend logs. Receipt v6, engine shortcut ports and Windows/Linux native codecs exist, but current preflight remains typed `unsupported` because WAL v5 external-root publication is pending; macOS also needs a real signed product `.app`.
 
 After interactive Setup reaches terminal success and the user presses **Next**, **Show in folder** is available for both scopes. The renderer sends no path: user scope uses the retained validated selection, while system scope derives its install base from the shared Rust `luxury-system-roots` boundary. This is a GUI action, not a new CLI/JSONL method.
 
@@ -163,9 +163,9 @@ The receipt and SemVer precedence select the action:
 
 - no receipt: install;
 - strictly newer precedence: update;
-- equal precedence with the exact same file set, entrypoint, and shortcut intent: repair;
+- equal precedence with the exact same file set, entrypoint, shortcut intent, and authenticated display name: repair;
 - lower precedence: reject unless both `install.allow_downgrade = true` and explicit `--allow-downgrade` are present;
-- equal precedence with different files, entrypoint, or shortcut intent: reject as `reinstall_mismatch`.
+- equal precedence with different files, entrypoint, shortcut intent, or authenticated display name: reject as `reinstall_mismatch`.
 
 Update and repair are transactional. Unknown files are not adopted, modified obsolete files are preserved, removed owned files are deleted only when unchanged, and cancellation/failure restores the previous receipt and bytes. After success, use the same roots:
 

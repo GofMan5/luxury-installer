@@ -7,7 +7,7 @@ use luxury_engine::{
         InstallPort, InstallPrepareOutcome, InstallPreparePort, PackageIdentity,
         VerifiedPackageIdentity, install, prepare_install, prepare_system_install,
     },
-    uninstall::{OwnershipReceipt, RemoveFileOutcome},
+    uninstall::{OwnershipReceipt, RemoveFileOutcome, ShortcutArtifact, ShortcutLocation},
 };
 use luxury_spec::{
     Architecture, FORMAT_VERSION, FileEntry, InstallDirectory, InstallPolicy, InstallScope,
@@ -29,6 +29,8 @@ struct FakeInstallPort {
     staged_receipt: Option<OwnershipReceipt>,
     applied: Rc<Cell<usize>>,
     obsolete_outcome: RemoveFileOutcome,
+    shortcut_artifacts: Vec<ShortcutArtifact>,
+    capacity_plan: Option<(u64, OwnershipReceipt)>,
 }
 
 impl FakeInstallPort {
@@ -46,6 +48,8 @@ impl FakeInstallPort {
             staged_receipt: None,
             applied,
             obsolete_outcome: RemoveFileOutcome::Removed,
+            shortcut_artifacts: Vec::new(),
+            capacity_plan: None,
         }
     }
 
@@ -94,9 +98,11 @@ impl InstallPreparePort for FakeInstallPort {
 
     fn preflight(
         &mut self,
-        _plan: &InstallPlan,
+        plan: &InstallPlan,
         _previous: Option<&OwnershipReceipt>,
     ) -> Result<(), PortError> {
+        let estimate = plan.ownership_receipt();
+        self.capacity_plan = Some((plan.shortcut_receipt_capacity_reserve_bytes(), estimate));
         let result = self.call("preflight");
         if result.is_err() && self.recovery_after_preflight_failure {
             self.recovery_pending = true;
@@ -138,6 +144,15 @@ impl InstallPort for FakeInstallPort {
         }
         self.applied.set(self.applied.get() + 1);
         Ok(())
+    }
+
+    fn reconcile_shortcuts(
+        &mut self,
+        _plan: &InstallPlan,
+        _previous: Option<&OwnershipReceipt>,
+    ) -> Result<Vec<ShortcutArtifact>, PortError> {
+        self.call("reconcile shortcuts")?;
+        Ok(self.shortcut_artifacts.clone())
     }
 
     fn stage_receipt(&mut self, receipt: &OwnershipReceipt) -> Result<(), PortError> {
@@ -196,6 +211,7 @@ fn installs_verified_user_package_and_emits_monotonic_progress() {
             "begin",
             "apply:bin/demo.exe",
             "apply:share/readme.txt",
+            "reconcile shortcuts",
             "stage receipt",
             "commit",
         ]
@@ -1022,6 +1038,7 @@ fn shortcut_intent_is_persisted_and_changes_same_version_identity() {
     package.install.entrypoint = Some(package.files[0].path.clone());
     package.install.shortcuts.application_menu = true;
     let mut port = FakeInstallPort::new(Rc::new(Cell::new(0)));
+    port.shortcut_artifacts = vec![shortcut_artifact(ShortcutLocation::ApplicationMenu, 'c')];
 
     install(
         InstallCommand::new(package.clone()),
@@ -1033,6 +1050,8 @@ fn shortcut_intent_is_persisted_and_changes_same_version_identity() {
     let receipt = port.receipt.clone().unwrap();
     assert_eq!(receipt.entrypoint(), package.install.entrypoint.as_ref());
     assert_eq!(receipt.shortcuts(), package.install.shortcuts);
+    assert_eq!(receipt.shortcut_display_name(), Some("Luxury Demo"));
+    assert_eq!(receipt.shortcut_artifacts(), port.shortcut_artifacts);
 
     port.receipt = Some(receipt);
     let repaired = install(
@@ -1047,6 +1066,147 @@ fn shortcut_intent_is_persisted_and_changes_same_version_identity() {
     package.install.shortcuts.desktop = true;
     let error = install(InstallCommand::new(package), &mut port, || false, |_| {}).unwrap_err();
     assert!(matches!(error, InstallError::ReinstallMismatch { .. }));
+}
+
+#[test]
+fn shortcut_reconciliation_is_after_payload_and_receipt_rejects_inexact_authority() {
+    let mut package = manifest(InstallScope::User, Target::host());
+    package.install.entrypoint = Some(package.files[0].path.clone());
+    package.install.shortcuts.application_menu = true;
+
+    let mut port = FakeInstallPort::new(Rc::new(Cell::new(0)));
+    let error = install(
+        InstallCommand::new(package.clone()),
+        &mut port,
+        || false,
+        |_| {},
+    )
+    .unwrap_err();
+    assert!(matches!(error, InstallError::InvalidReceipt(_)));
+    assert_eq!(
+        &port.calls[port.calls.len() - 2..],
+        ["reconcile shortcuts", "rollback"]
+    );
+
+    let mut port = FakeInstallPort::new(Rc::new(Cell::new(0)));
+    port.shortcut_artifacts = vec![shortcut_artifact(ShortcutLocation::ApplicationMenu, 'c')];
+    port.fail_at = Some("reconcile shortcuts");
+    let error = install(InstallCommand::new(package), &mut port, || false, |_| {}).unwrap_err();
+    assert!(matches!(
+        error,
+        InstallError::Port {
+            step: "reconcile shortcuts",
+            ..
+        }
+    ));
+    assert!(
+        port.calls
+            .iter()
+            .position(|call| call == "apply:share/readme.txt")
+            .unwrap()
+            < port
+                .calls
+                .iter()
+                .position(|call| call == "reconcile shortcuts")
+                .unwrap()
+    );
+    assert_eq!(port.calls.last().map(String::as_str), Some("rollback"));
+}
+
+#[test]
+fn shortcut_display_name_is_bound_and_rejected_before_begin_if_not_receipt_safe() {
+    let mut package = manifest(InstallScope::User, Target::host());
+    package.install.entrypoint = Some(package.files[0].path.clone());
+    package.install.shortcuts.application_menu = true;
+    let mut port = FakeInstallPort::new(Rc::new(Cell::new(0)));
+    port.shortcut_artifacts = vec![shortcut_artifact(ShortcutLocation::ApplicationMenu, 'c')];
+
+    install(
+        InstallCommand::new(package.clone()),
+        &mut port,
+        || false,
+        |_| {},
+    )
+    .unwrap();
+    let receipt = port.receipt.clone().unwrap();
+
+    package.package.name = "Renamed Luxury Demo".into();
+    port.calls.clear();
+    let error = install(
+        InstallCommand::new(package.clone()),
+        &mut port,
+        || false,
+        |_| {},
+    )
+    .unwrap_err();
+    assert!(matches!(error, InstallError::ReinstallMismatch { .. }));
+    assert_eq!(port.calls, ["verify", "recover", "load receipt"]);
+
+    package.package.version = Version::new(2, 0, 0);
+    package.package.name = "Luxury\u{202e}Demo".into();
+    port.calls.clear();
+    let mut prepare_port = FakeInstallPort::new(Rc::new(Cell::new(0)));
+    let prepare_error = prepare_install(package.clone(), &mut prepare_port).unwrap_err();
+    assert_eq!(
+        prepare_error,
+        InstallError::InvalidReceipt(
+            luxury_engine::uninstall::ReceiptError::InvalidShortcutDisplayName
+        )
+    );
+    assert_eq!(prepare_port.calls, ["verify"]);
+
+    let error = install(InstallCommand::new(package), &mut port, || false, |_| {}).unwrap_err();
+    assert_eq!(
+        error,
+        InstallError::InvalidReceipt(
+            luxury_engine::uninstall::ReceiptError::InvalidShortcutDisplayName
+        )
+    );
+    assert!(port.calls.is_empty());
+    assert_eq!(port.receipt, Some(receipt));
+}
+
+#[test]
+fn shortcut_capacity_reserve_is_bounded_and_does_not_fabricate_authority() {
+    let mut disabled = manifest(InstallScope::User, Target::host());
+    let mut port = FakeInstallPort::new(Rc::new(Cell::new(0)));
+    prepare_install(disabled.clone(), &mut port).unwrap();
+    let (reserve, estimate) = port.capacity_plan.take().unwrap();
+    assert_eq!(reserve, 0);
+    assert!(estimate.shortcuts().is_disabled());
+    assert!(estimate.shortcut_artifacts().is_empty());
+
+    disabled.install.entrypoint = Some(disabled.files[0].path.clone());
+    disabled.install.shortcuts.application_menu = true;
+    disabled.install.shortcuts.desktop = true;
+    disabled.package.name = "\u{10ffff}".repeat(128);
+    port.shortcut_artifacts = vec![
+        ShortcutArtifact::new(
+            ShortcutLocation::ApplicationMenu,
+            PackagePath::parse(format!("{}.lnk", "x".repeat(251))).unwrap(),
+            u64::MAX,
+            digest('c'),
+            true,
+        )
+        .unwrap(),
+        ShortcutArtifact::new(
+            ShortcutLocation::Desktop,
+            PackagePath::parse(format!("{}.desktop", "y".repeat(247))).unwrap(),
+            u64::MAX,
+            digest('d'),
+            true,
+        )
+        .unwrap(),
+    ];
+    install(InstallCommand::new(disabled), &mut port, || false, |_| {}).unwrap();
+    let (reserve, estimate) = port.capacity_plan.take().unwrap();
+    assert!(estimate.shortcuts().is_disabled());
+    assert!(estimate.shortcut_artifacts().is_empty());
+    let estimated_bytes = serde_json::to_vec_pretty(&estimate).unwrap().len() as u64;
+    let actual_bytes = serde_json::to_vec_pretty(port.receipt.as_ref().unwrap())
+        .unwrap()
+        .len() as u64;
+    assert!(actual_bytes <= estimated_bytes + reserve);
 }
 
 #[test]
@@ -1095,11 +1255,12 @@ fn upgrade_removes_obsolete_files_before_applying_and_tracks_total_work() {
     assert_eq!(outcome.installed_files, 2);
     assert_eq!(outcome.installed_bytes, 7);
     assert_eq!(
-        &port.calls[5..9],
+        &port.calls[5..10],
         [
             "remove:legacy/old.dll",
             "apply:bin/demo.exe",
             "apply:share/readme.txt",
+            "reconcile shortcuts",
             "stage receipt",
         ]
     );
@@ -1530,6 +1691,21 @@ fn file(path: &str, size: u64, digest: char, executable: bool) -> FileEntry {
 
 fn digest(value: char) -> Sha256Digest {
     Sha256Digest::parse(value.to_string().repeat(64)).unwrap()
+}
+
+fn shortcut_artifact(location: ShortcutLocation, value: char) -> ShortcutArtifact {
+    ShortcutArtifact::new(
+        location,
+        PackagePath::parse(match location {
+            ShortcutLocation::ApplicationMenu => "Luxury Demo.lnk",
+            ShortcutLocation::Desktop => "Luxury Demo.desktop",
+        })
+        .unwrap(),
+        17,
+        digest(value),
+        false,
+    )
+    .unwrap()
 }
 
 fn non_host_target() -> Target {

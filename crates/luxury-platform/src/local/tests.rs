@@ -17,8 +17,8 @@ use luxury_engine::{
         InstallPreparePort, PackageIdentity, install, prepare_install,
     },
     uninstall::{
-        OwnershipReceipt, RECEIPT_FORMAT_VERSION, UninstallCommand, UninstallError,
-        UninstallOutcome, UninstallPort, uninstall,
+        OwnershipReceipt, RECEIPT_FORMAT_VERSION, ShortcutArtifact, ShortcutLocation,
+        UninstallCommand, UninstallError, UninstallOutcome, UninstallPort, uninstall,
     },
 };
 use luxury_spec::{
@@ -41,8 +41,8 @@ use super::{
     ActiveTransaction, JournalRecord, LocalInstallAdapter, LocalUninstallAdapter, Operation,
     begin_transaction, begin_transaction_with_package_lock, begin_uninstall_transaction,
     ensure_directory, hash_regular, io_error, load_recovery, lock_package, open_regular,
-    read_receipt_with_hash, removed_file, same_file, staged_file, staged_receipt,
-    sync_movable_regular_snapshot, transaction_paths,
+    read_receipt_with_hash, removed_file, same_file, same_receipt_identity_for_test, staged_file,
+    staged_receipt, sync_movable_regular_snapshot, transaction_paths,
 };
 
 // Public deterministic fixtures. Never use these keys for a real package.
@@ -3721,6 +3721,50 @@ fn active_uninstall_is_bound_to_the_locked_receipt() {
     assert_eq!(error.kind(), PortErrorKind::State);
     assert_eq!(fs::read(&installed).unwrap(), b"owned");
     adapter.rollback().unwrap();
+}
+
+#[test]
+fn receipt_identity_binds_shortcut_display_and_artifacts() {
+    let artifact = ShortcutArtifact::new(
+        ShortcutLocation::ApplicationMenu,
+        PackagePath::parse("dev.luxury.demo.desktop").unwrap(),
+        42,
+        digest(b"shortcut"),
+        false,
+    )
+    .unwrap();
+    let base = OwnershipReceipt::new(
+        PackageId::parse("dev.luxury.demo").unwrap(),
+        Version::new(1, 0, 0),
+        InstallScope::User,
+        InstallDirectory::parse("LuxuryDemo").unwrap(),
+        PackageIdentity::Unsigned,
+        vec![FileEntry {
+            path: PackagePath::parse("bin/demo.exe").unwrap(),
+            size: 5,
+            sha256: digest(b"owned"),
+            executable: true,
+        }],
+    )
+    .unwrap();
+    let mut value = serde_json::to_value(base).unwrap();
+    value["entrypoint"] = serde_json::json!("bin/demo.exe");
+    value["shortcuts"] = serde_json::json!({"application_menu": true});
+    value["shortcut_display_name"] = serde_json::json!("Luxury Demo");
+    value["shortcut_artifacts"] = serde_json::to_value([artifact]).unwrap();
+    let receipt: OwnershipReceipt = serde_json::from_value(value).unwrap();
+    receipt.validate().unwrap();
+    let mut changed_display = serde_json::to_value(&receipt).unwrap();
+    changed_display["shortcut_display_name"] = serde_json::json!("Different Demo");
+    let changed_display: OwnershipReceipt = serde_json::from_value(changed_display).unwrap();
+    changed_display.validate().unwrap();
+    assert!(!same_receipt_identity_for_test(&receipt, &changed_display));
+
+    let mut changed_artifact = serde_json::to_value(&receipt).unwrap();
+    changed_artifact["shortcut_artifacts"][0]["sha256"] = serde_json::json!("f".repeat(64));
+    let changed_artifact: OwnershipReceipt = serde_json::from_value(changed_artifact).unwrap();
+    changed_artifact.validate().unwrap();
+    assert!(!same_receipt_identity_for_test(&receipt, &changed_artifact));
 }
 
 #[test]

@@ -1,11 +1,17 @@
 mod capacity;
 mod launch;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)] // Wired by the transactional shortcut slice.
+mod linux_shortcuts;
 mod transaction;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows;
+#[cfg(windows)]
+#[allow(dead_code, unsafe_code)] // Wired by the transactional shortcut slice.
+mod windows_shortcuts;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1020,6 +1026,13 @@ fn same_receipt_identity(left: &OwnershipReceipt, right: &OwnershipReceipt) -> b
         && left.payload_signer() == right.payload_signer()
         && left.entrypoint() == right.entrypoint()
         && left.shortcuts() == right.shortcuts()
+        && left.shortcut_display_name() == right.shortcut_display_name()
+        && left.shortcut_artifacts() == right.shortcut_artifacts()
+}
+
+#[cfg(test)]
+fn same_receipt_identity_for_test(left: &OwnershipReceipt, right: &OwnershipReceipt) -> bool {
+    same_receipt_identity(left, right)
 }
 
 fn check_destination_files(
