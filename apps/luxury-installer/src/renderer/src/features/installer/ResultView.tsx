@@ -2,6 +2,8 @@ import { Check, ExternalLink, FolderOpen, Play, RotateCcw, SquareDashed, SquareX
 
 import type { FinishLink, InstallResultAction } from '../../types'
 
+export type ProductLinkKind = 'homepage' | 'support'
+
 export function CompleteView({
   name,
   action,
@@ -10,24 +12,28 @@ export function CompleteView({
   actionPending,
   actionError,
   finishLinks,
+  productLinks,
   onLaunch,
   onReveal,
   onOpenLink,
+  onOpenProductLink,
   onClose,
 }: {
   name: string
   action: InstallResultAction
   canLaunch: boolean
   canReveal: boolean
-  actionPending: 'launch' | 'reveal' | 'close' | number | null
+  actionPending: 'launch' | 'reveal' | 'close' | ProductLinkKind | number | null
   actionError: string | null
   finishLinks: FinishLink[]
+  productLinks: ProductLinkKind[]
   onLaunch(): void
   onReveal(): void
   onOpenLink(index: number): void
+  onOpenProductLink(kind: ProductLinkKind): void
   onClose(): void
 }) {
-  const hasLinks = canReveal || finishLinks.length > 0
+  const hasLinks = canReveal || finishLinks.length > 0 || productLinks.length > 0
   return (
     <section className="screen result-screen result-screen--complete" aria-labelledby="complete-title">
       <div className="result-complete__summary">
@@ -61,6 +67,18 @@ export function CompleteView({
           >
             {actionPending === index ? <SquareDashed className="spin" size={16} /> : <ExternalLink size={16} />}
             <span>{actionPending === index ? 'Открываем…' : link.label}</span>
+          </button>
+        ))}
+        {productLinks.map((kind) => (
+          <button
+            className="secondary-button"
+            type="button"
+            key={kind}
+            disabled={actionPending !== null}
+            onClick={() => onOpenProductLink(kind)}
+          >
+            {actionPending === kind ? <SquareDashed className="spin" size={16} /> : <ExternalLink size={16} />}
+            <span>{actionPending === kind ? 'Открываем…' : kind === 'homepage' ? 'Сайт продукта' : 'Поддержка'}</span>
           </button>
         ))}
       </div> : null}

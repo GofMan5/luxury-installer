@@ -1,6 +1,6 @@
 ---
 name: luxury-installer-cli
-description: Build native Luxury Installer outputs, inspect and sign internal packages, automate install/update/repair/uninstall/launch, and use the strict JSONL v3 protocol. Use for Luxury Installer repository work, AI-driven authoring, CI, Studio backend operations, or any request involving the luxury command or native packager.
+description: Build native Luxury Installer outputs, inspect and sign internal packages, automate install/update/repair/uninstall/launch, and use the strict JSONL v4 protocol. Use for Luxury Installer repository work, AI-driven authoring, CI, Studio backend operations, or any request involving the luxury command or native packager.
 ---
 
 # Luxury Installer CLI
@@ -18,7 +18,7 @@ Use the repository's current binary as authority. Never guess a command or retai
 ## Choose the interface
 
 - Use the human CLI for one-shot local or CI commands.
-- Use `luxury stdio` for a long-lived typed v3 subprocess, Tauri integration, or an AI tool that needs structured results, progress, cancellation, and stable errors.
+- Use `luxury stdio` for a long-lived typed v4 subprocess, Tauri integration, or an AI tool that needs structured results, progress, cancellation, and stable errors.
 - Use Studio for interactive unsigned-v1 authoring. Save or explicitly undo a dirty draft before new/open/reload; Rust owns close confirmation and treats a missing correlated renderer reply as dirty. Add files without overwrite or replace the complete payload from one native-selected directory; keep every native selection in the Rust shell and never give the renderer generic filesystem or dialog authority.
 - Use `cargo project-installer -- <absolute-project> <absolute-native-output>` for the file a user ships: Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg`. Treat `.luxpkg` as the low-level signing/lifecycle boundary, not the Studio result.
 - Use the final bound launcher's read-only `--info-json` for inventory and `--unattended-install` / `--unattended-uninstall` for deployment. Never extract its internal package or invent path flags; pass consent flags only with explicit caller authority.
@@ -30,10 +30,12 @@ Use the repository's current binary as authority. Never guess a command or retai
 - Pass a private signing key only through the documented stdin flag. Never put it in argv, JSONL, environment variables, project files, logs, fixtures, or chat output.
 - Supply consent flags only when the caller explicitly authorized them. Never infer unsigned, license, downgrade, or publisher-migration consent.
 - Treat `install.show_install_log` as presentation policy only: Setup shows the bounded authenticated manifest projection during and after installation, never raw backend output or privileged paths.
-- Treat manifest schema 4 `install.shortcuts` as two booleans only: `applicationMenu`/`application_menu` and `desktop`. Either requires the existing exact entrypoint; never add target, args, cwd, URL, shell, or environment fields. Receipt v6/engine ports and Windows/Linux codecs exist, but native preparation intentionally returns `unsupported` before mutation until WAL v5 external-root publication ships; macOS also requires a real signed product `.app`.
+- Treat manifest schema 4 `install.shortcuts` as two booleans only: `applicationMenu`/`application_menu` and `desktop`. Either requires the existing exact entrypoint; never add target, args, cwd, URL, shell, or environment fields. Receipt v7 owns exact typed artifact identity next to the product-metadata snapshot, the engine has shortcut ports, and Windows/Linux codecs exist, but native preparation intentionally returns `unsupported` before mutation until WAL v5 external-root publication ships; macOS also requires a real signed product `.app`.
+- Treat schema 5 `package.icon`, `package.homepage`, and `package.support` as one product identity. Icon is an exact non-executable payload path (`.ico`/`.png`/`.icns` by target), at most 4 MiB and fully decoded during bundle open. URLs are bounded credential-free HTTPS. Receipt v7 owns the snapshot; publisher display text is not signing authority.
+- Do not retry same-version repair against receipt v1-v6: legacy state has no product-metadata authority. Uninstall or a strictly newer update is the supported migration to receipt v7.
 - Treat stdout from `luxury stdio` as protocol-only. Drain stdout and stderr independently and keep request IDs unique while active.
 - Treat a cancel transport error as an active operation, not a cancelled result. Keep reading the original request, show the bounded error, and retry only the pathless cancel intent; terminal cancellation requires the original correlated result/error after rollback.
-- For system Setup completion, privileged helper protocol v2 carries a fresh `prepare_system_install` result in the successful install/uninstall terminal frame and the renderer receives that authoritative review. Treat that state as authoritative, never synthesize Install/Repair or open a second authorization prompt, and clear cached maintenance state when the field is absent or invalid so the next bootstrap refreshes it through the helper. This internal protocol is separate from public JSONL v3 and package format versions.
+- For system Setup completion, privileged helper protocol v2 carries a fresh `prepare_system_install` result in the successful install/uninstall terminal frame and the renderer receives that authoritative review. Treat that state as authoritative, never synthesize Install/Repair or open a second authorization prompt, and clear cached maintenance state when the field is absent or invalid so the next bootstrap refreshes it through the helper. This internal protocol is separate from public JSONL v4 and package format versions.
 - On the completed Setup surface, keep launch/reveal/link/close failures inline. Record a successful launch before requesting window close and never repeat launch to recover from a close error.
 - Do not retry collisions, state conflicts, publisher failures, downgrade denial, or reinstall mismatch without changing the proven cause.
 - Native multi-build requires matching Windows/Linux/macOS runners. Never claim that Windows produced a notarized macOS artifact or publish the blocked Linux desktop graph.

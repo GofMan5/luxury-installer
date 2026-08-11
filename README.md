@@ -34,7 +34,7 @@ Open Studio and describe the application instead of hand-writing a setup script:
 - keep unsaved edits visible and protected: project switching and reload stay locked until you save or undo, and closing Studio asks before discarding the draft;
 - add files or a complete folder through native dialogs, or safely replace the whole payload with a staged new build folder;
 - choose the launch file from the real payload;
-- add a license, optional installation details, up to four HTTPS finish links, and schema 4 application-menu/desktop shortcut intent tied to the selected launch file;
+- add a license, optional installation details, up to four HTTPS finish links, schema 4 shortcuts, and schema 5 product icon/homepage/support identity;
 - press one build action to save and revalidate current edits, build a real `.exe`, `.deb` + `.rpm`, or `.dmg` with a human-readable product-name file/folder suggestion, then reveal it directly from Studio.
 
 The internal package container stays between the Rust compiler and packager and is deleted with the build workspace. It is not the file a Studio user ships. Source and output paths stay in the Rust shell; React receives validated portable settings, not generic filesystem access. Replacing the complete payload clears a missing entrypoint and its now-unbound shortcut intent together.
@@ -66,11 +66,13 @@ There is no built-in update-download service yet. Updating means launching a new
 | Ownership | Receipts live outside the removable application tree. Unknown or modified data is not claimed. |
 | Desktop | Fixed adaptive Codex-style Tauri window with a small exact ACL and no renderer shell/fs/process permission. |
 | Build speed | Core Rust and desktop graphs are separate; routine work uses targeted gates instead of a serial native matrix. |
-| Automation | Human CLI plus strict typed JSONL v3 over stdin/stdout for agents and desktop composition. |
+| Automation | Human CLI plus strict typed JSONL v4 over stdin/stdout for agents and desktop composition. |
 
-Manifest capability `schema_version` is independent of package trust `format_version`: schema 2 adds the exact entrypoint, schema 3 adds the authenticated license, and schema 4 adds bounded receipt-owned shortcut intent. Package trust formats remain v1-v3.
+Manifest capability `schema_version` is independent of package trust `format_version`: schema 2 adds the exact entrypoint, schema 3 the authenticated license, schema 4 bounded shortcuts, and schema 5 one product identity with optional target-native payload icon plus HTTPS homepage/support. Package trust formats remain v1-v3.
 
-Receipt format 6 now reserves exact native shortcut ownership—typed location, portable leaf, size, mode, SHA-256 and authenticated display name—while legacy receipt 5 remains readable as intent without native-artifact authority. Windows `.lnk` and Linux `.desktop` codecs are implemented and independently verified, but publication stays fail-closed until WAL v5 can roll external known-folder mutations back. macOS remains blocked on a real signed product `.app`; a symlink or alias to a bare executable is not presented as LaunchServices support.
+Receipt format 7 retains the complete authenticated product metadata snapshot; format 6 remains readable with exact shortcut ownership and no product-metadata authority. Same-version repair compares this snapshot instead of silently accepting changed branding/support data. Shortcut publication still waits for WAL v5, and macOS still needs a real signed product `.app`.
+
+A same-version package cannot repair a receipt from formats 1–6 because those receipts have no authenticated product-metadata snapshot. Uninstall remains supported, and a strictly newer package performs the migration to receipt v7.
 
 ## Quick start
 
@@ -154,7 +156,7 @@ My-App-Setup.exe --unattended-install --allow-unsigned
 My-App-Setup.exe --unattended-uninstall
 ```
 
-`--info-json` validates the bound payload, build fingerprint, backend, and host target, then prints one schema-2 JSON line for inventory or deployment planning. Schema 2 adds the required shortcut policy object. It is read-only, opens no window or authorization prompt, and exposes bounded display metadata and counts—not license text, finish URLs, internal package paths, or native roots. Windows packaging re-runs this command through the final outer Setup and rejects broken stdout/stderr forwarding.
+`--info-json` validates the bound payload, build fingerprint, backend, and host target, then prints one schema-2 JSON line for inventory or deployment planning; that line always carries the strict `install.shortcuts` object. It is deliberately stable and omits license text, finish URLs, schema-5 product URLs/icon path, internal package paths, and native roots. Setup retains homepage/support in Rust and opens them only through the exact pathless post-install action; JSONL v4 carries authoring metadata separately. Windows packaging re-runs this command through the final outer Setup.
 
 Current Studio builds are unsigned development artifacts, so they need explicit `--allow-unsigned`. Add `--accept-license` only when the authenticated package contains a license, and `--allow-publisher-migration` only when preflight requires that migration. Unattended removal is idempotent. Paths, keys, downgrade approval, launch, and arbitrary commands are not accepted.
 
@@ -184,7 +186,7 @@ For coding agents and CI clients:
 
 - [`llms.txt`](llms.txt) is the compact repository map;
 - [`luxury-installer-cli`](skills/luxury-installer-cli/SKILL.md) is the reusable agent skill;
-- its [CLI and JSONL v3 reference](skills/luxury-installer-cli/references/cli.md) contains every current command, method, envelope, consent, update rule, and cancellation pattern;
+- its [CLI and JSONL v4 reference](skills/luxury-installer-cli/references/cli.md) contains every current command, method, envelope, consent, update rule, and cancellation pattern;
 - [`docs/ai-build.md`](docs/ai-build.md) maps changes to the smallest useful verification gate.
 
 The repository test derives the live JSONL method table and fails when the AI guide, `llms.txt`, or skill falls behind.

@@ -23,6 +23,7 @@ use crate::{
         InstallResultAction, InstallScope, LaunchResult, MAX_SAFE_INTEGER, OperationKind,
         OperationMessage, PackageTrust, PrepareInstallResult, PreparedAction, PublisherRotation,
         ShortcutPolicy, Target, TargetArch, TargetOs, UninstallResult, strict_value,
+        valid_public_https_url,
     },
 };
 
@@ -58,7 +59,6 @@ const OPERATION_EVENT: &str = "luxury://operation-event";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 const MAX_FINISH_LINKS: usize = 4;
 const MAX_FINISH_LINK_LABEL_CHARS: usize = 48;
-const MAX_FINISH_LINK_URL_BYTES: usize = 2_048;
 const MAX_INSTALL_LOG_FILES: usize = 128;
 
 #[derive(Clone)]
@@ -163,6 +163,12 @@ struct PackageSummary {
     version: String,
     description: Option<String>,
     license: Option<String>,
+    #[serde(skip_serializing)]
+    homepage: Option<String>,
+    #[serde(skip_serializing)]
+    support: Option<String>,
+    has_homepage: bool,
+    has_support: bool,
     target_os: TargetOs,
     target_arch: TargetArch,
     install_directory: String,
@@ -664,6 +670,37 @@ pub(crate) fn open_finish_link(
         .get(index)
         .ok_or_else(|| PublicError::new("finish_link_not_available", "Ссылка недоступна."))?;
     tauri_plugin_opener::open_url(&link.url, None::<&str>)
+        .map_err(|_| PublicError::new("open_link_failed", "Не удалось открыть ссылку."))
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ProductLinkKind {
+    Homepage,
+    Support,
+}
+
+#[tauri::command]
+pub(crate) fn open_product_link(
+    kind: ProductLinkKind,
+    state: State<'_, AppState>,
+) -> Result<(), PublicError> {
+    state.require_mode(AppMode::Setup)?;
+    let context = setup_context(state.inner())?;
+    let _starting = acquire_idle(state.inner(), &context)?;
+    if !context.install_completed.load(Ordering::Acquire) {
+        return Err(PublicError::new(
+            "product_link_not_available",
+            "Ссылка станет доступна после завершения установки.",
+        ));
+    }
+    let url = match kind {
+        ProductLinkKind::Homepage => context.package.summary.homepage.as_deref(),
+        ProductLinkKind::Support => context.package.summary.support.as_deref(),
+    }
+    .filter(|url| valid_public_https_url(url))
+    .ok_or_else(|| PublicError::new("product_link_not_available", "Ссылка продукта недоступна."))?;
+    tauri_plugin_opener::open_url(url, None::<&str>)
         .map_err(|_| PublicError::new("open_link_failed", "Не удалось открыть ссылку."))
 }
 
@@ -1722,6 +1759,8 @@ impl BoundPackage {
             || !rotation_valid
             || !valid_hash(&inspected.package_fingerprint)
             || !valid_package_id(&inspected.package.id)
+            || luxury_spec::PackageId::parse(&inspected.package.id)
+                .is_ok_and(|id| id.is_reserved_native_identity())
             || !valid_text(&inspected.package.name)
             || !valid_text(&inspected.package.publisher)
             || !valid_text(&inspected.package.version)
@@ -1735,6 +1774,18 @@ impl BoundPackage {
                 .license
                 .as_deref()
                 .is_some_and(|license| !valid_license(license))
+            || inspected.package.icon.as_ref().is_some_and(|icon| {
+                inspected.schema_version < luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION as u8
+                    || !icon.is_valid_for(inspected.target.os, inspected.payload.bytes)
+            })
+            || inspected.package.homepage.as_deref().is_some_and(|url| {
+                inspected.schema_version < luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION as u8
+                    || !valid_public_https_url(url)
+            })
+            || inspected.package.support.as_deref().is_some_and(|url| {
+                inspected.schema_version < luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION as u8
+                    || !valid_public_https_url(url)
+            })
             || !valid_install_directory(&inspected.install.directory)
             || inspected.install.finish_links.len() > MAX_FINISH_LINKS
             || inspected.install.finish_links.iter().any(|link| {
@@ -1750,7 +1801,7 @@ impl BoundPackage {
                                 | '\u{2066}'..='\u{2069}'
                         )
                     })
-                    || !valid_https_url(&link.url)
+                    || !valid_public_https_url(&link.url)
             })
             || !valid_install_log(
                 inspected.install.show_install_log,
@@ -1765,6 +1816,8 @@ impl BoundPackage {
                 "Компонент установщика вернул недопустимый пакет.",
             ));
         }
+        let has_homepage = inspected.package.homepage.is_some();
+        let has_support = inspected.package.support.is_some();
         Ok(Self {
             path,
             fingerprint: inspected.package_fingerprint,
@@ -1775,6 +1828,10 @@ impl BoundPackage {
                 version: inspected.package.version,
                 description: inspected.package.description,
                 license: inspected.package.license,
+                homepage: inspected.package.homepage,
+                support: inspected.package.support,
+                has_homepage,
+                has_support,
                 target_os: inspected.target.os,
                 target_arch: inspected.target.arch,
                 install_directory: inspected.install.directory,
@@ -1943,49 +2000,6 @@ fn valid_install_log_path(value: &str) -> bool {
     luxury_spec::PackagePath::parse(value).is_ok()
 }
 
-fn valid_https_url(value: &str) -> bool {
-    if value.len() > MAX_FINISH_LINK_URL_BYTES
-        || value
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
-        || value.contains(['\\', '\u{061c}', '\u{200e}', '\u{200f}'])
-        || value
-            .chars()
-            .any(|character| matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
-    {
-        return false;
-    }
-    let Some(remainder) = value.strip_prefix("https://") else {
-        return false;
-    };
-    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
-    let authority = &remainder[..authority_end];
-    if authority.is_empty() || authority.contains('@') || !authority.is_ascii() {
-        return false;
-    }
-    let (host, port) = authority
-        .rsplit_once(':')
-        .map_or((authority, None), |(host, port)| (host, Some(port)));
-    !host.is_empty()
-        && host.len() <= 253
-        && host.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                && label
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_alphanumeric)
-                && label
-                    .as_bytes()
-                    .last()
-                    .is_some_and(u8::is_ascii_alphanumeric)
-        })
-        && port.is_none_or(|port| port.parse::<u16>().is_ok_and(|port| port != 0))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -2007,6 +2021,9 @@ mod tests {
                 version: "1.0.0".into(),
                 description: None,
                 license: None,
+                icon: None,
+                homepage: None,
+                support: None,
             },
             target: Target {
                 os: TargetOs::Windows,
@@ -2149,6 +2166,61 @@ mod tests {
         assert!(BoundPackage::from_backend("payload.luxpkg".into(), unicode_description).is_ok());
 
         value.payload.install_log.as_mut().unwrap().files[0] = "../escape".into();
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), value).is_err());
+    }
+
+    #[test]
+    fn product_metadata_is_schema_bound_and_icon_path_stays_out_of_renderer() {
+        let mut value = inspected();
+        value.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION as u8;
+        value.package.icon = Some(crate::backend::ProductIcon {
+            path: "branding/app.ico".into(),
+            size: 29,
+            sha256: "b".repeat(64),
+        });
+        value.package.homepage = Some("https://example.com".into());
+        value.package.support = Some("https://example.com/support".into());
+
+        let package = BoundPackage::from_backend("payload.luxpkg".into(), value.clone()).unwrap();
+        // The validated icon never enters the Setup summary at all, so it cannot leak.
+        assert!(package.summary.has_homepage);
+        assert!(package.summary.has_support);
+        let rendered = serde_json::to_value(&package.summary).unwrap();
+        assert_eq!(rendered["hasHomepage"], true);
+        assert_eq!(rendered["hasSupport"], true);
+        assert!(rendered.get("icon").is_none());
+        assert!(rendered.get("homepage").is_none());
+        assert!(rendered.get("support").is_none());
+
+        let target = value.target.clone();
+        let info = serde_json::to_value(package_info(package, target)).unwrap();
+        assert_eq!(info["schemaVersion"], 2);
+        assert!(info["package"].get("icon").is_none());
+        assert!(info["package"].get("homepage").is_none());
+        assert!(info["package"].get("support").is_none());
+
+        value.schema_version = luxury_spec::SHORTCUT_SCHEMA_VERSION as u8;
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), value).is_err());
+    }
+
+    #[test]
+    fn product_icon_descriptor_is_exact_and_reserved_namespace_fails_closed() {
+        let mut value = inspected();
+        value.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION as u8;
+        value.package.icon = Some(crate::backend::ProductIcon {
+            path: "branding/app.ico".into(),
+            size: 29,
+            sha256: "b".repeat(64),
+        });
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), value.clone()).is_ok());
+
+        value.package.icon.as_mut().unwrap().size = 0;
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), value.clone()).is_err());
+        value.package.icon.as_mut().unwrap().size = 29;
+        value.package.icon.as_mut().unwrap().sha256 = "B".repeat(64);
+        assert!(BoundPackage::from_backend("payload.luxpkg".into(), value.clone()).is_err());
+        value.package.icon.as_mut().unwrap().sha256 = "b".repeat(64);
+        value.package.id = "software.luxury.installer.product".into();
         assert!(BoundPackage::from_backend("payload.luxpkg".into(), value).is_err());
     }
 

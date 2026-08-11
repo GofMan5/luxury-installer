@@ -12,6 +12,7 @@ fn main() {
         "import_project_files",
         "import_project_directory",
         "choose_project_entrypoint",
+        "choose_project_icon",
         "reveal_project",
         "reveal_build_output",
         "build_project",
@@ -24,6 +25,7 @@ fn main() {
         "launch_installed",
         "reveal_installed",
         "open_finish_link",
+        "open_product_link",
         "minimize_window",
         "close_window",
     ];

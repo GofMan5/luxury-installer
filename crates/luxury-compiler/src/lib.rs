@@ -10,8 +10,9 @@ use std::{
 };
 
 use luxury_spec::{
-    FORMAT_VERSION, FileEntry, InstallPolicy, Manifest, PUBLISHER_ROTATION_FORMAT_VERSION, Package,
-    PackagePath, PublisherRotation, SIGNED_FORMAT_VERSION, Sha256Digest, SpecError, Target,
+    FORMAT_VERSION, FileEntry, InstallPolicy, Manifest, PRODUCT_IDENTITY_SCHEMA_VERSION,
+    PUBLISHER_ROTATION_FORMAT_VERSION, Package, PackagePath, PublisherRotation,
+    SIGNED_FORMAT_VERSION, Sha256Digest, SpecError, Target,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -61,6 +62,8 @@ pub enum CompilerError {
     DuplicateExecutable(String),
     #[error("configured executable `{0}` is not a regular payload file with that exact path")]
     MissingExecutable(String),
+    #[error("product icon `{path}` is not a valid native {format} image")]
+    InvalidProductIcon { path: String, format: &'static str },
     #[error("bundle output `{0}` must not be inside the payload directory")]
     OutputInsidePayload(PathBuf),
     #[error("bundle output path `{0}` has no file name")]
@@ -308,6 +311,19 @@ fn prepare_project_source(
         files,
     };
     manifest.validate()?;
+    // The manifest only reconciles the icon path, size and extension. Decode the bytes here too,
+    // so authoring refuses a project the package reader would reject after a full native build.
+    if let Some(icon) = manifest.package.icon.as_ref()
+        && !luxury_bundle::valid_native_icon(
+            manifest.target.os,
+            &payload_root.join(icon.to_native_path()),
+        )
+    {
+        return Err(CompilerError::InvalidProductIcon {
+            path: icon.to_string(),
+            format: luxury_bundle::native_icon_format(manifest.target.os),
+        });
+    }
     check_cancelled(cancelled)?;
 
     Ok((payload_root, manifest))
@@ -720,14 +736,23 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
 
 fn sample_config() -> String {
     let target = Target::host();
+    let icon_extension = match target.os {
+        luxury_spec::OperatingSystem::Windows => "ico",
+        luxury_spec::OperatingSystem::Linux => "png",
+        luxury_spec::OperatingSystem::Macos => "icns",
+    };
     format!(
         r#"format_version = {FORMAT_VERSION}
+# schema_version = {PRODUCT_IDENTITY_SCHEMA_VERSION} # required together with icon/homepage/support
 
 [package]
 id = "dev.luxury.demo"
 name = "Luxury Demo"
 version = "1.0.0"
 publisher = "Luxury Software"
+# icon = "branding/product.{icon_extension}"
+# homepage = "https://example.com"
+# support = "https://example.com/support"
 
 [target]
 os = "{}"
@@ -770,6 +795,15 @@ mod tests {
         "KEY-----\n"
     );
     const TEST_TRUSTED_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\n-----END PUBLIC KEY-----\n";
+
+    fn native_ico() -> Vec<u8> {
+        let image = ico::IconImage::from_rgba_data(1, 1, vec![0x10, 0x20, 0x30, 0xff]);
+        let mut directory = ico::IconDir::new(ico::ResourceType::Icon);
+        directory.add_entry(ico::IconDirEntry::encode(&image).unwrap());
+        let mut bytes = Vec::new();
+        directory.write(&mut bytes).unwrap();
+        bytes
+    }
     const NEXT_SIGNING_KEY_PEM: &str = concat!(
         "-----BEGIN PRIVATE ",
         "KEY-----\nMC4CAQAwBQYDK2VwBCIEIEzNCJso/5banbbDRuwRTg9bijGfNaumJNqM9u1PuKb7\n-----END PRIVATE ",
@@ -803,10 +837,12 @@ mod tests {
         let manifest = compile_project(&project, &output).unwrap();
         assert_eq!(manifest.schema_version, 1);
         assert!(manifest.install.entrypoint.is_none());
+        // The scaffold documents the key but never sets it, so a fresh project stays legacy 1.
         assert!(
             !fs::read_to_string(project.join(PROJECT_FILE))
                 .unwrap()
-                .contains("schema_version")
+                .lines()
+                .any(|line| line.starts_with("schema_version"))
         );
         let first_bundle = fs::read(&output).unwrap();
         compile_project(&project, &output).unwrap();
@@ -913,6 +949,90 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, CompilerError::ProjectNotEditable));
         assert_eq!(fs::read(&config).unwrap(), signed.as_bytes());
+    }
+
+    #[test]
+    fn studio_product_identity_selects_schema_five_and_survives_round_trip() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        init_project(&project).unwrap();
+        let original = validate_project(&project).unwrap();
+        let mut package = original.package.clone();
+        package.homepage = Some("https://example.com/product".into());
+        package.support = Some("https://example.com/support".into());
+
+        let updated = update_project(
+            &project,
+            ProjectUpdate {
+                package,
+                target: original.target,
+                install: original.install,
+                executable: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            updated.schema_version,
+            luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION
+        );
+        assert_eq!(validate_project(&project).unwrap(), updated);
+        let source = fs::read_to_string(project.join(PROJECT_FILE)).unwrap();
+        assert!(source.contains("homepage = \"https://example.com/product\""));
+        assert!(source.contains("support = \"https://example.com/support\""));
+    }
+
+    #[test]
+    fn product_icon_bytes_are_decoded_before_a_project_is_accepted() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        init_project(&project).unwrap();
+        let extension = match Target::host().os {
+            luxury_spec::OperatingSystem::Windows => "ico",
+            luxury_spec::OperatingSystem::Linux => "png",
+            luxury_spec::OperatingSystem::Macos => "icns",
+        };
+        let icon = format!("branding/product.{extension}");
+        fs::create_dir_all(project.join("payload/branding")).unwrap();
+        fs::write(project.join("payload").join(&icon), b"not an icon at all").unwrap();
+
+        // The scaffold's own commented identity block is usable exactly as written.
+        let config = project.join(PROJECT_FILE);
+        let scaffold = fs::read_to_string(&config).unwrap();
+        assert!(scaffold.contains(&format!("# icon = \"{icon}\"")));
+        fs::write(
+            &config,
+            scaffold
+                .replacen(
+                    &format!("# schema_version = {PRODUCT_IDENTITY_SCHEMA_VERSION}"),
+                    &format!("schema_version = {PRODUCT_IDENTITY_SCHEMA_VERSION}"),
+                    1,
+                )
+                .replacen(
+                    &format!("# icon = \"{icon}\""),
+                    &format!("icon = \"{icon}\""),
+                    1,
+                ),
+        )
+        .unwrap();
+
+        let error = validate_project(&project).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                CompilerError::InvalidProductIcon { path, .. } if path == &icon
+            ),
+            "unexpected error: {error:?}"
+        );
+
+        if Target::host().os == luxury_spec::OperatingSystem::Windows {
+            fs::write(project.join("payload").join(&icon), native_ico()).unwrap();
+            let validated = validate_project(&project).unwrap();
+            assert_eq!(validated.schema_version, PRODUCT_IDENTITY_SCHEMA_VERSION);
+            assert_eq!(
+                validated.package.icon.as_ref().map(PackagePath::as_str),
+                Some(icon.as_str())
+            );
+        }
     }
 
     #[test]
@@ -1056,8 +1176,12 @@ mod tests {
         let first_source = temp.path().join("first");
         fs::create_dir(&first_source).unwrap();
         fs::write(first_source.join("old.exe"), b"old application").unwrap();
+        fs::write(first_source.join("shared.ico"), native_ico()).unwrap();
         fs::write(first_source.join("shared.txt"), b"old shared").unwrap();
         let first = replace_payload(&project, &first_source).unwrap();
+        let mut package = first.package.clone();
+        package.icon = Some(PackagePath::parse("shared.ico").unwrap());
+        package.homepage = Some("https://example.com".into());
         let mut install = first.install.clone();
         install.entrypoint = Some(PackagePath::parse("old.exe").unwrap());
         install.shortcuts.application_menu = true;
@@ -1065,7 +1189,7 @@ mod tests {
         let configured = update_project(
             &project,
             ProjectUpdate {
-                package: first.package,
+                package,
                 target: Target {
                     os: luxury_spec::OperatingSystem::Windows,
                     arch: first.target.arch,
@@ -1077,7 +1201,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             configured.schema_version,
-            luxury_spec::SHORTCUT_SCHEMA_VERSION
+            luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION
         );
 
         let next_source = temp.path().join("next");
@@ -1085,17 +1209,28 @@ mod tests {
         fs::write(next_source.join("OLD.EXE"), b"new application").unwrap();
         fs::write(next_source.join("shared.txt"), b"new shared").unwrap();
         fs::write(next_source.join("assets/data.bin"), b"data").unwrap();
+        // Same icon path, but the replacement bytes are no longer a decodable ICO. The guard must
+        // read the staged replacement, not the payload tree it is about to discard.
+        fs::write(next_source.join("shared.ico"), b"not an icon any more").unwrap();
         let replaced = replace_payload(&project, &next_source).unwrap();
-        assert_eq!(replaced.schema_version, 1);
         assert!(replaced.install.entrypoint.is_none());
         assert!(!replaced.install.shortcuts.enabled());
+        assert!(replaced.package.icon.is_none());
+        assert_eq!(
+            replaced.package.homepage.as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            replaced.schema_version,
+            luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION
+        );
         assert_eq!(
             replaced
                 .files
                 .iter()
                 .map(|file| file.path.as_str())
                 .collect::<Vec<_>>(),
-            ["OLD.EXE", "assets/data.bin", "shared.txt"]
+            ["OLD.EXE", "assets/data.bin", "shared.ico", "shared.txt"]
         );
         assert_eq!(
             fs::read(project.join("payload/shared.txt")).unwrap(),

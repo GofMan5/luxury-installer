@@ -6,10 +6,11 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Added
 
+- Manifest schema 5 and JSONL v4 add one authenticated product identity: target-native payload icon plus HTTPS homepage/support. Bundle opening fully decodes bounded ICO/PNG/ICNS bytes, receipt v7 persists the snapshot, and same-version repair rejects metadata drift while Setup/Studio branding stays separate.
 - An evidence-based master roadmap from preview to signed 1.0 production: a dated current-competitor snapshot, normalized capability states, dependency-ordered vertical slices, durable maintenance/fleet/container work, typed desktop/components/prerequisite/updater priorities, enforced performance and compatibility gates, and separate Studio/generated-installer final-byte release contracts.
 - Manifest schema 4 adds bounded application-menu/desktop shortcut intent tied to the exact entrypoint. Compiler, plan, legacy receipt v5 intent, JSONL, Studio authoring and the strict Setup review contract preserve it; Setup bootstrap remains unsupported before review/mutation until WAL v5 external-root publication lands, while macOS additionally requires a real product `.app`.
 - Bound Setup `--info-json` response schema is now v2 and requires the strict shortcut policy object; final Windows container verification rejects older or drifted response shapes.
-- Ownership receipt v6 adds exact native shortcut artifact authority and explicit engine reconciliation/removal ports. Isolated Windows `.lnk` and Linux `.desktop` codecs are verified; external publication still fails closed pending WAL v5, and macOS remains gated on a real product `.app`.
+- Ownership receipt v7 adds exact native shortcut artifact authority plus the authenticated product-metadata snapshot, and explicit engine reconciliation/removal ports. Formats 1-6 remain readable but carry no product-metadata authority. Isolated Windows `.lnk` and Linux `.desktop` codecs are verified; external publication still fails closed pending WAL v5, and macOS remains gated on a real product `.app`.
 - Rust-first `.luxpkg` compiler, verifier, transactional installer, repair, uninstall, rollback/recovery, receipts, and explicit receipt-owned launch.
 - Tauri 2 Studio and bound-payload Setup for Windows, Linux, and macOS development workflows.
 - Publisher-authenticated v2 packages, v3 key rotation, and schema-v3 plain-text license consent.
@@ -19,7 +20,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 - Staged whole-payload replacement from a native folder picker, with rollback and stale-entrypoint cleanup for repeat release builds.
 - A pathless Studio action that reveals the last verified native build output.
 - Authenticated package descriptions now appear in Setup instead of being authorable but invisible.
-- Safe per-command CLI help plus strict JSONL v3, a validated public AI skill, and a complete CLI/protocol reference.
+- Safe per-command CLI help plus strict JSONL v4, a validated public AI skill, and a complete CLI/protocol reference.
 - One native project build command that publishes Windows `.exe`, Linux `.deb` + `.rpm`, or macOS `.dmg` while keeping the package handoff internal.
 - A bounded recent-project list that revalidates projects before reopening them.
 - Strict windowless install/uninstall on the final bound Setup, with explicit consent flags, idempotent removal, and stable exit codes for deployment tools.

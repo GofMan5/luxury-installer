@@ -477,6 +477,7 @@ fn public_backend_message(code: &str) -> (&str, &'static str) {
         "project_update_failed" => "Не удалось сохранить настройки проекта.",
         "project_validation_failed" => "Проверка проекта не пройдена.",
         "payload_path_invalid" => "Выберите обычный файл внутри payload проекта.",
+        "product_link_not_available" => "Ссылка продукта сейчас недоступна.",
         "publisher_migration_not_offered" => "Подтверждение смены издателя сейчас недоступно.",
         "publisher_migration_required" => "Требуется подтверждение смены привязки издателя.",
         "publisher_mismatch"

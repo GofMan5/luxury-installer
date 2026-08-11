@@ -34,7 +34,7 @@ use luxury_platform::{
 };
 use luxury_spec::{
     Architecture, FinishLink, InstallDirectory, InstallPolicy, InstallScope, Manifest,
-    OperatingSystem, Package, PackageId, PackagePath, Target,
+    OperatingSystem, Package, PackageId, PackagePath, ProductIcon, Target,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -571,6 +571,9 @@ fn update_project(
             publisher: params.package.publisher,
             description: params.package.description,
             license: params.package.license,
+            icon: params.package.icon,
+            homepage: params.package.homepage,
+            support: params.package.support,
         },
         target: Target {
             os: params.target.os,
@@ -1520,6 +1523,12 @@ struct UpdatePackageParams {
     description: Option<String>,
     #[serde(default)]
     license: Option<String>,
+    #[serde(default)]
+    icon: Option<PackagePath>,
+    #[serde(default)]
+    homepage: Option<String>,
+    #[serde(default)]
+    support: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1930,6 +1939,9 @@ impl ProjectResult {
                 version,
                 description: manifest.package.description.clone(),
                 license: manifest.package.license.clone(),
+                icon: manifest.package.product_metadata(&manifest.files).icon,
+                homepage: manifest.package.homepage.clone(),
+                support: manifest.package.support.clone(),
             },
             target: TargetResult::from(manifest.target),
             install: InstallResultPolicy {
@@ -2065,6 +2077,12 @@ struct PackageResult {
     description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     license: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon: Option<ProductIcon>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    support: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2436,26 +2454,36 @@ mod tests {
 
     #[test]
     fn request_contract_is_strict_and_ids_are_safe_to_echo() {
+        let current = luxury_spec::JSONL_PROTOCOL_VERSION;
         let request = parse_request(
-            br#"{"protocolVersion":3,"id":"request_1","method":"defaults","params":{}}"#,
+            format!(
+                r#"{{"protocolVersion":{current},"id":"request_1","method":"defaults","params":{{}}}}"#
+            )
+            .as_bytes(),
         )
         .unwrap();
         assert_eq!(request.id, "request_1");
 
         let snake_case = parse_request(
-            br#"{"protocol_version":3,"id":"request_2","method":"defaults","params":{}}"#,
+            format!(
+                r#"{{"protocol_version":{current},"id":"request_2","method":"defaults","params":{{}}}}"#
+            )
+            .as_bytes(),
         )
         .unwrap_err();
         assert_eq!(snake_case.id.as_deref(), Some("request_2"));
         assert_eq!(snake_case.error.code, "invalid_request");
 
         let unsafe_id = parse_request(
-            br#"{"protocolVersion":3,"id":"bad id","method":"defaults","params":{}}"#,
+            format!(
+                r#"{{"protocolVersion":{current},"id":"bad id","method":"defaults","params":{{}}}}"#
+            )
+            .as_bytes(),
         )
         .unwrap_err();
         assert_eq!(unsafe_id.id, None);
 
-        let previous = stdio_request_version(2, "defaults", json!({}));
+        let previous = stdio_request_version(current - 1, "defaults", json!({}));
         assert_eq!(previous["error"]["code"], "unsupported_protocol");
     }
 
@@ -2602,6 +2630,70 @@ mod tests {
         let rejected = stdio_request("updateProject", extra);
         assert_eq!(rejected["error"]["code"], "invalid_params");
         assert_eq!(fs::read(project.join("luxury.toml")).unwrap(), before);
+    }
+
+    #[test]
+    fn product_identity_wire_round_trips_schema_five_and_rejects_unsafe_metadata() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        let project_path = project.to_str().unwrap();
+        assert_eq!(
+            stdio_request("initProject", json!({"projectPath": project_path}))["type"],
+            "result"
+        );
+        let target = Target::host();
+        let params = json!({
+            "projectPath": project_path,
+            "package": {
+                "id": "dev.human.app",
+                "name": "Human App",
+                "version": "2.1.0",
+                "publisher": "Human Publisher",
+                "description": null,
+                "license": null,
+                "icon": null,
+                "homepage": "https://example.com/product",
+                "support": "https://support.example.com/help"
+            },
+            "target": {"os": target.os.to_string(), "arch": target.arch.to_string()},
+            "install": {
+                "scope": "user",
+                "directory": "Human App",
+                "allowDowngrade": false,
+                "entrypoint": null,
+                "showInstallLog": false,
+                "finishLinks": [],
+                "shortcuts": {"applicationMenu": false, "desktop": false}
+            }
+        });
+        let updated = stdio_request("updateProject", params.clone());
+        assert_eq!(updated["type"], "result");
+        assert_eq!(
+            updated["result"]["schemaVersion"],
+            luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION
+        );
+        assert_eq!(updated["result"]["package"]["icon"], Value::Null);
+        assert_eq!(
+            updated["result"]["package"]["homepage"],
+            "https://example.com/product"
+        );
+        assert_eq!(
+            updated["result"]["package"]["support"],
+            "https://support.example.com/help"
+        );
+
+        let mut unsafe_url = params.clone();
+        unsafe_url["package"]["support"] = json!("http://example.com");
+        assert_eq!(
+            stdio_request("updateProject", unsafe_url)["error"]["code"],
+            "project_update_failed"
+        );
+        let mut wrong_icon = params;
+        wrong_icon["package"]["icon"] = json!("branding/app.txt");
+        assert_eq!(
+            stdio_request("updateProject", wrong_icon)["error"]["code"],
+            "project_update_failed"
+        );
     }
 
     #[test]

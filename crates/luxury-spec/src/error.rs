@@ -36,6 +36,28 @@ pub enum SpecError {
         "manifest schema {found} does not support install.shortcuts; schema {required} is required"
     )]
     ShortcutsRequireSchema { found: u32, required: u32 },
+    #[error(
+        "manifest schema {found} does not support product identity metadata; schema {required} is required"
+    )]
+    ProductIdentityRequiresSchema { found: u32, required: u32 },
+    #[error("product icon `{0}` is not an exact manifest file")]
+    ProductIconMissingFile(String),
+    #[error("product icon `{0}` must not be executable")]
+    ProductIconExecutable(String),
+    #[error("product icon `{path}` has {size} bytes; limit is {limit}")]
+    ProductIconTooLarge { path: String, size: u64, limit: u64 },
+    #[error("product icon `{path}` must use the native {expected} format for {target}")]
+    ProductIconWrongFormat {
+        path: String,
+        target: &'static str,
+        expected: &'static str,
+    },
+    #[error("product icon `{0}` identity does not match its manifest file")]
+    ProductIconIdentityMismatch(String),
+    #[error("package ID `{0}` is reserved for Luxury Installer infrastructure")]
+    ReservedNativePackageId(String),
+    #[error("package {field} must be a bounded HTTPS URL without credentials")]
+    InvalidProductUrl { field: &'static str },
     #[error("install.shortcuts requires an exact receipt-owned entrypoint")]
     ShortcutsRequireEntrypoint,
     #[error("install entrypoint `{0}` is not an exact manifest file")]

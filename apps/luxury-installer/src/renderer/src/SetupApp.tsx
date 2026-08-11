@@ -10,6 +10,7 @@ import {
   CompleteView,
   ErrorView,
   UninstallCompleteView,
+  type ProductLinkKind,
 } from './features/installer/ResultView'
 import { ReviewView } from './features/installer/ReviewView'
 import type { InstallResultAction, LuxuryBridge, SetupAction } from './types'
@@ -21,7 +22,7 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
   const workspace = useRef<HTMLElement>(null)
   const resultPendingRef = useRef(false)
   const [resultPending, setResultPending] = useState<
-    'launch' | 'reveal' | 'close' | number | null
+    'launch' | 'reveal' | 'close' | ProductLinkKind | number | null
   >(null)
   const [resultError, setResultError] = useState<string | null>(null)
   const [launchSucceeded, setLaunchSucceeded] = useState(false)
@@ -37,7 +38,7 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
   }, [view.kind])
 
   const runResultAction = async (
-    action: 'launch' | 'reveal' | 'close' | number,
+    action: 'launch' | 'reveal' | 'close' | ProductLinkKind | number,
     operation: () => Promise<void>,
   ) => {
     if (resultPendingRef.current) return
@@ -144,6 +145,10 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
             actionPending={resultPending}
             actionError={resultError}
             finishLinks={summary.finishLinks}
+            productLinks={[
+              ...(summary.hasHomepage ? ['homepage' as const] : []),
+              ...(summary.hasSupport ? ['support' as const] : []),
+            ]}
             onLaunch={() =>
               void runResultAction('launch', async () => {
                 await installer.bridge.launchInstalled()
@@ -154,6 +159,9 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
             onReveal={() => void runResultAction('reveal', installer.bridge.revealInstalled)}
             onOpenLink={(index) =>
               void runResultAction(index, () => installer.bridge.openFinishLink(index))
+            }
+            onOpenProductLink={(kind) =>
+              void runResultAction(kind, () => installer.bridge.openProductLink(kind))
             }
             onClose={() => void runResultAction('close', installer.bridge.closeWindow)}
           />

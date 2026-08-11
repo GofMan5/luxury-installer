@@ -25,6 +25,8 @@ const packageSummary = {
   version: '1.0.0',
   description: null,
   license: null,
+  hasHomepage: false,
+  hasSupport: false,
   targetOs: 'windows',
   targetArch: 'x86_64',
   installDirectory: 'Luxury Demo',
@@ -95,6 +97,97 @@ test('portable install directory rejects path syntax', () => {
       false,
     )
   }
+})
+
+test('portable payload paths match Rust byte and component bounds', () => {
+  assert.equal(studioProjectSchema.safeParse({
+    projectPath: String.raw`C:\projects\demo`,
+    formatVersion: 1,
+    schemaVersion: 5,
+    packageId: 'dev.luxury.demo',
+    name: 'Demo',
+    publisher: 'Publisher',
+    version: '1.0.0',
+    description: null,
+    license: null,
+    icon: `${'a'.repeat(255)}/${'b'.repeat(251)}.ico`,
+    homepage: null,
+    support: null,
+    hasLicense: false,
+    targetOs: 'windows',
+    targetArch: 'x86_64',
+    installDirectory: 'Demo',
+    scope: 'user',
+    allowDowngrade: false,
+    entrypoint: null,
+    hasEntrypoint: false,
+    showInstallLog: false,
+    finishLinks: [],
+    shortcuts: { applicationMenu: false, desktop: false },
+    executableFiles: 0,
+    files: 1,
+    bytes: 29,
+  }).success, true)
+  for (const icon of ['CON.ico', 'bad?.ico', `${'я'.repeat(256)}.ico`, `${'a'.repeat(509)}.ico`]) {
+    assert.equal(studioProjectSchema.safeParse({
+      ...{
+        projectPath: String.raw`C:\projects\demo`, formatVersion: 1, schemaVersion: 5,
+        packageId: 'dev.luxury.demo', name: 'Demo', publisher: 'Publisher', version: '1.0.0',
+        description: null, license: null, homepage: null, support: null, hasLicense: false,
+        targetOs: 'windows', targetArch: 'x86_64', installDirectory: 'Demo', scope: 'user',
+        allowDowngrade: false, entrypoint: null, hasEntrypoint: false, showInstallLog: false,
+        finishLinks: [], shortcuts: { applicationMenu: false, desktop: false }, executableFiles: 0,
+        files: 1, bytes: 29,
+      },
+      icon,
+    }).success, false)
+  }
+})
+
+test('product links stay strict HTTPS metadata and icon paths stay target-native', () => {
+  assert.equal(
+    packageSummarySchema.safeParse({
+      ...packageSummary,
+      hasHomepage: true,
+      hasSupport: true,
+    }).success,
+    true,
+  )
+  assert.equal(
+    packageSummarySchema.safeParse({ ...packageSummary, homepage: 'file:///tmp/icon' }).success,
+    false,
+  )
+  const studio = {
+    projectPath: String.raw`C:\projects\demo`,
+    formatVersion: 1,
+    schemaVersion: 5,
+    packageId: 'dev.luxury.demo',
+    name: 'Luxury Demo',
+    publisher: 'Luxury Software',
+    version: '1.0.0',
+    description: null,
+    license: null,
+    icon: 'branding/app.ico',
+    homepage: 'https://example.com',
+    support: null,
+    hasLicense: false,
+    targetOs: 'windows',
+    targetArch: 'x86_64',
+    installDirectory: 'Luxury Demo',
+    scope: 'user',
+    allowDowngrade: false,
+    entrypoint: null,
+    hasEntrypoint: false,
+    showInstallLog: false,
+    finishLinks: [],
+    shortcuts: { applicationMenu: false, desktop: false },
+    executableFiles: 0,
+    files: 1,
+    bytes: 29,
+  }
+  assert.equal(studioProjectSchema.safeParse(studio).success, true)
+  assert.equal(studioProjectSchema.safeParse({ ...studio, icon: 'branding/app.png' }).success, false)
+  assert.equal(studioProjectSchema.safeParse({ ...studio, schemaVersion: 4 }).success, false)
 })
 
 test('shortened UNC paths keep the server and share visible', () => {
@@ -342,6 +435,9 @@ test('Studio paths stay display-only and absolute', () => {
     version: '1.0.0',
     description: null,
     license: null,
+    icon: null,
+    homepage: null,
+    support: null,
     hasLicense: false,
     targetOs: 'windows',
     targetArch: 'x86_64',
@@ -640,7 +736,18 @@ test('renderer invokes only consent and pathless intents', async () => {
   )
   assert.match(bridge, /revealProject: \(\) => invokeCommand\('reveal_project'\)/)
   assert.match(bridge, /revealBuildOutput: \(\) => invokeCommand\('reveal_build_output'\)/)
-  assert.match(bridge, /parsedInvoke\('open_recent_project', studioProjectSchema, \{[\s\S]*?index:/)
+  // Every outbound schema parse is deferred into parsedInvoke's try block, so a rejected
+  // argument surfaces as one public error instead of a raw ZodError.
+  assert.match(bridge, /parsedInvoke\('open_recent_project', studioProjectSchema, \(\) => \(\{[\s\S]*?index:/)
+  assert.match(
+    bridge,
+    /parsedInvoke\('update_project', studioProjectSchema, \(\) => \(\{[\s\S]*?studioProjectUpdateSchema\.parse/,
+  )
+  assert.match(
+    bridge,
+    /parsedInvoke\('start_install', operationStartedSchema, \(\) => \(\{[\s\S]*?installRequestSchema\.parse/,
+  )
+  assert.match(bridge, /typeof args === 'function' \? args\(\) : args/)
   assert.match(bridge, /openFinishLink: \(index\) => invokeCommand\('open_finish_link', \{ index \}\)/)
   assert.equal(bridge.includes('{ url'), false)
 })
@@ -698,13 +805,44 @@ test('completion screen separates optional links from primary completion actions
   assert.match(styles, /\.result-links\s*\{[\s\S]*?grid-template-columns:/)
 })
 
+test('product identity commands remain pathless and exact-capability scoped', async () => {
+  const [bridge, shell, app, capability, build, result, studio] = await Promise.all([
+    readFile(new URL('../src/renderer/src/tauri-bridge.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/studio.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/capabilities/main.json', import.meta.url), 'utf8'),
+    readFile(new URL('../src-tauri/build.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/features/installer/ResultView.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/StudioApp.tsx', import.meta.url), 'utf8'),
+  ])
+  assert.match(bridge, /chooseProjectIcon: \(\) => parsedInvoke\('choose_project_icon', portablePath\.nullable\(\)\)/)
+  assert.match(bridge, /openProductLink: \(kind\) => invokeCommand\('open_product_link', \{ kind \}\)/)
+  assert.match(shell, /"resolvePayloadPath"/)
+  assert.match(shell, /fn choose_project_icon_sync/)
+  assert.match(app, /studio::choose_project_icon/)
+  assert.match(app, /setup::open_product_link/)
+  assert.match(capability, /allow-choose-project-icon/)
+  assert.match(capability, /allow-open-product-link/)
+  assert.match(build, /"choose_project_icon"/)
+  assert.match(build, /"open_product_link"/)
+  assert.match(result, /productLinks\.map/)
+  assert.doesNotMatch(bridge, /open_product_link[^\n]*url/i)
+  // Both payload pickers resolve against the last Rust-validated project, so a dirty draft must block them.
+  assert.match(
+    studio,
+    /disabled=\{busy \|\| dirty \|\| draft\.targetOs !== project\.targetOs\}[\s\S]{0,200}?onChooseIcon\(\)/,
+  )
+  assert.match(studio, /disabled=\{busy \|\| dirty\}[\s\S]{0,200}?onChooseEntrypoint\(\)/)
+  assert.equal(studio.match(/Сохраните изменения перед выбором файла\./g)?.length, 2)
+})
+
 test('completion launch failure stays inline and close failure cannot relaunch the app', async () => {
   const [app, controller, result] = await Promise.all([
     readFile(new URL('../src/renderer/src/SetupApp.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/renderer/src/use-installer.ts', import.meta.url), 'utf8'),
     readFile(new URL('../src/renderer/src/features/installer/ResultView.tsx', import.meta.url), 'utf8'),
   ])
-  assert.match(app, /'launch' \| 'reveal' \| 'close' \| number \| null/)
+  assert.match(app, /'launch' \| 'reveal' \| 'close' \| ProductLinkKind \| number \| null/)
   assert.match(
     app,
     /await installer\.bridge\.launchInstalled\(\)[\s\S]*?setLaunchSucceeded\(true\)[\s\S]*?await installer\.bridge\.closeWindow\(\)/,

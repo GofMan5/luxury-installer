@@ -66,13 +66,24 @@ const installLogPath = z
 export const portablePath = z
   .string()
   .min(1)
-  .max(4_096)
+  .refine((value) => new TextEncoder().encode(value).length <= 512)
   .refine(
     (value) =>
       !value.startsWith('/') &&
       !value.startsWith('\\') &&
-      !/[\\:\0]/u.test(value) &&
-      value.split('/').every((component) => component.length > 0 && component !== '.' && component !== '..'),
+      !/[\\:\0<>"|?*]/u.test(value) &&
+      value.split('/').every((component) => {
+        const stem = (component.split('.', 1)[0] ?? '').toUpperCase()
+        const windowsDevice = /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])$/u.test(stem)
+        return component.length > 0 &&
+          component !== '.' &&
+          component !== '..' &&
+          new TextEncoder().encode(component).length <= 255 &&
+          !component.endsWith('.') &&
+          !component.endsWith(' ') &&
+          !/[\u0000-\u001f\u007f-\u009f]/u.test(component) &&
+          !windowsDevice
+      }),
   )
 const installLog = z
   .object({ files: z.array(installLogPath).max(128), omittedFiles: count })
@@ -83,6 +94,7 @@ const finishLink = z
 const shortcutPolicy = z
   .object({ applicationMenu: z.boolean(), desktop: z.boolean() })
   .strict()
+const productUrl = z.string().max(2_048).refine(validHttpsUrl)
 
 const trust = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unsigned') }).strict(),
@@ -101,6 +113,8 @@ export const packageSummarySchema = z
     version: text,
     description: text.nullable(),
     license: license.nullable(),
+    hasHomepage: z.boolean(),
+    hasSupport: z.boolean(),
     targetOs,
     targetArch,
     installDirectory,
@@ -193,13 +207,16 @@ export const studioProjectSchema = z
   .object({
     projectPath: path,
     formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
     packageId,
     name: text,
     publisher: text,
     version: text,
     description: text.nullable(),
     license: license.nullable(),
+    icon: portablePath.nullable(),
+    homepage: productUrl.nullable(),
+    support: productUrl.nullable(),
     hasLicense: z.boolean(),
     targetOs,
     targetArch,
@@ -217,6 +234,12 @@ export const studioProjectSchema = z
   })
   .strict()
   .superRefine((value, context) => {
+    if (
+      value.schemaVersion >= 5 &&
+      (value.packageId === 'software.luxury.installer' || value.packageId.startsWith('software.luxury.installer.'))
+    ) {
+      context.addIssue({ code: 'custom', path: ['packageId'], message: 'reserved native identity' })
+    }
     if (value.hasEntrypoint !== (value.entrypoint !== null) || (value.hasEntrypoint && value.schemaVersion < 2)) {
       context.addIssue({ code: 'custom', path: ['hasEntrypoint'], message: 'schema mismatch' })
     }
@@ -228,6 +251,12 @@ export const studioProjectSchema = z
       (!value.hasEntrypoint || value.schemaVersion < 4)
     ) {
       context.addIssue({ code: 'custom', path: ['shortcuts'], message: 'schema mismatch' })
+    }
+    if ((value.icon !== null || value.homepage !== null || value.support !== null) && value.schemaVersion < 5) {
+      context.addIssue({ code: 'custom', path: ['icon'], message: 'schema mismatch' })
+    }
+    if (value.icon !== null && !validIconPath(value.icon, value.targetOs)) {
+      context.addIssue({ code: 'custom', path: ['icon'], message: 'target icon format required' })
     }
     if (value.executableFiles > value.files) {
       context.addIssue({ code: 'custom', path: ['executableFiles'], message: 'count mismatch' })
@@ -242,6 +271,9 @@ export const studioProjectUpdateSchema = z
     version: text,
     description: text.nullable(),
     license: license.nullable(),
+    icon: portablePath.nullable(),
+    homepage: productUrl.nullable(),
+    support: productUrl.nullable(),
     targetOs,
     targetArch,
     installDirectory,
@@ -253,6 +285,17 @@ export const studioProjectUpdateSchema = z
     shortcuts: shortcutPolicy,
   })
   .strict()
+  .superRefine((value, context) => {
+    if (
+      (value.icon !== null || value.homepage !== null || value.support !== null) &&
+      (value.packageId === 'software.luxury.installer' || value.packageId.startsWith('software.luxury.installer.'))
+    ) {
+      context.addIssue({ code: 'custom', path: ['packageId'], message: 'reserved native identity' })
+    }
+    if (value.icon !== null && !validIconPath(value.icon, value.targetOs)) {
+      context.addIssue({ code: 'custom', path: ['icon'], message: 'target icon format required' })
+    }
+  })
   .refine(
     (value) =>
       !(value.shortcuts.applicationMenu || value.shortcuts.desktop) || value.entrypoint !== null,
@@ -290,6 +333,11 @@ export const installRequestSchema = z
     allowPublisherMigration: z.boolean(),
   })
   .strict()
+
+function validIconPath(value: string, os: z.infer<typeof targetOs>): boolean {
+  const extension = { windows: '.ico', linux: '.png', macos: '.icns' }[os]
+  return value.toLowerCase().endsWith(extension)
+}
 
 const installPhase = z.enum([
   'validating',

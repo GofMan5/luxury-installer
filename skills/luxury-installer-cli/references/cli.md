@@ -1,4 +1,4 @@
-# Luxury Installer CLI and JSONL v3
+# Luxury Installer CLI and JSONL v4
 
 ## Contents
 
@@ -59,7 +59,7 @@ cargo project-installer -- C:\work\my-app-installer C:\work\My-App-Setup.exe
 
 On Linux, the output argument is a new directory containing `.deb` and `.rpm`; on macOS it is a new `.dmg`. The packager creates and removes the internal `.luxpkg` itself. Studio's primary action saves and revalidates a valid dirty draft before it requests native output, and the Rust dialog suggests a bounded product-name artifact instead of a technical package-ID filename. Studio reads the local target from Rust, disables an incompatible host build before any dialog, and directs that project to a matching runner or the native matrix below. Studio then shows monotonic elapsed time without inventing native progress, exposes a pathless **Cancel** button, and supervises the complete native packager descendant tree through `luxury-process`, so manual cancel, timeout, and primary exit terminate/reap child tools before returning, then removes the exact parent-owned temporary work directory without scanning neighboring names. A confirmed cancellation restores the validated project rather than showing a build failure. Use low-level `luxury build` only for signed-package, protocol, or lifecycle automation that explicitly needs that trust boundary.
 
-The project contains `luxury.toml` and its configured payload directory. `init` never overwrites different existing files. Studio can reopen a bounded Rust-owned recent-project entry by index, edit unsigned format-1 settings including schema 4 shortcut intent, explicitly restore the last validated baseline, import regular files or one directory without overwrite, replace the complete payload through same-project staging with one directory's contents, select an entrypoint through a native dialog, build the native output, and reveal that retained output through a pathless Rust action. New/open/reload stay disabled for an unsaved draft. Close and Alt+F4 use a correlated renderer dirty-state query followed by a Rust-owned native confirmation; no response is treated as dirty and renderer receives no generic dialog permission. Imported links, reparse points, special entries, path aliases, empty imports, and payload/project overlap fail closed. Ordinary partial publication or replacement failures roll back; a rollback failure reports `rollback_failed` and keeps the staging backup. Replacement also refreshes executable intent and clears an entrypoint missing from the new tree with exact-case comparison together with shortcut intent that would otherwise be unbound.
+The project contains `luxury.toml` and its configured payload directory. `init` never overwrites different existing files. Studio can reopen a bounded Rust-owned recent-project entry by index, edit unsigned format-1 settings including schema 4 shortcut intent, explicitly restore the last validated baseline, import regular files or one directory without overwrite, replace the complete payload through same-project staging with one directory's contents, select an entrypoint or a target-native product icon through a Rust-owned native dialog, build the native output, and reveal that retained output through a pathless Rust action. New/open/reload stay disabled for an unsaved draft. Close and Alt+F4 use a correlated renderer dirty-state query followed by a Rust-owned native confirmation; no response is treated as dirty and renderer receives no generic dialog permission. Imported links, reparse points, special entries, path aliases, empty imports, and payload/project overlap fail closed. Ordinary partial publication or replacement failures roll back; a rollback failure reports `rollback_failed` and keeps the staging backup. Replacement also refreshes executable intent and clears an entrypoint missing from the new tree with exact-case comparison together with shortcut intent that would otherwise be unbound.
 
 ### Native build matrix for agents
 
@@ -86,13 +86,16 @@ Minimal configuration shape:
 
 ```toml
 format_version = 1
-schema_version = 4
+schema_version = 5
 
 [package]
 id = "com.example.my-app"
 name = "My App"
 version = "1.0.0"
 publisher = "Example"
+icon = "branding/app.ico"
+homepage = "https://example.com"
+support = "https://example.com/support"
 
 [target]
 os = "windows"
@@ -112,7 +115,9 @@ directory = "payload"
 executable = []
 ```
 
-Optional authoring fields include a 1-1024-character plain-text `package.description`, `package.license`, `install.allow_downgrade`, `install.entrypoint`, `install.show_install_log`, schema 4 `[install.shortcuts]`, and up to four `[[install.finish_links]]` HTTPS links. Shortcut intent is exactly `application_menu` plus `desktop` and always targets `install.entrypoint`; target/args/cwd/URL are not accepted. Windows entrypoints must end in `.exe`; Linux/macOS entrypoints must also appear in `payload.executable`. When enabled, Setup keeps the collapsed bounded manifest projection available during installation as a plan with factual counters and after completion as the result; it never exposes raw backend logs. Receipt v6, engine shortcut ports and Windows/Linux native codecs exist, but current preflight remains typed `unsupported` because WAL v5 external-root publication is pending; macOS also needs a real signed product `.app`.
+Optional schema-5 identity fields are `package.icon`, `package.homepage`, and `package.support`. Icon is an exact non-executable payload file up to 4 MiB: `.ico` for Windows, `.png` for Linux, `.icns` for macOS; verified bundle open fully decodes it. Both URLs are bounded credential-free HTTPS. Receipt v7 owns the complete snapshot and same-version metadata drift is rejected. Other optional fields include `package.description` of 1-1024 characters, `package.license`, install policy, schema-4 shortcuts, and up to four `[[install.finish_links]]` entries, each an exact `{label, url}` pair with a bounded label and one credential-free HTTPS URL. Shortcut target remains the exact entrypoint; native shortcut publication still waits for WAL v5. A Windows entrypoint must end in `.exe`; a Linux or macOS entrypoint must also appear in `payload.executable`.
+
+Same-version repair from receipt v1-v6 is rejected because the legacy receipt has no authenticated product metadata. Uninstall or a strictly newer update migrates to receipt v7.
 
 After interactive Setup reaches terminal success and the user presses **Next**, **Show in folder** is available for both scopes. The renderer sends no path: user scope uses the retained validated selection, while system scope derives its install base from the shared Rust `luxury-system-roots` boundary. This is a GUI action, not a new CLI/JSONL method.
 
@@ -135,7 +140,7 @@ On Linux invoke the installed bound `luxury-installer` binary. On macOS invoke `
 --help | -h
 ```
 
-`--info-json` validates the compiled payload binding, backend response, and host target without install preparation or system authorization. Success is exactly one JSON line with schema version, bounded package/trust metadata, target, portable install policy, and payload counts. It omits license text, finish URLs, internal package paths, and native roots:
+`--info-json` validates the compiled payload binding, backend response, and host target without install preparation or system authorization. It keeps schema 2 and omits license, finish links, schema-5 icon path/homepage/support, internal package paths, and native roots. JSONL v4 is the separate authoring contract; Setup retains product URLs in Rust and opens them only through a pathless post-install action:
 
 ```json
 {"schemaVersion":2,"package":{"id":"com.example.app","fingerprint":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","name":"Example App","publisher":"Example","version":"1.0.0","description":null,"trust":{"kind":"unsigned"},"requiresLicense":false,"publisherRotation":false},"target":{"os":"windows","arch":"x86_64"},"install":{"scope":"user","directory":"Example App","hasEntrypoint":true,"showInstallLog":false,"finishLinks":0,"shortcuts":{"applicationMenu":false,"desktop":false}},"payload":{"files":1,"bytes":42}}
@@ -145,7 +150,7 @@ Query the final shipped Setup path. Windows packaging verifies this contract thr
 
 No package path, install root, state root, key, downgrade approval, launch, environment, or arbitrary command is accepted. The runner uses its compiled payload binding and host-native default roots, waits for terminal rollback/cleanup for mutations, and returns `0` on successful inspection/operation, `1` on an inspection/operation failure, or `64` on invalid arguments. Unattended uninstall is idempotent; system scope can still require the OS-native UAC/polkit authorization prompt. Supply each consent only when the caller explicitly authorized the currently authenticated request.
 
-System Setup uses a separate privileged helper protocol v2, not public JSONL v3. The authenticated helper repeats read-only `prepare_system_install` after a successful install/uninstall and includes the fresh state in that terminal frame, so completion needs no second authorization prompt. Setup treats the returned review as authoritative, including `recoveryRequired`, and passes it to the renderer on successful install/uninstall; an absent or invalid post-commit review preserves the committed operation result, clears cached maintenance state, and forces a new privileged refresh on the next bootstrap instead of fabricating Install/Repair.
+System Setup uses a separate privileged helper protocol v2, not public JSONL v4. The authenticated helper repeats read-only `prepare_system_install` after a successful install/uninstall and includes the fresh state in that terminal frame, so completion needs no second authorization prompt. Setup treats the returned review as authoritative, including `recoveryRequired`, and passes it to the renderer on successful install/uninstall; an absent or invalid post-commit review preserves the committed operation result, clears cached maintenance state, and forces a new privileged refresh on the next bootstrap instead of fabricating Install/Repair.
 
 ## Install, update, repair, and removal
 
@@ -163,9 +168,9 @@ The receipt and SemVer precedence select the action:
 
 - no receipt: install;
 - strictly newer precedence: update;
-- equal precedence with the exact same file set, entrypoint, shortcut intent, and authenticated display name: repair;
+- equal precedence with the exact same file set, entrypoint, shortcut intent, authenticated display name, and product metadata snapshot: repair;
 - lower precedence: reject unless both `install.allow_downgrade = true` and explicit `--allow-downgrade` are present;
-- equal precedence with different files, entrypoint, shortcut intent, or authenticated display name: reject as `reinstall_mismatch`.
+- equal precedence with different files, entrypoint, shortcut intent, authenticated display name, product metadata, or a legacy receipt without metadata authority: reject as `reinstall_mismatch`.
 
 Update and repair are transactional. Unknown files are not adopted, modified obsolete files are preserved, removed owned files are deleted only when unchanged, and cancellation/failure restores the previous receipt and bytes. After success, use the same roots:
 
@@ -209,7 +214,7 @@ luxury stdio --trusted-publisher-key C:\keys\publisher-public.pem
 Write one UTF-8 JSON object per line to stdin:
 
 ```json
-{"protocolVersion":3,"id":"inspect-1","method":"inspect","params":{"packagePath":"C:\\work\\app.luxpkg"}}
+{"protocolVersion":4,"id":"inspect-1","method":"inspect","params":{"packagePath":"C:\\work\\app.luxpkg"}}
 ```
 
 IDs are 1-128 ASCII letters, digits, `.`, `_`, `:`, or `-`. Params and results are strict: unknown fields, wrong casing, relative paths, unsafe values, oversized lines, and inconsistent cross-fields fail.
@@ -217,9 +222,9 @@ IDs are 1-128 ASCII letters, digits, `.`, `_`, `:`, or `-`. Params and results a
 Result, error, and event envelopes:
 
 ```json
-{"protocolVersion":3,"type":"result","id":"inspect-1","result":{}}
-{"protocolVersion":3,"type":"error","id":"inspect-1","error":{"code":"inspect_failed","message":"..."}}
-{"protocolVersion":3,"type":"event","id":"install-1","event":"progress","data":{"completedFiles":1,"totalFiles":2,"completedBytes":10,"totalBytes":20}}
+{"protocolVersion":4,"type":"result","id":"inspect-1","result":{}}
+{"protocolVersion":4,"type":"error","id":"inspect-1","error":{"code":"inspect_failed","message":"..."}}
+{"protocolVersion":4,"type":"event","id":"install-1","event":"progress","data":{"completedFiles":1,"totalFiles":2,"completedBytes":10,"totalBytes":20}}
 ```
 
 Keep stdin open, read stdout continuously, drain stderr separately, and correlate by exact ID. Only one mutation or ordinary operation runs at a time; concurrent work returns `busy`. Closing stdin requests shutdown/cancellation and the server drains terminal cleanup before exit.
@@ -229,10 +234,10 @@ Keep stdin open, read stdout continuously, drain stderr separately, and correlat
 ### Read and author projects
 
 ```json
-{"protocolVersion":3,"id":"defaults-1","method":"defaults","params":{}}
-{"protocolVersion":3,"id":"init-1","method":"initProject","params":{"projectPath":"C:\\work\\project"}}
-{"protocolVersion":3,"id":"validate-1","method":"validateProject","params":{"projectPath":"C:\\work\\project"}}
-{"protocolVersion":3,"id":"build-1","method":"buildProject","params":{"projectPath":"C:\\work\\project","outputPath":"C:\\work\\app.luxpkg"}}
+{"protocolVersion":4,"id":"defaults-1","method":"defaults","params":{}}
+{"protocolVersion":4,"id":"init-1","method":"initProject","params":{"projectPath":"C:\\work\\project"}}
+{"protocolVersion":4,"id":"validate-1","method":"validateProject","params":{"projectPath":"C:\\work\\project"}}
+{"protocolVersion":4,"id":"build-1","method":"buildProject","params":{"projectPath":"C:\\work\\project","outputPath":"C:\\work\\app.luxpkg"}}
 ```
 
 `defaults` returns Rust-owned user roots, host target, and backend version. `initProject`, `validateProject`, `updateProject`, `importPayload`, and low-level `buildProject` return the current project summary. `authoring.executableFiles` is a bounded count, never an unbounded path list. `buildProject` creates the internal unsigned format-1 handoff; Studio then uses the native packager. Signed builds remain the human stdin-key command.
@@ -240,21 +245,21 @@ Keep stdin open, read stdout continuously, drain stderr separately, and correlat
 Update unsigned format-1 settings atomically:
 
 ```json
-{"protocolVersion":3,"id":"update-project-1","method":"updateProject","params":{"projectPath":"C:\\work\\project","package":{"id":"com.example.my-app","name":"My App","version":"1.1.0","publisher":"Example","description":"Desktop app","license":null},"target":{"os":"windows","arch":"x86_64"},"install":{"scope":"user","directory":"My App","allowDowngrade":false,"entrypoint":"bin/app.exe","showInstallLog":true,"finishLinks":[{"label":"Support","url":"https://example.com/support"}],"shortcuts":{"applicationMenu":true,"desktop":false}}}}
+{"protocolVersion":4,"id":"update-project-1","method":"updateProject","params":{"projectPath":"C:\\work\\project","package":{"id":"com.example.my-app","name":"My App","version":"1.1.0","publisher":"Example","description":"Desktop app","license":null,"icon":"branding/app.ico","homepage":"https://example.com","support":"https://example.com/support"},"target":{"os":"windows","arch":"x86_64"},"install":{"scope":"user","directory":"My App","allowDowngrade":false,"entrypoint":"bin/app.exe","showInstallLog":true,"finishLinks":[{"label":"Support","url":"https://example.com/support"}],"shortcuts":{"applicationMenu":true,"desktop":false}}}}
 ```
 
-Omit `executable` to preserve the current list while the compiler adds a new Unix entrypoint and drops the previous entrypoint marker only when that old file is gone. Supply an explicit `executable` array only when the caller intends to replace the full list; manifest validation still requires a Linux/macOS entrypoint to be executable.
+Results return `package.icon` as the descriptor `{"path":…,"size":…,"sha256":…}`, while `updateProject` accepts only the portable `path` string: echo `icon.path`, never the object. Omit `executable` to preserve the current list while the compiler adds a new Unix entrypoint and drops the previous entrypoint marker only when that old file is gone. Supply an explicit `executable` array only when the caller intends to replace the full list; manifest validation still requires a Linux/macOS entrypoint to be executable.
 
 Import selected absolute paths without exposing them in the result:
 
 ```json
-{"protocolVersion":3,"id":"import-1","method":"importPayload","params":{"projectPath":"C:\\work\\project","sourcePaths":["C:\\build\\app.exe","C:\\build\\assets"]}}
+{"protocolVersion":4,"id":"import-1","method":"importPayload","params":{"projectPath":"C:\\work\\project","sourcePaths":["C:\\build\\app.exe","C:\\build\\assets"]}}
 ```
 
 Replace the complete payload with the contents of exactly one directory:
 
 ```json
-{"protocolVersion":3,"id":"replace-1","method":"importPayload","params":{"projectPath":"C:\\work\\project","sourcePaths":["C:\\build\\release"],"replace":true}}
+{"protocolVersion":4,"id":"replace-1","method":"importPayload","params":{"projectPath":"C:\\work\\project","sourcePaths":["C:\\build\\release"],"replace":true}}
 ```
 
 Omitted or false `replace` keeps additive create-new behavior. Replacement rejects files, multiple sources, empty trees, links, special entries, project/payload overlap, and invalid portable paths before commit.
@@ -262,7 +267,7 @@ Omitted or false `replace` keeps additive create-new behavior. Replacement rejec
 Resolve a native selection to a validated portable payload path:
 
 ```json
-{"protocolVersion":3,"id":"entrypoint-1","method":"resolvePayloadPath","params":{"projectPath":"C:\\work\\project","selectedPath":"C:\\work\\project\\payload\\app.exe"}}
+{"protocolVersion":4,"id":"entrypoint-1","method":"resolvePayloadPath","params":{"projectPath":"C:\\work\\project","selectedPath":"C:\\work\\project\\payload\\app.exe"}}
 ```
 
 The result is `{"path":"app.exe"}`. The selected file must be a regular non-link inside the configured payload.
@@ -272,8 +277,8 @@ The result is `{"path":"app.exe"}`. The selected file must be a regular non-link
 Inspect first and retain its exact lower-hex `packageFingerprint`:
 
 ```json
-{"protocolVersion":3,"id":"inspect-2","method":"inspect","params":{"packagePath":"C:\\work\\app.luxpkg"}}
-{"protocolVersion":3,"id":"prepare-1","method":"prepareInstall","params":{"packagePath":"C:\\work\\app.luxpkg","installBase":"C:\\Apps","stateRoot":"C:\\State\\Luxury","expectedFingerprint":"<64-lower-hex>"}}
+{"protocolVersion":4,"id":"inspect-2","method":"inspect","params":{"packagePath":"C:\\work\\app.luxpkg"}}
+{"protocolVersion":4,"id":"prepare-1","method":"prepareInstall","params":{"packagePath":"C:\\work\\app.luxpkg","installBase":"C:\\Apps","stateRoot":"C:\\State\\Luxury","expectedFingerprint":"<64-lower-hex>"}}
 ```
 
 `prepareInstall` returns `ready`, `insufficientSpace`, or `recoveryRequired`; ready/space results include `action`, `installedVersion`, and `publisherMigrationRequired`. It never grants mutation authority.
@@ -281,14 +286,14 @@ Inspect first and retain its exact lower-hex `packageFingerprint`:
 Install with explicit booleans:
 
 ```json
-{"protocolVersion":3,"id":"install-1","method":"install","params":{"packagePath":"C:\\work\\app.luxpkg","installBase":"C:\\Apps","stateRoot":"C:\\State\\Luxury","allowUnsigned":false,"acceptLicense":false,"allowDowngrade":false,"allowPublisherMigration":false,"expectedFingerprint":"<64-lower-hex>"}}
+{"protocolVersion":4,"id":"install-1","method":"install","params":{"packagePath":"C:\\work\\app.luxpkg","installBase":"C:\\Apps","stateRoot":"C:\\State\\Luxury","allowUnsigned":false,"acceptLicense":false,"allowDowngrade":false,"allowPublisherMigration":false,"expectedFingerprint":"<64-lower-hex>"}}
 ```
 
 Uninstall or launch through the receipt:
 
 ```json
-{"protocolVersion":3,"id":"uninstall-1","method":"uninstall","params":{"packageId":"com.example.my-app","installBase":"C:\\Apps","stateRoot":"C:\\State\\Luxury"}}
-{"protocolVersion":3,"id":"launch-1","method":"launch","params":{"packageId":"com.example.my-app","installBase":"C:\\Apps","stateRoot":"C:\\State\\Luxury"}}
+{"protocolVersion":4,"id":"uninstall-1","method":"uninstall","params":{"packageId":"com.example.my-app","installBase":"C:\\Apps","stateRoot":"C:\\State\\Luxury"}}
+{"protocolVersion":4,"id":"launch-1","method":"launch","params":{"packageId":"com.example.my-app","installBase":"C:\\Apps","stateRoot":"C:\\State\\Luxury"}}
 ```
 
 `inspect`, `prepareInstall`, and `install` independently reopen and verify the package. Never reuse a fingerprint from another file or bypass a changed-file failure.
@@ -302,7 +307,7 @@ Uninstall uses `phase` and `progress`; byte counters are zero. Per-file preserve
 Cancel an active request with a new request ID:
 
 ```json
-{"protocolVersion":3,"id":"cancel-1","method":"cancel","params":{"requestId":"install-1"}}
+{"protocolVersion":4,"id":"cancel-1","method":"cancel","params":{"requestId":"install-1"}}
 ```
 
 The result contains `accepted`. Cancellation is cooperative; wait for the original request's terminal result/error and rollback completion. A transport error from the cancel request does not terminate the original operation: keep its event stream active and retry cancellation without inventing rollback or completion. Setup follows the same rule and keeps a failed pathless cancel request inline and retryable. Launch is no longer cancellable after successful spawn.

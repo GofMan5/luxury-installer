@@ -7,8 +7,8 @@ use std::{
 };
 
 use luxury_spec::{
-    FileEntry, InstallDirectory, InstallScope, Manifest, PackageId, PackagePath, PublisherKeyId,
-    ShortcutPolicy, SpecError, Target,
+    FileEntry, InstallDirectory, InstallScope, Manifest, PackageId, PackagePath, ProductMetadata,
+    PublisherKeyId, ShortcutPolicy, SpecError, Target,
 };
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -159,6 +159,7 @@ pub struct InstallPlan {
     scope: InstallScope,
     directory: InstallDirectory,
     display_name: String,
+    product_metadata: ProductMetadata,
     entrypoint: Option<PackagePath>,
     shortcuts: ShortcutPolicy,
     verified_identity: VerifiedPackageIdentity,
@@ -174,6 +175,7 @@ impl InstallPlan {
             scope: manifest.install.scope,
             directory: manifest.install.directory.clone(),
             display_name: manifest.package.name.clone(),
+            product_metadata: ProductMetadata::from_package(&manifest.package, &manifest.files),
             entrypoint: manifest.install.entrypoint.clone(),
             shortcuts: manifest.install.shortcuts,
             verified_identity,
@@ -202,6 +204,11 @@ impl InstallPlan {
     /// shortcut presentation. It never controls an arbitrary target path.
     pub fn display_name(&self) -> &str {
         &self.display_name
+    }
+
+    /// Authenticated portable metadata that later native integration adapters may consume.
+    pub fn product_metadata(&self) -> &ProductMetadata {
+        &self.product_metadata
     }
 
     pub fn entrypoint(&self) -> Option<&PackagePath> {
@@ -435,7 +442,7 @@ pub enum InstallError {
         requested: Version,
     },
     #[error(
-        "installed version {version} has different files, entrypoint, shortcut intent, or authenticated display name; same-version reinstall is refused"
+        "installed version {version} has different files, entrypoint, shortcut intent, authenticated display name, or product metadata; same-version reinstall is refused"
     )]
     ReinstallMismatch { version: Version },
     #[error(
@@ -854,6 +861,14 @@ fn assess_install(
         return Err(InstallError::ReceiptMismatch { field: "directory" });
     }
     let precedence = plan.version().cmp_precedence(previous.version());
+    // A legacy receipt has no authenticated product metadata, so same-version repair is refused
+    // explicitly and uniformly for formats 1-6. Without this the publisher-transition check below
+    // reports the unrelated migration error for the oldest formats.
+    if precedence == Ordering::Equal && previous.product_metadata().is_none() {
+        return Err(InstallError::ReinstallMismatch {
+            version: plan.version().clone(),
+        });
+    }
     let publisher_migration_required =
         assess_publisher_transition(plan.verified_identity(), previous, precedence)?;
     if publisher_migration_required
@@ -893,6 +908,7 @@ fn assess_install(
                 || previous.shortcuts() != plan.shortcuts()
                 || previous.shortcut_display_name()
                     != plan.shortcuts().enabled().then_some(plan.display_name())
+                || previous.product_metadata() != Some(plan.product_metadata())
             {
                 return Err(InstallError::ReinstallMismatch {
                     version: plan.version().clone(),

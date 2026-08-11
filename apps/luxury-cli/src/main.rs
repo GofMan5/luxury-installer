@@ -477,6 +477,23 @@ fn print_manifest(manifest: &Manifest, trust: PackageTrust) {
     );
     println!("name:      {}", manifest.package.name);
     println!("publisher: {}", manifest.package.publisher);
+    if let Some(description) = &manifest.package.description {
+        println!("description: {description}");
+    }
+    if let Some(homepage) = &manifest.package.homepage {
+        println!("homepage:  {homepage}");
+    }
+    if let Some(support) = &manifest.package.support {
+        println!("support:   {support}");
+    }
+    if let Some(icon) = &manifest.package.icon
+        && let Some(file) = manifest.files.iter().find(|file| file.path == *icon)
+    {
+        println!(
+            "icon:      {} ({} bytes, SHA-256 {})",
+            icon, file.size, file.sha256
+        );
+    }
     if let Some(license) = &manifest.package.license {
         println!("license:\n--- begin license ---\n{license}\n--- end license ---");
     } else {
@@ -594,7 +611,8 @@ fn print_command_usage(program: &OsString, command: &str) -> bool {
     let program = Path::new(program).display();
     let help = match command {
         "stdio" => format!(
-            "Usage:\n  {program} stdio [--trusted-publisher-key <absolute-public.pem>]\n\nRuns strict JSONL protocol v3 on stdin/stdout. Stdout is protocol-only; diagnostics never share it."
+            "Usage:\n  {program} stdio [--trusted-publisher-key <absolute-public.pem>]\n\nRuns strict JSONL protocol v{} on stdin/stdout. Stdout is protocol-only; diagnostics never share it.",
+            luxury_spec::JSONL_PROTOCOL_VERSION
         ),
         "init" => format!(
             "Usage:\n  {program} init <project-dir>\n\nCreates an unsigned project without overwriting different existing files."

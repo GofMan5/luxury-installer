@@ -9,13 +9,14 @@ use serde_json::{Value, json};
 use super::super::{sha256_hex, staging::sha256_file};
 use super::{
     HostLayout, InstallProbeEvent, LifecycleSession, STRESS_INSTALL_DIRECTORY, STRESS_PACKAGE_ID,
-    STRESS_PUBLISHED_FILE, StressPackage, UninstallProbeEvent, backend_error_code, consume_install,
-    consume_uninstall, directory_entry_names, exact_keys, inspect_stress_fixture,
-    is_link_or_reparse, is_lower_hex_64, lifecycle_timeout, message_kind, object_string,
-    parse_install_event, parse_uninstall_event, path_absent, request_stress_install,
-    require_empty_probe_root, require_only_lifecycle_lock_state, require_regular,
-    require_stress_published_file, start_stress_install, strict_result, unicode_path,
-    validate_install_action_against_inspect, validate_install_against_inspect, value_object,
+    STRESS_PRODUCT_NAME, STRESS_PRODUCT_PUBLISHER, STRESS_PUBLISHED_FILE, StressPackage,
+    UninstallProbeEvent, backend_error_code, consume_install, consume_uninstall,
+    directory_entry_names, exact_keys, inspect_stress_fixture, is_link_or_reparse, is_lower_hex_64,
+    lifecycle_timeout, message_kind, object_string, parse_install_event, parse_uninstall_event,
+    path_absent, request_stress_install, require_empty_probe_root,
+    require_only_lifecycle_lock_state, require_regular, require_stress_published_file,
+    start_stress_install, strict_result, unicode_path, validate_install_action_against_inspect,
+    validate_install_against_inspect, value_object,
 };
 
 mod uninstall;
@@ -726,11 +727,12 @@ fn validate_stress_receipt(
             "directory",
             "authorized_publisher",
             "payload_signer",
+            "product_metadata",
             "files",
         ],
         "ownership receipt",
     )?;
-    if receipt.get("format_version").and_then(Value::as_u64) != Some(6)
+    if receipt.get("format_version").and_then(Value::as_u64) != Some(7)
         || receipt.get("package_id").and_then(Value::as_str) != Some(STRESS_PACKAGE_ID)
         || receipt.get("version").and_then(Value::as_str) != Some(expected_version)
         || receipt.get("scope").and_then(Value::as_str) != Some("user")
@@ -749,6 +751,26 @@ fn validate_stress_receipt(
         if identity.get("kind").and_then(Value::as_str) != Some("unsigned") {
             return Err("ownership receipt has an unexpected publisher identity".into());
         }
+    }
+
+    let product_metadata = value_object(
+        receipt
+            .get("product_metadata")
+            .ok_or_else(|| "ownership receipt has no product metadata".to_owned())?,
+        "product metadata",
+    )?;
+    exact_keys(
+        product_metadata,
+        &["package_id", "name", "version", "publisher"],
+        "product metadata",
+    )?;
+    if product_metadata.get("package_id").and_then(Value::as_str) != Some(STRESS_PACKAGE_ID)
+        || product_metadata.get("name").and_then(Value::as_str) != Some(STRESS_PRODUCT_NAME)
+        || product_metadata.get("version").and_then(Value::as_str) != Some(expected_version)
+        || product_metadata.get("publisher").and_then(Value::as_str)
+            != Some(STRESS_PRODUCT_PUBLISHER)
+    {
+        return Err("ownership receipt has an invalid product identity".into());
     }
 
     let expected_files = stress_file_table(source_payload, expected_published_executable)?;
@@ -1327,29 +1349,6 @@ impl LifecycleSession {
     }
 }
 
-#[cfg(all(test, unix))]
-mod tests {
-    use std::os::unix::fs::PermissionsExt;
-
-    use super::*;
-    use crate::runner::staging::WorkDirectory;
-
-    #[test]
-    fn exact_tree_rejects_executable_mode_mismatch() {
-        let work = WorkDirectory::new(&std::env::temp_dir()).unwrap();
-        let source = work.path.join("source");
-        let installed = work.path.join("installed");
-        fs::create_dir(&source).unwrap();
-        fs::create_dir(&installed).unwrap();
-        fs::write(source.join("app"), b"same bytes").unwrap();
-        fs::write(installed.join("app"), b"same bytes").unwrap();
-        fs::set_permissions(source.join("app"), fs::Permissions::from_mode(0o755)).unwrap();
-        fs::set_permissions(installed.join("app"), fs::Permissions::from_mode(0o644)).unwrap();
-
-        assert!(verify_exact_tree(&source, &installed).is_err());
-    }
-}
-
 #[cfg(windows)]
 fn require_forced_crash_status(status: std::process::ExitStatus) -> Result<(), String> {
     if status.code() == Some(1) {
@@ -1380,5 +1379,143 @@ fn require_forced_crash_status(status: std::process::ExitStatus) -> Result<(), S
         Err("packaged backend exited successfully instead of being hard-killed".into())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::staging::WorkDirectory;
+
+    const RECEIPT_VERSION: &str = "1.4.0";
+
+    fn stress_source() -> (WorkDirectory, PathBuf) {
+        let work = WorkDirectory::new(&std::env::temp_dir()).unwrap();
+        let payload = work.path.join("payload");
+        fs::create_dir(&payload).unwrap();
+        fs::write(payload.join(STRESS_PUBLISHED_FILE), b"published bytes").unwrap();
+        (work, payload)
+    }
+
+    fn stored_receipt(payload: &Path, product_metadata: Value) -> Vec<u8> {
+        let published = payload.join(STRESS_PUBLISHED_FILE);
+        let size = fs::metadata(&published).unwrap().len();
+        let sha256 = sha256_hex(sha256_file(&published).unwrap());
+        let mut receipt = json!({
+            "format_version": 7,
+            "package_id": STRESS_PACKAGE_ID,
+            "version": RECEIPT_VERSION,
+            "scope": "user",
+            "directory": STRESS_INSTALL_DIRECTORY,
+            "authorized_publisher": {"kind": "unsigned"},
+            "payload_signer": {"kind": "unsigned"},
+            "files": [{
+                "path": STRESS_PUBLISHED_FILE,
+                "size": size,
+                "sha256": sha256,
+                "executable": false,
+            }],
+        });
+        if let Some(metadata) = product_metadata.as_object() {
+            receipt["product_metadata"] = Value::Object(metadata.clone());
+        }
+        serde_json::to_vec(&json!({
+            "format_version": 2,
+            "install_base": {
+                "canonical_path_sha256": "0".repeat(64),
+                "filesystem_id": 1,
+                "file_id": vec![0; 16],
+            },
+            "receipt": receipt,
+        }))
+        .unwrap()
+    }
+
+    fn exact_product_metadata() -> Value {
+        json!({
+            "package_id": STRESS_PACKAGE_ID,
+            "name": STRESS_PRODUCT_NAME,
+            "version": RECEIPT_VERSION,
+            "publisher": STRESS_PRODUCT_PUBLISHER,
+        })
+    }
+
+    #[test]
+    fn stress_receipt_requires_exact_v7_product_metadata() {
+        let (_work, payload) = stress_source();
+        validate_stress_receipt(
+            &stored_receipt(&payload, exact_product_metadata()),
+            RECEIPT_VERSION,
+            &payload,
+            false,
+        )
+        .expect("receipt v7 with exact product metadata is accepted");
+
+        assert!(
+            validate_stress_receipt(
+                &stored_receipt(&payload, Value::Null),
+                RECEIPT_VERSION,
+                &payload,
+                false
+            )
+            .is_err(),
+            "receipt v7 without product metadata must be rejected"
+        );
+
+        // One case per compared field, so removing any single assertion fails this test.
+        for (field, value) in [
+            ("package_id", json!("dev.other.product")),
+            ("name", json!("Other Product")),
+            ("version", json!("9.9.9")),
+            ("publisher", json!("Other Publisher")),
+            ("homepage", json!("https://example.com")),
+        ] {
+            let mut drifted = exact_product_metadata();
+            drifted[field] = value;
+            assert!(
+                validate_stress_receipt(
+                    &stored_receipt(&payload, drifted),
+                    RECEIPT_VERSION,
+                    &payload,
+                    false
+                )
+                .is_err(),
+                "product metadata `{field}` drift must be rejected"
+            );
+        }
+
+        let mut missing = exact_product_metadata();
+        missing
+            .as_object_mut()
+            .expect("object metadata")
+            .remove("publisher");
+        assert!(
+            validate_stress_receipt(
+                &stored_receipt(&payload, missing),
+                RECEIPT_VERSION,
+                &payload,
+                false
+            )
+            .is_err(),
+            "product metadata must carry every expected field"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_tree_rejects_executable_mode_mismatch() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let work = WorkDirectory::new(&std::env::temp_dir()).unwrap();
+        let source = work.path.join("source");
+        let installed = work.path.join("installed");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&installed).unwrap();
+        fs::write(source.join("app"), b"same bytes").unwrap();
+        fs::write(installed.join("app"), b"same bytes").unwrap();
+        fs::set_permissions(source.join("app"), fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(installed.join("app"), fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(verify_exact_tree(&source, &installed).is_err());
     }
 }

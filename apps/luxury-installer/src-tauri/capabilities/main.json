@@ -19,6 +19,7 @@
     "allow-import-project-files",
     "allow-import-project-directory",
     "allow-choose-project-entrypoint",
+    "allow-choose-project-icon",
     "allow-reveal-project",
     "allow-reveal-build-output",
     "allow-build-project",
@@ -31,6 +32,7 @@
     "allow-launch-installed",
     "allow-reveal-installed",
     "allow-open-finish-link",
+    "allow-open-product-link",
     "allow-minimize-window",
     "allow-close-window"
   ]

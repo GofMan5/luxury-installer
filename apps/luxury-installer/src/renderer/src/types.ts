@@ -39,6 +39,8 @@ export interface PackageSummary {
   version: string
   description: string | null
   license: string | null
+  hasHomepage: boolean
+  hasSupport: boolean
   targetOs: TargetOs
   targetArch: TargetArch
   installDirectory: string
@@ -71,13 +73,16 @@ export interface InstallerReview {
 export interface StudioProject {
   projectPath: string
   formatVersion: 1 | 2 | 3
-  schemaVersion: 1 | 2 | 3 | 4
+  schemaVersion: 1 | 2 | 3 | 4 | 5
   packageId: string
   name: string
   publisher: string
   version: string
   description: string | null
   license: string | null
+  icon: string | null
+  homepage: string | null
+  support: string | null
   hasLicense: boolean
   targetOs: TargetOs
   targetArch: TargetArch
@@ -101,6 +106,9 @@ export interface StudioProjectUpdate {
   version: string
   description: string | null
   license: string | null
+  icon: string | null
+  homepage: string | null
+  support: string | null
   targetOs: TargetOs
   targetArch: TargetArch
   installDirectory: string
@@ -210,6 +218,7 @@ export interface LuxuryBridge {
   importProjectDirectory(): Promise<StudioProject | null>
   replaceProjectPayload(): Promise<StudioProject | null>
   chooseProjectEntrypoint(): Promise<string | null>
+  chooseProjectIcon(): Promise<string | null>
   revealProject(): Promise<void>
   revealBuildOutput(): Promise<void>
   buildProject(): Promise<StudioBuildResult | null>
@@ -222,6 +231,7 @@ export interface LuxuryBridge {
   launchInstalled(): Promise<void>
   revealInstalled(): Promise<void>
   openFinishLink(index: number): Promise<void>
+  openProductLink(kind: 'homepage' | 'support'): Promise<void>
   setStudioDraftDirty(dirty: boolean): void
   minimizeWindow(): Promise<void>
   closeWindow(): Promise<void>

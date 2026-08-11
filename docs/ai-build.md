@@ -114,7 +114,7 @@ My-App-Setup.exe --unattended-install --allow-unsigned
 My-App-Setup.exe --unattended-uninstall
 ```
 
-Use `--info-json` before deployment when an agent or MDM needs bound-package inventory. It performs the same bound-package/backend/host validation but no install preparation or system authorization, emits exactly one schema-2 JSON line with required `install.shortcuts`, and omits license text, finish URLs, package paths, and native roots. The Windows project/release verifier executes this against the outer Setup, not only the extracted runner, and rejects wrong channels or schema drift.
+Use `--info-json` before deployment when an agent or MDM needs bound-package inventory. It performs the same validation but no preparation/authorization and keeps its schema-2 shape: license, finish links, schema-5 icon path/homepage/support, package paths, and native roots stay omitted. Setup retains the two product URLs in Rust and exposes only booleans plus a pathless `open_product_link` post-install action to the renderer. JSONL v4 is the separate full authoring contract.
 
 Linux uses the installed bound `luxury-installer` launcher. On macOS invoke `Luxury Installer.app/Contents/MacOS/Luxury Installer` directly so the caller receives the real exit code. The runner accepts no path, key, downgrade, launch, or command authority. Add `--accept-license` only for a package that offers a license and `--allow-publisher-migration` only for an offered migration. Exit codes are `0` successful inspection/operation or already absent, `1` inspection/operation failure, and `64` invalid arguments.
 
@@ -156,9 +156,11 @@ cargo run -p luxury -- launch <package-id> <install-base> <state-root>
 
 Use the matching external `--trusted-publisher-key` for v2/v3. Keep state outside the removable install tree.
 
-For schema-v3 projects with `package.license`, inspect the exact bounded text first and add `--accept-license` to the install command. JSONL/Tauri use the equivalent `acceptLicense` boolean; Rust rejects missing consent before platform access. Schema 4 adds only `[install.shortcuts]` with `application_menu` and `desktop` booleans. Either flag requires the exact entrypoint; no target, arguments, working directory, URL, shell command, or environment can be supplied. Receipt v6, engine ports, and Windows `.lnk`/Linux `.desktop` codecs exist, but preparation remains typed `unsupported` before mutation until WAL v5 journals external roots and rollback; macOS also requires a real signed product `.app`.
+For schema-v3 projects with `package.license`, inspect the exact bounded text first and add `--accept-license` to the install command. Schema 4 adds `[install.shortcuts]`; schema 5 adds optional `package.icon`, `package.homepage`, and `package.support`. The icon is an exact non-executable payload file up to 4 MiB (`.ico` Windows, `.png` Linux, `.icns` macOS) and bundle open decodes the complete image. URLs are bounded credential-free HTTPS. Receipt v7 persists the metadata snapshot; equal-version metadata drift is rejected. Shortcut publication still waits for WAL v5, and macOS still needs a real product `.app`.
 
-Reuse the same install/state roots when a newer downloaded package is installed over an existing one. Rust classifies a strictly newer SemVer as update and equal precedence with the exact same file set, entrypoint, shortcut intent, and authenticated display name as repair. Lower versions require both package policy and explicit CLI caller approval; Setup never silently authorizes downgrade. Update/repair preserve unknown data, remove obsolete owned files only when unchanged, publish a new external receipt atomically, and restore the previous bytes/receipt on cancellation or failure.
+Same-version repair from receipt formats 1–6 is deliberately rejected because legacy state has no authenticated product metadata. Use uninstall or install a strictly newer version to migrate to receipt v7.
+
+Reuse the same install/state roots when a newer downloaded package is installed over an existing one. Rust classifies a strictly newer SemVer as update and equal precedence with the exact same file set, entrypoint, shortcut intent, authenticated display name, and product metadata snapshot as repair. A receipt from v1-v6 lacks that snapshot and therefore needs uninstall or a strictly newer migration. Lower versions require both package policy and explicit CLI caller approval; Setup never silently authorizes downgrade. Update/repair preserve unknown data, remove obsolete owned files only when unchanged, publish a new external receipt atomically, and restore the previous bytes/receipt on cancellation or failure.
 
 ## Run the desktop locally
 
@@ -195,7 +197,7 @@ React renderer
     ▼
 Rust Tauri shell
     ├─ luxury-system-roots → pathless system reveal
-    │ JSONL v3 over child stdin/stdout
+    │ JSONL v4 over child stdin/stdout
     ▼
 luxury stdio
     │
@@ -235,7 +237,7 @@ Rules:
 - Setup shell owns package path/fingerprint/ID, state root, install base, latest preparation, and entrypoint authority.
 - Completed-install reveal accepts no renderer path. User scope uses the retained validated selection; system scope joins the authenticated one-component install directory to `luxury-system-roots` only after terminal success and while Setup is idle.
 - Optional `install.show_install_log` stays default-off and exposes only a bounded display projection of authenticated manifest paths. The collapsed panel is available during installation as a plan with factual counters and after completion as the result; it never displays raw backend output. `install.finish_links` accepts at most four HTTPS URLs; renderer sends only an index to the Rust-owned opener command.
-- Schema 4 `[install.shortcuts]` carries only `application_menu` and `desktop`. The target is always the authenticated exact entrypoint. Studio edits the two booleans; JSONL and the strict Setup review contract carry them. Receipt v6 owns exact typed artifact identity and the engine has shortcut ports; Windows `.lnk` and Linux `.desktop` codecs exist. Current Setup bootstrap still stops at typed `unsupported` preflight before rendering that review because WAL v5/external-root publication is not implemented; macOS additionally waits for a real signed product `.app`.
+- Schema 4 `[install.shortcuts]` carries only `application_menu` and `desktop`. The target is always the authenticated exact entrypoint. Studio edits the two booleans; JSONL and the strict Setup review contract carry them. Receipt v7 owns exact typed artifact identity together with the product-metadata snapshot, and the engine has shortcut ports; Windows `.lnk` and Linux `.desktop` codecs exist. Current Setup bootstrap still stops at typed `unsupported` preflight before rendering that review because WAL v5/external-root publication is not implemented; macOS additionally waits for a real signed product `.app`.
 - Completed Setup actions share one serialized inline-error boundary. A launch error preserves the completed result and permits retry. If launch succeeds but the following close fails, renderer records success first, removes the launch action, and leaves pathless **Done** available; never replay launch merely to retry window close.
 - System-scope initial/retry and successful install/uninstall terminal preparation goes through the authenticated privileged helper and calls Rust `prepare_system_install`; never fabricate Install/Repair from the mutation result. Privileged protocol v2 rejects an old peer before mutation, and successful install/uninstall events may carry only that validated authoritative review. Post-commit preparation failure stays a successful operation but clears cached maintenance state, so the next bootstrap performs a new privileged refresh without a second prompt on the completion path.
 - `prepareInstall` remains read-only and advisory, including native destination write-access and capacity checks. Real install independently reopens, authenticates, recovers, reassesses, and rechecks.

@@ -539,6 +539,7 @@ pub fn run() {
             studio::import_project_files,
             studio::import_project_directory,
             studio::choose_project_entrypoint,
+            studio::choose_project_icon,
             studio::reveal_project,
             studio::reveal_build_output,
             studio::build_project,
@@ -552,6 +553,7 @@ pub fn run() {
             setup::launch_installed,
             setup::reveal_installed,
             setup::open_finish_link,
+            setup::open_product_link,
             minimize_window,
             close_window,
         ])

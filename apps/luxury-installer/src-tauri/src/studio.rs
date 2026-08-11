@@ -26,7 +26,8 @@ use crate::{
     },
     backend::{
         FinishLink, InstallScope, MAX_SAFE_INTEGER, ProjectResult, ResolvedPayloadPath,
-        ShortcutPolicy, Target, TargetArch, TargetOs, guard_executable,
+        ShortcutPolicy, Target, TargetArch, TargetOs, guard_executable, valid_native_icon_path,
+        valid_public_https_url,
     },
 };
 
@@ -245,6 +246,9 @@ pub(crate) struct StudioProject {
     version: String,
     description: Option<String>,
     license: Option<String>,
+    icon: Option<String>,
+    homepage: Option<String>,
+    support: Option<String>,
     has_license: bool,
     target_os: TargetOs,
     target_arch: TargetArch,
@@ -270,6 +274,9 @@ pub(crate) struct StudioProjectUpdate {
     version: String,
     description: Option<String>,
     license: Option<String>,
+    icon: Option<String>,
+    homepage: Option<String>,
+    support: Option<String>,
     target_os: TargetOs,
     target_arch: TargetArch,
     install_directory: String,
@@ -413,6 +420,19 @@ pub(crate) async fn choose_project_entrypoint(
     })
     .await
     .map_err(|_| PublicError::new("internal_error", "Выбор точки запуска прерван."))?
+}
+
+#[tauri::command]
+pub(crate) async fn choose_project_icon(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, PublicError> {
+    state.require_mode(AppMode::Studio)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || choose_project_icon_sync(&app, &window, &state))
+        .await
+        .map_err(|_| PublicError::new("internal_error", "Выбор значка прерван."))?
 }
 
 #[tauri::command]
@@ -694,6 +714,9 @@ fn update_project_sync(
                     "publisher": input.publisher,
                     "description": input.description,
                     "license": input.license,
+                    "icon": input.icon,
+                    "homepage": input.homepage,
+                    "support": input.support,
                 },
                 "target": {
                     "os": input.target_os,
@@ -862,6 +885,75 @@ fn choose_project_entrypoint_sync(
         return Err(PublicError::new(
             "invalid_backend_output",
             "Компонент Studio вернул недопустимую точку запуска.",
+        ));
+    }
+    Ok(Some(resolved.path))
+}
+
+fn choose_project_icon_sync(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+) -> Result<Option<String>, PublicError> {
+    let _busy = ExclusiveGuard::acquire(
+        &state.studio.busy,
+        "busy",
+        "Другая операция Studio уже выполняется.",
+    )?;
+    let active = active_project(state)?;
+    if active.summary.format_version != 1 {
+        return Err(PublicError::new(
+            "payload_path_invalid",
+            "Подписанные проекты изменяются через CLI.",
+        ));
+    }
+    let _dialog = ExclusiveGuard::acquire(
+        &state.dialog_open,
+        "dialog_busy",
+        "Другой системный диалог уже открыт.",
+    )?;
+    let payload = active.path.join("payload");
+    let start = if payload.is_dir() {
+        payload.as_path()
+    } else {
+        active.path.as_path()
+    };
+    let extensions: &[&str] = match active.summary.target_os {
+        TargetOs::Windows => &["ico"],
+        TargetOs::Linux => &["png"],
+        TargetOs::Macos => &["icns"],
+    };
+    let selected = app
+        .dialog()
+        .file()
+        .set_parent(window)
+        .set_title("Выбрать значок приложения")
+        .set_directory(start)
+        .add_filter("Нативный значок", extensions)
+        .blocking_pick_file()
+        .map(|path| {
+            path.into_path().map_err(|_| {
+                PublicError::new("invalid_import_path", "Выбран недопустимый путь файла.")
+            })
+        })
+        .transpose()?;
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let backend = state.backend().map_err(PublicError::from)?;
+    let resolved: ResolvedPayloadPath = backend
+        .request_operation(
+            "resolvePayloadPath",
+            json!({
+                "projectPath": path_text(&active.path)?,
+                "selectedPath": path_text(&selected)?,
+            }),
+        )
+        .map_err(PublicError::from)?;
+    if !valid_native_icon_path(&resolved.path, active.summary.target_os) {
+        return Err(PublicError::new(
+            "invalid_backend_output",
+            "Компонент Studio вернул недопустимый путь значка.",
         ));
     }
     Ok(Some(resolved.path))
@@ -1489,6 +1581,27 @@ impl StudioProject {
             || !matches!(project.format_version, 1..=3)
             || !(1..=luxury_spec::MANIFEST_SCHEMA_VERSION as u8).contains(&project.schema_version)
             || (project.schema_version < 3 && project.package.license.is_some())
+            || (project.package.icon.is_some()
+                || project.package.homepage.is_some()
+                || project.package.support.is_some())
+                && project.schema_version < luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION as u8
+            || project
+                .package
+                .icon
+                .as_ref()
+                .is_some_and(|icon| !icon.is_valid_for(project.target.os, project.payload.bytes))
+            || project
+                .package
+                .homepage
+                .as_deref()
+                .is_some_and(|url| !valid_public_https_url(url))
+            || project
+                .package
+                .support
+                .as_deref()
+                .is_some_and(|url| !valid_public_https_url(url))
+            || luxury_spec::PackageId::parse(&project.package.id)
+                .is_ok_and(|id| id.is_reserved_native_identity())
             || !valid_package_id(&project.package.id)
             || !valid_text(&project.package.name)
             || !valid_text(&project.package.publisher)
@@ -1533,6 +1646,9 @@ impl StudioProject {
             version: project.package.version,
             description: project.package.description,
             license: project.package.license.clone(),
+            icon: project.package.icon.map(|icon| icon.path),
+            homepage: project.package.homepage,
+            support: project.package.support,
             has_license: project.package.license.is_some(),
             target_os: project.target.os,
             target_arch: project.target.arch,
@@ -1554,6 +1670,8 @@ impl StudioProject {
 fn validate_project_update(input: &StudioProjectUpdate) -> Result<(), PublicError> {
     let optional_text_valid = |value: Option<&str>| value.is_none_or(valid_text);
     if !valid_package_id(&input.package_id)
+        || luxury_spec::PackageId::parse(&input.package_id)
+            .is_ok_and(|id| id.is_reserved_native_identity())
         || !valid_text(&input.name)
         || !valid_text(&input.publisher)
         || !valid_text(&input.version)
@@ -1562,6 +1680,18 @@ fn validate_project_update(input: &StudioProjectUpdate) -> Result<(), PublicErro
             .license
             .as_deref()
             .is_some_and(|license| !valid_license(license))
+        || input
+            .icon
+            .as_deref()
+            .is_some_and(|icon| !valid_native_icon_path(icon, input.target_os))
+        || input
+            .homepage
+            .as_deref()
+            .is_some_and(|url| !valid_public_https_url(url))
+        || input
+            .support
+            .as_deref()
+            .is_some_and(|url| !valid_public_https_url(url))
         || !valid_install_directory(&input.install_directory)
         || input
             .entrypoint
@@ -1641,6 +1771,9 @@ mod tests {
                 version: "1.0.0".into(),
                 description: None,
                 license: license.map(str::to_owned),
+                icon: None,
+                homepage: None,
+                support: None,
             },
             target: Target {
                 os: TargetOs::Windows,
@@ -1694,6 +1827,29 @@ mod tests {
         let mut mismatched = project(2, None);
         mismatched.install.has_entrypoint = true;
         assert!(StudioProject::from_backend(&path, mismatched).is_err());
+    }
+
+    #[test]
+    fn studio_product_metadata_is_schema_and_target_bound() {
+        let path = std::env::temp_dir().join("luxury-studio-project");
+        let mut value = project(luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION as u8, None);
+        value.package.icon = Some(crate::backend::ProductIcon {
+            path: "branding/app.ico".into(),
+            size: 29,
+            sha256: "b".repeat(64),
+        });
+        value.package.homepage = Some("https://example.com".into());
+        assert!(StudioProject::from_backend(&path, value.clone()).is_ok());
+
+        value.package.icon.as_mut().unwrap().path = "branding/app.png".into();
+        assert!(StudioProject::from_backend(&path, value.clone()).is_err());
+        value.package.icon.as_mut().unwrap().path = "branding/app.ico".into();
+        value.schema_version = luxury_spec::SHORTCUT_SCHEMA_VERSION as u8;
+        assert!(StudioProject::from_backend(&path, value).is_err());
+
+        let mut reserved = project(luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION as u8, None);
+        reserved.package.id = "software.luxury.installer.product".into();
+        assert!(StudioProject::from_backend(&path, reserved).is_err());
     }
 
     #[test]

@@ -3,6 +3,7 @@ use serde_json::Value;
 
 pub(crate) const PROTOCOL_VERSION: u64 = luxury_spec::JSONL_PROTOCOL_VERSION as u64;
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+const MAX_PUBLIC_URL_BYTES: usize = 2_048;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
@@ -347,6 +348,97 @@ pub(crate) struct PackageIdentity {
     pub(crate) description: Option<String>,
     #[serde(default)]
     pub(crate) license: Option<String>,
+    #[serde(default)]
+    pub(crate) icon: Option<ProductIcon>,
+    #[serde(default)]
+    pub(crate) homepage: Option<String>,
+    #[serde(default)]
+    pub(crate) support: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProductIcon {
+    pub(crate) path: String,
+    pub(crate) size: u64,
+    pub(crate) sha256: String,
+}
+
+impl ProductIcon {
+    /// Re-checks the backend's icon identity against the target's native format and the payload it
+    /// must live inside. Both shells validate every backend field before trusting it.
+    pub(crate) fn is_valid_for(&self, target: TargetOs, payload_bytes: u64) -> bool {
+        valid_native_icon_path(&self.path, target)
+            && (1..=luxury_spec::MAX_PRODUCT_ICON_BYTES).contains(&self.size)
+            && self.size <= payload_bytes
+            && self.sha256.len() == 64
+            && self
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    }
+}
+
+pub(crate) fn valid_native_icon_path(value: &str, target: TargetOs) -> bool {
+    let extension = match target {
+        TargetOs::Windows => "ico",
+        TargetOs::Linux => "png",
+        TargetOs::Macos => "icns",
+    };
+    luxury_spec::PackagePath::parse(value).is_ok()
+        && value
+            .rsplit_once('.')
+            .is_some_and(|(_, found)| found.eq_ignore_ascii_case(extension))
+}
+
+/// Bounded credential-free HTTPS policy shared by finish links and product homepage/support.
+pub(crate) fn valid_public_https_url(value: &str) -> bool {
+    if value.len() > MAX_PUBLIC_URL_BYTES
+        || value.chars().any(|character| {
+            character.is_control()
+                || character.is_whitespace()
+                || matches!(
+                    character,
+                    '\u{061c}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                )
+        })
+        || value.contains('\\')
+    {
+        return false;
+    }
+    let Some(remainder) = value.strip_prefix("https://") else {
+        return false;
+    };
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    if authority.is_empty() || authority.contains('@') || !authority.is_ascii() {
+        return false;
+    }
+    let (host, port) = authority
+        .rsplit_once(':')
+        .map_or((authority, None), |(host, port)| (host, Some(port)));
+    !host.is_empty()
+        && host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+        })
+        && port.is_none_or(|port| port.parse::<u16>().is_ok_and(|port| port != 0))
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -437,8 +529,15 @@ mod tests {
 
     #[test]
     fn backend_line_rejects_unknown_fields() {
-        let line = br#"{"protocolVersion":3,"type":"result","id":"one","result":{},"extra":true}"#;
-        assert!(serde_json::from_slice::<BackendLine>(line).is_err());
+        let line = serde_json::to_vec(&json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "type": "result",
+            "id": "one",
+            "result": {},
+            "extra": true,
+        }))
+        .unwrap();
+        assert!(serde_json::from_slice::<BackendLine>(&line).is_err());
     }
 
     #[test]

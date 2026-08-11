@@ -3765,6 +3765,19 @@ fn receipt_identity_binds_shortcut_display_and_artifacts() {
     let changed_artifact: OwnershipReceipt = serde_json::from_value(changed_artifact).unwrap();
     changed_artifact.validate().unwrap();
     assert!(!same_receipt_identity_for_test(&receipt, &changed_artifact));
+
+    let mut with_metadata = serde_json::to_value(&receipt).unwrap();
+    with_metadata["format_version"] = serde_json::json!(7);
+    with_metadata["product_metadata"] = serde_json::json!({
+        "package_id": "dev.luxury.demo",
+        "name": "Luxury Demo",
+        "version": "1.0.0",
+        "publisher": "Luxury Software",
+        "support": "https://example.com/support"
+    });
+    let with_metadata: OwnershipReceipt = serde_json::from_value(with_metadata).unwrap();
+    with_metadata.validate().unwrap();
+    assert!(!same_receipt_identity_for_test(&receipt, &with_metadata));
 }
 
 #[test]
@@ -4002,12 +4015,21 @@ fn interrupted_upgrade_with_legacy(
         .sync()
         .unwrap();
 
-    let new_receipt = OwnershipReceipt::new(
-        package_id.clone(),
-        Version::new(2, 0, 0),
+    let new_receipt = OwnershipReceipt::new_with_product_metadata(
         old_receipt.scope(),
         directory,
         PackageIdentity::Unsigned,
+        PackageIdentity::Unsigned,
+        luxury_spec::ProductMetadata {
+            package_id: package_id.clone(),
+            name: "Luxury Demo".into(),
+            version: Version::new(2, 0, 0),
+            publisher: "Luxury Software".into(),
+            description: None,
+            icon: None,
+            homepage: None,
+            support: None,
+        },
         vec![FileEntry {
             path,
             size: 3,
@@ -4214,6 +4236,9 @@ fn bundle_version_in_directory_scope(
             publisher: "Luxury Software".into(),
             description: None,
             license: None,
+            icon: None,
+            homepage: None,
+            support: None,
         },
         target: Target::host(),
         install: InstallPolicy {
@@ -4276,6 +4301,9 @@ fn signed_bundle_with_keys(
             publisher: "Luxury Software".into(),
             description: None,
             license: None,
+            icon: None,
+            homepage: None,
+            support: None,
         },
         target: Target::host(),
         install: InstallPolicy {
@@ -4343,6 +4371,9 @@ fn rotation_bundle(
             publisher: "Luxury Software".into(),
             description: None,
             license: None,
+            icon: None,
+            homepage: None,
+            support: None,
         },
         target: Target::host(),
         install: InstallPolicy {
@@ -4453,6 +4484,7 @@ fn rewrite_stored_receipt_as_legacy(path: &Path) {
     receipt.remove("package_identity");
     receipt.remove("authorized_publisher");
     receipt.remove("payload_signer");
+    receipt.remove("product_metadata");
     fs::write(path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
 }
 

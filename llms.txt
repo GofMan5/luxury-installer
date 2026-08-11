@@ -10,7 +10,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 
 - /docs/ai-build.md: exact agent workflow and gate selection
 - /skills/luxury-installer-cli/SKILL.md: reusable current CLI/JSONL workflow for coding agents
-- /skills/luxury-installer-cli/references/cli.md: complete human CLI and JSONL v3 reference
+- /skills/luxury-installer-cli/references/cli.md: complete human CLI and JSONL v4 reference
 - /docs/architecture.md: dependency, process, transaction, trust, runner, and evidence boundaries
 - /docs/design/design-system.md: Tauri renderer visual/accessibility contract
 - /docs/privileged-helper.md: required system-scope elevation and peer-authentication boundary
@@ -52,7 +52,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 
 ## Process topology
 
-- React renderer -> exact Tauri invoke/events -> Rust Tauri shell -> bounded JSONL v3 over child stdin/stdout -> luxury stdio -> Rust use cases
+- React renderer -> exact Tauri invoke/events -> Rust Tauri shell -> bounded JSONL v4 over child stdin/stdout -> luxury stdio -> Rust use cases
 - Renderer owns presentation/accessibility only
 - Rust Tauri shell owns native dialogs, bound project/package/path authority, backend lifecycle, transport validation, event correlation, and public error mapping
 - luxury stdio owns machine-facing composition
@@ -67,10 +67,10 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Debug with one absolute --package starts Setup
 - Default release feature studio uses a fixed backend resource and no payload
 - Release feature setup is mutually exclusive and uses fixed native backend/payload resources
-- Final bound Setup accepts only read-only --info-json, --unattended-install with explicit consent flags, --unattended-uninstall, or --help for public headless use; it accepts no path/key/downgrade/launch authority. Info validates the bound package/backend/host without preparation or authorization and emits one bounded schema-2 JSON line with required install.shortcuts; Windows final-container verification rechecks its exact schema and stdout/stderr transport; mutations wait for the same terminal Rust lifecycle result
+- Final bound Setup keeps stable --info-json schema 2, requires the strict install.shortcuts object, and omits license, finish URLs, schema-5 icon path/homepage/support and native paths. Rust retains product URLs and opens them only through pathless post-install open_product_link; JSONL v4 is the separate authoring metadata contract
 - --trusted-publisher-key and LUXURY_BACKEND_PATH are debug-only absolute paths
 - Setup is not a .luxpkg browser: no picker, drag-and-drop, file input, or renderer-supplied package/root path
-- Studio renderer sends typed settings plus pathless create/open/import/replace/entrypoint/reveal/reload/build/cancel-build intent; Rust shell owns native dialog results and active project/output/source paths. Cancel uses one Rust idle/active/cancelled lifecycle, reaps descendants, cleans work, and returns to the validated project.
+- Studio renderer sends typed settings plus pathless create/open/import/replace/entrypoint/icon/reveal/reload/build/cancel-build intent; Rust shell owns native dialog results and active project/output/source paths. Cancel uses one Rust idle/active/cancelled lifecycle, reaps descendants, cleans work, and returns to the validated project.
 - Studio primary build runs native form validity; when dirty it awaits typed `updateProject` and Rust revalidation before sending pathless `buildProject`. A save error never reaches output selection or native packager.
 - Dirty Studio state disables create/open/reload and has one explicit baseline undo. Close/Alt+F4 stays Rust-owned: `luxury://studio-close-query` carries only a correlated requestId, exact `respond_studio_close` returns requestId + dirty, absent/stale/invalid/timed-out replies fail dirty, and the native discard prompt needs no renderer dialog permission.
 - Rust derives native output suggestions from validated product name using a bounded alphanumeric/hyphen component; package ID is fallback only. Renderer sends no output name/path and no-clobber publication still revalidates the selected destination.
@@ -113,7 +113,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - format_version 1: unsigned; SHA-256 integrity only; explicit unsigned consent required
 - format_version 2: Ed25519 exact-manifest signature; matching external SPKI trust anchor required; no unsigned fallback
 - format_version 3: A signs completed manifest/payload; B signs domain-separated package/version/A/B rotation proof
-- schema_version is independent; schema 2 adds exact-file install.entrypoint; schema 3 adds bounded authenticated plain-text package.license; schema 4 adds bounded install.shortcuts with application_menu/desktop booleans bound to that exact entrypoint
+- schema_version is independent; schema 2 adds install.entrypoint, schema 3 package.license, schema 4 install.shortcuts, and schema 5 package.icon/homepage/support as one authenticated product identity
 - Optional package.description is bounded plain text in luxury-spec, not only a Studio validation rule
 - Optional install.show_install_log keeps one collapsed bounded manifest projection available during installation and after completion; running labels it as a plan with factual counters, never raw backend logs
 - Windows entrypoint requires .exe; Linux/macOS requires executable=true
@@ -121,11 +121,12 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - luxury.toml is untrusted and capped at 1 MiB before parsing
 - Signing keys are bounded PKCS#8 PEM through stdin only; never path/argument/JSONL/log/fixture
 - A and B private keys never enter one process
-- Ownership receipt v6 stores payload signer, authorized publisher, optional entrypoint, shortcut intent, authenticated display name and exact typed native artifacts; receipt v1-v5 remain readable, but v5 intent has no artifact authority
+- Ownership receipt v7 adds the full product metadata snapshot; v6 exact shortcut authority remains readable, while v5 intent has no artifact authority
+- Same-version repair from receipt v1-v6 is rejected because legacy state has no product-metadata authority; uninstall or a strictly newer update migrates to v7
 - Studio, the strict Setup review contract, JSONL, and the compiler understand schema 4 shortcuts. Windows .lnk and Linux .desktop codecs plus engine ports exist, but native publication remains typed unsupported until WAL v5 journals external roots and rollback. macOS additionally requires a real signed product .app; do not substitute a symlink or alias to a bare executable
 - Trusted rotation requires installed A and strictly higher SemVer; fresh/legacy/unsigned/replay/equal/downgrade/self rotation fails
 
-## JSONL protocol v3
+## JSONL protocol v4
 
 - One bounded JSON object per line on inherited stdin/stdout; stdout is protocol-only
 - Methods: defaults, initProject, validateProject, updateProject, importPayload, resolvePayloadPath, buildProject, inspect, prepareInstall, install, uninstall, launch, cancel

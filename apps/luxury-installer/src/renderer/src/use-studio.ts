@@ -17,6 +17,7 @@ export type StudioView =
   | { kind: 'saving'; project: StudioProject }
   | { kind: 'importing'; project: StudioProject }
   | { kind: 'choosingEntrypoint'; project: StudioProject }
+  | { kind: 'choosingIcon'; project: StudioProject }
   | {
       kind: 'building'
       project: StudioProject
@@ -39,6 +40,7 @@ export interface StudioController {
   updateProject(input: StudioProjectUpdate): Promise<void>
   importProject(kind: 'files' | 'directory' | 'replace'): Promise<void>
   chooseProjectEntrypoint(): Promise<string | null>
+  chooseProjectIcon(): Promise<string | null>
   revealProject(): Promise<void>
   buildProject(input?: StudioProjectUpdate): Promise<void>
   cancelProjectBuild(): Promise<void>
@@ -272,6 +274,24 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     }
   }
 
+  async function chooseProjectIcon(): Promise<string | null> {
+    if (busy.current) return null
+    const project = projectFrom(view)
+    if (!project || project.formatVersion !== 1) return null
+    busy.current = true
+    setView({ kind: 'choosingIcon', project })
+    try {
+      const selected = await bridge.chooseProjectIcon()
+      setView({ kind: 'ready', project })
+      return selected
+    } catch (error) {
+      setView({ kind: 'error', message: errorMessage(error), project })
+      return null
+    } finally {
+      busy.current = false
+    }
+  }
+
   function dismissError() {
     setView((current) =>
       current.kind === 'error' && current.project
@@ -293,6 +313,7 @@ export function useStudio(bridge: LuxuryBridge): StudioController {
     updateProject,
     importProject,
     chooseProjectEntrypoint,
+    chooseProjectIcon,
     revealProject,
     buildProject,
     cancelProjectBuild,
@@ -307,6 +328,7 @@ export function projectFrom(view: StudioView): StudioProject | null {
     view.kind === 'saving' ||
     view.kind === 'importing' ||
     view.kind === 'choosingEntrypoint' ||
+    view.kind === 'choosingIcon' ||
     view.kind === 'building'
   ) {
     return view.project

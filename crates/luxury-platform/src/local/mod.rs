@@ -1028,6 +1028,7 @@ fn same_receipt_identity(left: &OwnershipReceipt, right: &OwnershipReceipt) -> b
         && left.shortcuts() == right.shortcuts()
         && left.shortcut_display_name() == right.shortcut_display_name()
         && left.shortcut_artifacts() == right.shortcut_artifacts()
+        && left.product_metadata() == right.product_metadata()
 }
 
 #[cfg(test)]

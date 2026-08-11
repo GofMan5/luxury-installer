@@ -90,14 +90,14 @@ export function createTauriBridge(): LuxuryBridge {
     openProject: () => parsedInvoke('open_project', studioProjectSchema.nullable()),
     getRecentProjects: () => parsedInvoke('get_recent_projects', recentProjectsSchema),
     openRecentProject: (index) =>
-      parsedInvoke('open_recent_project', studioProjectSchema, {
+      parsedInvoke('open_recent_project', studioProjectSchema, () => ({
         index: recentProjectIndexSchema.parse(index),
-      }),
+      })),
     reloadProject: () => parsedInvoke('reload_project', studioProjectSchema),
     updateProject: (input) =>
-      parsedInvoke('update_project', studioProjectSchema, {
+      parsedInvoke('update_project', studioProjectSchema, () => ({
         input: studioProjectUpdateSchema.parse(input),
-      }),
+      })),
     importProjectFiles: () => parsedInvoke('import_project_files', studioProjectSchema.nullable()),
     importProjectDirectory: () =>
       parsedInvoke('import_project_directory', studioProjectSchema.nullable(), { replace: false }),
@@ -105,6 +105,7 @@ export function createTauriBridge(): LuxuryBridge {
       parsedInvoke('import_project_directory', studioProjectSchema.nullable(), { replace: true }),
     chooseProjectEntrypoint: () =>
       parsedInvoke('choose_project_entrypoint', portablePath.nullable()),
+    chooseProjectIcon: () => parsedInvoke('choose_project_icon', portablePath.nullable()),
     revealProject: () => invokeCommand('reveal_project'),
     revealBuildOutput: () => invokeCommand('reveal_build_output'),
     buildProject: () => parsedInvoke('build_project', studioBuildResultSchema.nullable()),
@@ -112,9 +113,9 @@ export function createTauriBridge(): LuxuryBridge {
     chooseDirectory: () => parsedInvoke('choose_directory', installerReviewSchema.nullable()),
     startInstall: async (input) => {
       await ensureEventReady()
-      return parsedInvoke('start_install', operationStartedSchema, {
+      return parsedInvoke('start_install', operationStartedSchema, () => ({
         input: installRequestSchema.parse(input),
-      })
+      }))
     },
     startUninstall: async () => {
       await ensureEventReady()
@@ -128,6 +129,7 @@ export function createTauriBridge(): LuxuryBridge {
     launchInstalled: () => invokeCommand('launch_installed'),
     revealInstalled: () => invokeCommand('reveal_installed'),
     openFinishLink: (index) => invokeCommand('open_finish_link', { index }),
+    openProductLink: (kind) => invokeCommand('open_product_link', { kind }),
     setStudioDraftDirty: (dirty) => {
       studioDraftDirty = dirty === true
     },
@@ -145,10 +147,12 @@ export function createTauriBridge(): LuxuryBridge {
 async function parsedInvoke<T>(
   command: string,
   schema: ZodType<T>,
-  args?: Record<string, unknown>,
+  args?: Record<string, unknown> | (() => Record<string, unknown>),
 ): Promise<T> {
   try {
-    return schema.parse(await invoke<unknown>(command, args))
+    // Outbound argument parsing stays inside the guard, so a rejected argument surfaces as one
+    // public error instead of a raw ZodError.
+    return schema.parse(await invoke<unknown>(command, typeof args === 'function' ? args() : args))
   } catch (error) {
     throw publicError(error)
   }

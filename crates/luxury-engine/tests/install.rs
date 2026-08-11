@@ -1069,6 +1069,36 @@ fn shortcut_intent_is_persisted_and_changes_same_version_identity() {
 }
 
 #[test]
+fn authenticated_product_metadata_is_receipt_owned_and_changes_repair_identity() {
+    let mut package = manifest(InstallScope::User, Target::host());
+    package.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+    package.package.homepage = Some("https://example.com/product".into());
+    package.package.support = Some("https://support.example.com/help".into());
+
+    let mut port = FakeInstallPort::new(Rc::new(Cell::new(0)));
+    install(
+        InstallCommand::new(package.clone()),
+        &mut port,
+        || false,
+        |_| {},
+    )
+    .unwrap();
+    let receipt = port.receipt.clone().unwrap();
+    let metadata = receipt.product_metadata().unwrap();
+    assert_eq!(metadata.package_id, package.package.id);
+    assert_eq!(metadata.version, package.package.version);
+    assert_eq!(metadata.homepage, package.package.homepage);
+    assert_eq!(metadata.support, package.package.support);
+
+    port.calls.clear();
+    package.package.support = Some("https://support.example.com/new".into());
+    let error = install(InstallCommand::new(package), &mut port, || false, |_| {}).unwrap_err();
+    assert!(matches!(error, InstallError::ReinstallMismatch { .. }));
+    assert_eq!(port.calls, ["verify", "recover", "load receipt"]);
+    assert_eq!(port.receipt, Some(receipt));
+}
+
+#[test]
 fn shortcut_reconciliation_is_after_payload_and_receipt_rejects_inexact_authority() {
     let mut package = manifest(InstallScope::User, Target::host());
     package.install.entrypoint = Some(package.files[0].path.clone());
@@ -1147,20 +1177,24 @@ fn shortcut_display_name_is_bound_and_rejected_before_begin_if_not_receipt_safe(
     port.calls.clear();
     let mut prepare_port = FakeInstallPort::new(Rc::new(Cell::new(0)));
     let prepare_error = prepare_install(package.clone(), &mut prepare_port).unwrap_err();
+    // The manifest screens bidi overrides in every display-bound string, so a spoofed product
+    // name never reaches the receipt display-name guard behind it.
     assert_eq!(
         prepare_error,
-        InstallError::InvalidReceipt(
-            luxury_engine::uninstall::ReceiptError::InvalidShortcutDisplayName
-        )
+        InstallError::InvalidManifest(luxury_spec::SpecError::InvalidText {
+            field: "package.name",
+            max: 128,
+        })
     );
-    assert_eq!(prepare_port.calls, ["verify"]);
+    assert!(prepare_port.calls.is_empty());
 
     let error = install(InstallCommand::new(package), &mut port, || false, |_| {}).unwrap_err();
     assert_eq!(
         error,
-        InstallError::InvalidReceipt(
-            luxury_engine::uninstall::ReceiptError::InvalidShortcutDisplayName
-        )
+        InstallError::InvalidManifest(luxury_spec::SpecError::InvalidText {
+            field: "package.name",
+            max: 128,
+        })
     );
     assert!(port.calls.is_empty());
     assert_eq!(port.receipt, Some(receipt));
@@ -1584,6 +1618,9 @@ fn manifest(scope: InstallScope, target: Target) -> Manifest {
             publisher: "Luxury Software".into(),
             description: None,
             license: None,
+            icon: None,
+            homepage: None,
+            support: None,
         },
         target,
         install: InstallPolicy {
@@ -1611,18 +1648,31 @@ fn receipt(
     receipt_with_identity(version, directory, PackageIdentity::Unsigned, files)
 }
 
+fn product_metadata(version: Version) -> luxury_spec::ProductMetadata {
+    luxury_spec::ProductMetadata {
+        package_id: PackageId::parse("dev.luxury.demo").unwrap(),
+        name: "Luxury Demo".into(),
+        version,
+        publisher: "Luxury Software".into(),
+        description: None,
+        icon: None,
+        homepage: None,
+        support: None,
+    }
+}
+
 fn receipt_with_identity(
     version: Version,
     directory: InstallDirectory,
     package_identity: PackageIdentity,
     files: Vec<FileEntry>,
 ) -> OwnershipReceipt {
-    OwnershipReceipt::new(
-        PackageId::parse("dev.luxury.demo").unwrap(),
-        version,
+    OwnershipReceipt::new_with_product_metadata(
         InstallScope::User,
         directory,
         package_identity,
+        package_identity,
+        product_metadata(version),
         files,
     )
     .unwrap()
@@ -1649,12 +1699,15 @@ fn receipt_with_provenance(
     payload_signer: PackageIdentity,
     files: Vec<FileEntry>,
 ) -> OwnershipReceipt {
-    let receipt = receipt_with_identity(version, directory, authorized_publisher, files);
-    let mut value = serde_json::to_value(receipt).unwrap();
-    value["payload_signer"] = serde_json::to_value(payload_signer).unwrap();
-    let receipt: OwnershipReceipt = serde_json::from_value(value).unwrap();
-    receipt.validate().unwrap();
-    receipt
+    OwnershipReceipt::new_with_product_metadata(
+        InstallScope::User,
+        directory,
+        authorized_publisher,
+        payload_signer,
+        product_metadata(version),
+        files,
+    )
+    .unwrap()
 }
 
 fn legacy_receipt(
@@ -1668,6 +1721,7 @@ fn legacy_receipt(
     value.remove("package_identity");
     value.remove("authorized_publisher");
     value.remove("payload_signer");
+    value.remove("product_metadata");
     let value = serde_json::Value::Object(value.clone());
     let receipt: OwnershipReceipt = serde_json::from_value(value).unwrap();
     receipt.validate().unwrap();

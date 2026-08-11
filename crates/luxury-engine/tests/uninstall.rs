@@ -215,7 +215,7 @@ fn missing_receipt_is_an_idempotent_noop() {
 }
 
 #[test]
-fn receipt_v6_binds_shortcut_artifacts_and_reads_v1_through_v5() {
+fn receipt_v7_reads_v1_through_v6_and_binds_current_authority() {
     let current = receipt("dev.luxury.demo");
     assert_eq!(
         current.format_version(),
@@ -238,18 +238,31 @@ fn receipt_v6_binds_shortcut_artifacts_and_reads_v1_through_v5() {
 
     let mut v3_json = current_json.clone();
     v3_json["format_version"] = serde_json::json!(3);
+    v3_json.as_object_mut().unwrap().remove("product_metadata");
     let v3: OwnershipReceipt = serde_json::from_value(v3_json.clone()).unwrap();
     v3.validate().unwrap();
     assert_eq!(v3.entrypoint(), None);
 
     let mut v4_json = current_json.clone();
     v4_json["format_version"] = serde_json::json!(4);
+    v4_json.as_object_mut().unwrap().remove("product_metadata");
     let v4: OwnershipReceipt = serde_json::from_value(v4_json).unwrap();
     v4.validate().unwrap();
     assert_eq!(v4.shortcuts(), luxury_spec::ShortcutPolicy::default());
 
+    let mut v6_json = current_json.clone();
+    v6_json["format_version"] = serde_json::json!(6);
+    v6_json.as_object_mut().unwrap().remove("product_metadata");
+    let v6: OwnershipReceipt = serde_json::from_value(v6_json).unwrap();
+    v6.validate().unwrap();
+    assert_eq!(v6.product_metadata(), None);
+
     let mut legacy_shortcuts_json = current_json.clone();
     legacy_shortcuts_json["format_version"] = serde_json::json!(4);
+    legacy_shortcuts_json
+        .as_object_mut()
+        .unwrap()
+        .remove("product_metadata");
     legacy_shortcuts_json["shortcuts"] = serde_json::json!({"application_menu": true});
     let legacy_shortcuts: OwnershipReceipt = serde_json::from_value(legacy_shortcuts_json).unwrap();
     assert_eq!(
@@ -271,6 +284,7 @@ fn receipt_v6_binds_shortcut_artifacts_and_reads_v1_through_v5() {
     let legacy_fields = legacy_json.as_object_mut().unwrap();
     legacy_fields.remove("authorized_publisher");
     legacy_fields.remove("payload_signer");
+    legacy_fields.remove("product_metadata");
     let legacy: OwnershipReceipt = serde_json::from_value(legacy_json).unwrap();
     legacy.validate().unwrap();
     assert_eq!(legacy.package_identity(), None);
@@ -281,6 +295,7 @@ fn receipt_v6_binds_shortcut_artifacts_and_reads_v1_through_v5() {
     let v2_fields = v2_json.as_object_mut().unwrap();
     v2_fields.remove("authorized_publisher");
     v2_fields.remove("payload_signer");
+    v2_fields.remove("product_metadata");
     v2_fields.insert(
         "package_identity".into(),
         serde_json::json!({"kind": "unsigned"}),
@@ -324,12 +339,12 @@ fn receipt_v6_binds_shortcut_artifacts_and_reads_v1_through_v5() {
     );
 
     let mut unsupported = current_json.clone();
-    unsupported["format_version"] = serde_json::json!(7);
+    unsupported["format_version"] = serde_json::json!(8);
     let unsupported: OwnershipReceipt = serde_json::from_value(unsupported).unwrap();
     assert_eq!(
         unsupported.validate(),
         Err(ReceiptError::UnsupportedFormat {
-            found: 7,
+            found: 8,
             supported: luxury_engine::uninstall::RECEIPT_FORMAT_VERSION,
         })
     );
@@ -386,6 +401,82 @@ fn receipt_v6_binds_shortcut_artifacts_and_reads_v1_through_v5() {
 }
 
 #[test]
+fn receipt_v7_product_metadata_is_strict_and_legacy_cannot_claim_it() {
+    let current = receipt("dev.luxury.demo");
+    let mut value = serde_json::to_value(&current).unwrap();
+    value["product_metadata"] = serde_json::json!({
+        "package_id": "dev.luxury.demo",
+        "name": "Luxury Demo",
+        "version": "1.2.3",
+        "publisher": "Luxury Software",
+        "description": "Desktop app",
+        "homepage": "https://example.com",
+        "support": "https://example.com/support"
+    });
+    let receipt: OwnershipReceipt = serde_json::from_value(value.clone()).unwrap();
+    receipt.validate().unwrap();
+    assert_eq!(receipt.product_metadata().unwrap().name, "Luxury Demo");
+
+    let mut legacy = value.clone();
+    legacy["format_version"] = serde_json::json!(6);
+    let legacy: OwnershipReceipt = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.validate(), Err(ReceiptError::LegacyProductMetadata));
+
+    for (field, replacement) in [
+        ("package_id", serde_json::json!("dev.luxury.other")),
+        ("version", serde_json::json!("2.0.0")),
+    ] {
+        let mut mismatched = value.clone();
+        mismatched["product_metadata"][field] = replacement;
+        let mismatched: OwnershipReceipt = serde_json::from_value(mismatched).unwrap();
+        assert_eq!(
+            mismatched.validate(),
+            Err(ReceiptError::ProductMetadataIdentityMismatch)
+        );
+    }
+
+    let mut unsafe_url = value;
+    unsafe_url["product_metadata"]["support"] = serde_json::json!("http://example.com");
+    let unsafe_url: OwnershipReceipt = serde_json::from_value(unsafe_url).unwrap();
+    assert!(matches!(
+        unsafe_url.validate(),
+        Err(ReceiptError::InvalidProductMetadata(
+            SpecError::InvalidProductUrl { field: "support" }
+        ))
+    ));
+
+    let mut mismatched_icon = serde_json::to_value(&receipt).unwrap();
+    let icon_path = if cfg!(target_os = "windows") {
+        "bin/demo.ico"
+    } else if cfg!(target_os = "linux") {
+        "bin/demo.png"
+    } else {
+        "bin/demo.icns"
+    };
+    mismatched_icon["files"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "path": icon_path,
+            "size": 4,
+            "sha256": "e".repeat(64),
+            "executable": false
+        }));
+    mismatched_icon["product_metadata"]["icon"] = serde_json::json!({
+        "path": icon_path,
+        "size": 4,
+        "sha256": "f".repeat(64)
+    });
+    let mismatched_icon: OwnershipReceipt = serde_json::from_value(mismatched_icon).unwrap();
+    assert!(matches!(
+        mismatched_icon.validate(),
+        Err(ReceiptError::InvalidProductMetadata(
+            SpecError::ProductIconIdentityMismatch(_)
+        ))
+    ));
+}
+
+#[test]
 fn receipt_v5_keeps_intent_without_authority_and_v6_requires_exact_artifacts() {
     let artifact = ShortcutArtifact::new(
         ShortcutLocation::ApplicationMenu,
@@ -397,6 +488,8 @@ fn receipt_v5_keeps_intent_without_authority_and_v6_requires_exact_artifacts() {
     .unwrap();
     let current = receipt("dev.luxury.demo");
     let mut v6 = serde_json::to_value(&current).unwrap();
+    v6["format_version"] = serde_json::json!(6);
+    v6.as_object_mut().unwrap().remove("product_metadata");
     v6["entrypoint"] = serde_json::json!("bin/demo.exe");
     v6["shortcuts"] = serde_json::json!({"application_menu": true});
     v6["shortcut_display_name"] = serde_json::json!("Luxury Demo");
@@ -511,6 +604,7 @@ fn default_port_uninstalls_v5_intent_without_inventing_artifact_authority() {
 
     let mut value = serde_json::to_value(receipt("dev.luxury.demo")).unwrap();
     value["format_version"] = serde_json::json!(5);
+    value.as_object_mut().unwrap().remove("product_metadata");
     value["entrypoint"] = serde_json::json!("bin/demo.exe");
     value["shortcuts"] = serde_json::json!({"application_menu": true});
     value
@@ -749,12 +843,21 @@ fn observer_panic_after_mutation_rolls_back() {
 }
 
 fn receipt(package_id: &str) -> OwnershipReceipt {
-    OwnershipReceipt::new(
-        PackageId::parse(package_id).unwrap(),
-        Version::new(1, 2, 3),
+    OwnershipReceipt::new_with_product_metadata(
         InstallScope::User,
         InstallDirectory::parse("LuxuryDemo").unwrap(),
         PackageIdentity::Unsigned,
+        PackageIdentity::Unsigned,
+        luxury_spec::ProductMetadata {
+            package_id: PackageId::parse(package_id).unwrap(),
+            name: "Luxury Demo".into(),
+            version: Version::new(1, 2, 3),
+            publisher: "Luxury Software".into(),
+            description: None,
+            icon: None,
+            homepage: None,
+            support: None,
+        },
         vec![
             file("bin/demo.exe", 'a'),
             file("share/readme.txt", 'b'),

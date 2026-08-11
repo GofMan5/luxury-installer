@@ -7,7 +7,7 @@ use std::{
 
 use luxury_spec::{
     FileEntry, InstallDirectory, InstallScope, OperatingSystem, PackageId, PackagePath,
-    Sha256Digest, ShortcutPolicy, SpecError, validate_entrypoint,
+    ProductMetadata, Sha256Digest, ShortcutPolicy, SpecError, validate_entrypoint,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,8 @@ const IDENTITY_RECEIPT_FORMAT_VERSION: u32 = 2;
 const PROVENANCE_RECEIPT_FORMAT_VERSION: u32 = 3;
 const ENTRYPOINT_RECEIPT_FORMAT_VERSION: u32 = 4;
 const SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION: u32 = 5;
-pub const RECEIPT_FORMAT_VERSION: u32 = 6;
+const SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION: u32 = 6;
+pub const RECEIPT_FORMAT_VERSION: u32 = 7;
 const MAX_RECEIPT_FILES: usize = 100_000;
 const MAX_SHORTCUT_ARTIFACTS: usize = 2;
 const MAX_SHORTCUT_DISPLAY_NAME_CHARS: usize = 128;
@@ -117,6 +118,8 @@ pub struct OwnershipReceipt {
     shortcut_display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     shortcut_artifacts: Vec<ShortcutArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    product_metadata: Option<ProductMetadata>,
     files: Vec<FileEntry>,
 }
 
@@ -137,7 +140,9 @@ impl OwnershipReceipt {
         files: Vec<FileEntry>,
     ) -> Result<Self, ReceiptError> {
         let receipt = Self {
-            format_version: RECEIPT_FORMAT_VERSION,
+            // This compatibility constructor lacks display metadata and therefore
+            // deliberately creates the latest legacy receipt rather than inventing it.
+            format_version: SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION,
             package_id,
             version,
             scope,
@@ -149,6 +154,35 @@ impl OwnershipReceipt {
             shortcuts: ShortcutPolicy::default(),
             shortcut_display_name: None,
             shortcut_artifacts: Vec::new(),
+            product_metadata: None,
+            files,
+        };
+        receipt.validate()?;
+        Ok(receipt)
+    }
+
+    pub fn new_with_product_metadata(
+        scope: InstallScope,
+        directory: InstallDirectory,
+        authorized_publisher: PackageIdentity,
+        payload_signer: PackageIdentity,
+        product_metadata: ProductMetadata,
+        files: Vec<FileEntry>,
+    ) -> Result<Self, ReceiptError> {
+        let receipt = Self {
+            format_version: RECEIPT_FORMAT_VERSION,
+            package_id: product_metadata.package_id.clone(),
+            version: product_metadata.version.clone(),
+            scope,
+            directory,
+            package_identity: None,
+            authorized_publisher: Some(authorized_publisher),
+            payload_signer: Some(payload_signer),
+            entrypoint: None,
+            shortcuts: ShortcutPolicy::default(),
+            shortcut_display_name: None,
+            shortcut_artifacts: Vec::new(),
+            product_metadata: Some(product_metadata),
             files,
         };
         receipt.validate()?;
@@ -176,6 +210,7 @@ impl OwnershipReceipt {
                 .enabled()
                 .then(|| plan.display_name().to_owned()),
             shortcut_artifacts,
+            product_metadata: Some(plan.product_metadata().clone()),
             files: plan.files().to_vec(),
         };
         receipt.validate()?;
@@ -196,6 +231,7 @@ impl OwnershipReceipt {
             shortcuts: ShortcutPolicy::default(),
             shortcut_display_name: None,
             shortcut_artifacts: Vec::new(),
+            product_metadata: Some(plan.product_metadata().clone()),
             files: plan.files().to_vec(),
         }
     }
@@ -213,6 +249,7 @@ impl OwnershipReceipt {
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
                 | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(PackageIdentity::Unsigned),
@@ -222,6 +259,7 @@ impl OwnershipReceipt {
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
                 | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(PackageIdentity::TrustedPublisher { .. }),
@@ -240,6 +278,7 @@ impl OwnershipReceipt {
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
                 | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 Some(_),
                 _,
@@ -251,6 +290,7 @@ impl OwnershipReceipt {
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
                 | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 None,
@@ -262,6 +302,7 @@ impl OwnershipReceipt {
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
                 | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(_),
@@ -273,6 +314,7 @@ impl OwnershipReceipt {
                 PROVENANCE_RECEIPT_FORMAT_VERSION
                 | ENTRYPOINT_RECEIPT_FORMAT_VERSION
                 | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
+                | SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION
                 | RECEIPT_FORMAT_VERSION,
                 None,
                 Some(_),
@@ -310,6 +352,7 @@ impl OwnershipReceipt {
             }
             ENTRYPOINT_RECEIPT_FORMAT_VERSION
             | SHORTCUT_INTENT_RECEIPT_FORMAT_VERSION
+            | SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION
             | RECEIPT_FORMAT_VERSION => {
                 validate_entrypoint(
                     OperatingSystem::host(),
@@ -327,13 +370,35 @@ impl OwnershipReceipt {
         if self.shortcuts.enabled() && self.entrypoint.is_none() {
             return Err(ReceiptError::ShortcutsWithoutEntrypoint);
         }
-        if self.format_version < RECEIPT_FORMAT_VERSION
+        if self.format_version < SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION
             && (self.shortcut_display_name.is_some() || !self.shortcut_artifacts.is_empty())
         {
             return Err(ReceiptError::LegacyShortcutArtifacts);
         }
-        if self.format_version == RECEIPT_FORMAT_VERSION {
+        if self.format_version >= SHORTCUT_ARTIFACT_RECEIPT_FORMAT_VERSION {
             self.validate_shortcut_artifacts()?;
+        }
+        match (self.format_version, &self.product_metadata) {
+            (format, Some(_)) if format < RECEIPT_FORMAT_VERSION => {
+                return Err(ReceiptError::LegacyProductMetadata);
+            }
+            (RECEIPT_FORMAT_VERSION, None) => {
+                return Err(ReceiptError::MissingProductMetadata);
+            }
+            (RECEIPT_FORMAT_VERSION, Some(metadata)) => {
+                if metadata.package_id != self.package_id || metadata.version != self.version {
+                    return Err(ReceiptError::ProductMetadataIdentityMismatch);
+                }
+                metadata
+                    .validate_against_files(OperatingSystem::host(), &self.files)
+                    .map_err(ReceiptError::InvalidProductMetadata)?;
+                if self.shortcuts.enabled()
+                    && self.shortcut_display_name.as_deref() != Some(metadata.name.as_str())
+                {
+                    return Err(ReceiptError::ShortcutProductNameMismatch);
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -431,6 +496,10 @@ impl OwnershipReceipt {
         &self.shortcut_artifacts
     }
 
+    pub fn product_metadata(&self) -> Option<&ProductMetadata> {
+        self.product_metadata.as_ref()
+    }
+
     pub fn files(&self) -> &[FileEntry] {
         &self.files
     }
@@ -480,6 +549,16 @@ pub enum ReceiptError {
     ShortcutArtifactLocations,
     #[error("shortcut artifact `{0}` must be a portable leaf name")]
     InvalidShortcutLeaf(String),
+    #[error("receipt formats 1 through 6 must not contain product metadata")]
+    LegacyProductMetadata,
+    #[error("receipt format 7 is missing authenticated product metadata")]
+    MissingProductMetadata,
+    #[error("receipt product metadata package ID or version does not match receipt identity")]
+    ProductMetadataIdentityMismatch,
+    #[error("invalid receipt product metadata: {0}")]
+    InvalidProductMetadata(#[source] SpecError),
+    #[error("receipt shortcut display name does not match product metadata")]
+    ShortcutProductNameMismatch,
 }
 
 pub(crate) fn valid_shortcut_display_name(value: &str) -> bool {

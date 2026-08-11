@@ -968,10 +968,9 @@ mod tests {
             .unwrap()
             .insert("one".into(), Pending::Request(sender));
         read_stdout(
-            Cursor::new(
-                br#"{"protocolVersion":3,"type":"result","id":"one","result":{"ok":true}}
-"#,
-            ),
+            Cursor::new(format!(
+                "{{\"protocolVersion\":{PROTOCOL_VERSION},\"type\":\"result\",\"id\":\"one\",\"result\":{{\"ok\":true}}}}\n"
+            )),
             Arc::clone(&process),
         );
         assert_eq!(receiver.recv().unwrap().unwrap(), json!({ "ok": true }));
@@ -992,10 +991,9 @@ mod tests {
     fn unknown_response_id_fails_the_process() {
         let process = process();
         read_stdout(
-            Cursor::new(
-                br#"{"protocolVersion":3,"type":"result","id":"unknown","result":{}}
-"#,
-            ),
+            Cursor::new(format!(
+                "{{\"protocolVersion\":{PROTOCOL_VERSION},\"type\":\"result\",\"id\":\"unknown\",\"result\":{{}}}}\n"
+            )),
             Arc::clone(&process),
         );
         assert!(process.failed.load(Ordering::Acquire));

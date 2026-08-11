@@ -15,7 +15,7 @@ use std::{
 
 use flate2::{Compression, GzBuilder, bufread::GzDecoder};
 use luxury_spec::{
-    FORMAT_VERSION, Manifest, PUBLISHER_ROTATION_FORMAT_VERSION, PackagePath,
+    FORMAT_VERSION, Manifest, OperatingSystem, PUBLISHER_ROTATION_FORMAT_VERSION, PackagePath,
     SIGNED_FORMAT_VERSION, Sha256Digest, SpecError,
 };
 use sha2::{Digest, Sha256};
@@ -37,6 +37,7 @@ const GZIP_OS_UNKNOWN: u8 = 255;
 const REGULAR_FILE_MODE: u32 = 0o644;
 const IO_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_DECODED_ICON_BYTES: usize = 64 * 1024 * 1024;
 const REVIEW_FINGERPRINT_DOMAIN: &[u8] = b"luxury.luxpkg.review-fingerprint.v1\0";
 static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 
@@ -157,6 +158,8 @@ pub enum BundleError {
     PayloadSizeOverflow,
     #[error("payload path {0} is not in the manifest")]
     UnknownPayloadPath(String),
+    #[error("product icon `{path}` is not a valid native {format} image")]
+    InvalidProductIcon { path: String, format: &'static str },
 }
 
 pub type Result<T> = std::result::Result<T, BundleError>;
@@ -518,6 +521,8 @@ fn open_bundle_inner<R: Read>(
         }
     }
 
+    validate_product_icon_object(&manifest, objects.path())?;
+
     validate_archive_end(archive, cancelled)?;
     check_cancelled(cancelled)?;
 
@@ -598,6 +603,214 @@ fn expected_objects(manifest: &Manifest) -> Result<BTreeMap<String, u64>> {
         }
     }
     Ok(expected)
+}
+
+fn validate_product_icon_object(manifest: &Manifest, objects: &Path) -> Result<()> {
+    let Some(path) = manifest.package.icon.as_ref() else {
+        return Ok(());
+    };
+    let file = manifest
+        .files
+        .iter()
+        .find(|file| file.path == *path)
+        .ok_or_else(|| SpecError::ProductIconMissingFile(path.to_string()))?;
+    let object = objects.join(file.sha256.as_str());
+    if valid_native_icon(manifest.target.os, &object) {
+        Ok(())
+    } else {
+        Err(BundleError::InvalidProductIcon {
+            path: path.to_string(),
+            format: native_icon_format(manifest.target.os),
+        })
+    }
+}
+
+/// Decodes an on-disk product icon with the target's native format and the same bounded budgets
+/// the package reader applies, so authoring can refuse bytes this crate would later reject.
+pub fn valid_native_icon(target: OperatingSystem, path: &Path) -> bool {
+    match target {
+        OperatingSystem::Windows => validate_ico(path),
+        OperatingSystem::Linux => validate_png(path),
+        OperatingSystem::Macos => validate_icns(path),
+    }
+}
+
+pub const fn native_icon_format(target: OperatingSystem) -> &'static str {
+    match target {
+        OperatingSystem::Windows => "ICO",
+        OperatingSystem::Linux => "PNG",
+        OperatingSystem::Macos => "ICNS",
+    }
+}
+
+fn validate_ico(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    if !valid_ico_structure(&bytes) {
+        return false;
+    }
+    let Ok(directory) = ico::IconDir::read(std::io::Cursor::new(bytes)) else {
+        return false;
+    };
+    // Entries may share one data offset, so the decode budget is aggregate: a compressed
+    // PNG-in-ICO entry expands far beyond its declared bytes and would otherwise repeat freely.
+    let mut budget = MAX_DECODED_ICON_BYTES as u64;
+    !directory.entries().is_empty()
+        && directory.entries().iter().all(|entry| {
+            let Some(cost) = u64::from(entry.width())
+                .checked_mul(u64::from(entry.height()))
+                .and_then(|pixels| pixels.checked_mul(4))
+            else {
+                return false;
+            };
+            let Some(remaining) = budget.checked_sub(cost) else {
+                return false;
+            };
+            budget = remaining;
+            entry.decode().is_ok()
+        })
+}
+
+fn valid_ico_structure(bytes: &[u8]) -> bool {
+    if bytes.len() < 6 || bytes.len() > luxury_spec::MAX_PRODUCT_ICON_BYTES as usize {
+        return false;
+    }
+    let little_u16 = |offset: usize| u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+    if little_u16(0) != 0 || little_u16(2) != 1 {
+        return false;
+    }
+    let count = usize::from(little_u16(4));
+    if count == 0 {
+        return false;
+    }
+    let Some(table_end) = count
+        .checked_mul(16)
+        .and_then(|size| 6_usize.checked_add(size))
+    else {
+        return false;
+    };
+    if table_end > bytes.len() {
+        return false;
+    }
+    let mut total_declared = 0_usize;
+    for index in 0..count {
+        let entry = 6 + index * 16;
+        let size = u32::from_le_bytes(
+            bytes[entry + 8..entry + 12]
+                .try_into()
+                .expect("fixed ICO entry size"),
+        ) as usize;
+        let offset = u32::from_le_bytes(
+            bytes[entry + 12..entry + 16]
+                .try_into()
+                .expect("fixed ICO entry offset"),
+        ) as usize;
+        if size == 0 || offset < table_end {
+            return false;
+        }
+        let Some(total) = total_declared.checked_add(size) else {
+            return false;
+        };
+        if total > luxury_spec::MAX_PRODUCT_ICON_BYTES as usize {
+            return false;
+        }
+        total_declared = total;
+        if offset.checked_add(size).is_none_or(|end| end > bytes.len()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn validate_png(path: &Path) -> bool {
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let decoder = png::Decoder::new_with_limits(
+        BufReader::new(file),
+        png::Limits {
+            bytes: MAX_DECODED_ICON_BYTES,
+        },
+    );
+    let Ok(mut reader) = decoder.read_info() else {
+        return false;
+    };
+    let Some(size) = reader.output_buffer_size() else {
+        return false;
+    };
+    if size > MAX_DECODED_ICON_BYTES {
+        return false;
+    }
+    let mut output = vec![0; size];
+    reader.next_frame(&mut output).is_ok()
+}
+
+fn validate_icns(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    if !valid_icns_structure(&bytes) {
+        return false;
+    }
+    let Ok(family) = icns::IconFamily::read(bytes.as_slice()) else {
+        return false;
+    };
+    let icons = family.available_icons();
+    // `get_icon_with_type` resolves by OSType and always finds the first matching element, so
+    // duplicate headers would decode the same real element repeatedly. Structure rejects them,
+    // and the aggregate budget still bounds the distinct icons that remain.
+    let mut budget = MAX_DECODED_ICON_BYTES as u64;
+    !icons.is_empty()
+        && icons.into_iter().all(|icon| {
+            let Some(cost) = u64::from(icon.pixel_width())
+                .checked_mul(u64::from(icon.pixel_height()))
+                .and_then(|pixels| pixels.checked_mul(4))
+            else {
+                return false;
+            };
+            let Some(remaining) = budget.checked_sub(cost) else {
+                return false;
+            };
+            budget = remaining;
+            family.get_icon_with_type(icon).is_ok()
+        })
+}
+
+fn valid_icns_structure(bytes: &[u8]) -> bool {
+    if bytes.len() < 8 || bytes.len() > luxury_spec::MAX_PRODUCT_ICON_BYTES as usize {
+        return false;
+    }
+    if &bytes[..4] != b"icns" {
+        return false;
+    }
+    let outer = u32::from_be_bytes(bytes[4..8].try_into().expect("fixed ICNS header")) as usize;
+    if outer != bytes.len() {
+        return false;
+    }
+    let mut offset = 8;
+    let mut seen = BTreeSet::new();
+    while offset < outer {
+        let Some(header_end) = offset.checked_add(8).filter(|end| *end <= outer) else {
+            return false;
+        };
+        if !seen.insert(&bytes[offset..offset + 4]) {
+            return false;
+        }
+        let element = u32::from_be_bytes(
+            bytes[offset + 4..header_end]
+                .try_into()
+                .expect("fixed ICNS element header"),
+        ) as usize;
+        if element < 8 {
+            return false;
+        }
+        let Some(end) = offset.checked_add(element).filter(|end| *end <= outer) else {
+            return false;
+        };
+        offset = end;
+    }
+    offset == outer
 }
 
 struct VerifiedObject {

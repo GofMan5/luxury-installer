@@ -8,7 +8,8 @@ use std::{
 use luxury_spec::{
     ENTRYPOINT_SCHEMA_VERSION, FORMAT_VERSION, InstallPolicy, LICENSE_SCHEMA_VERSION,
     MAX_PAYLOAD_BYTES, MAX_PAYLOAD_FILE_BYTES, MAX_PAYLOAD_FILES, Manifest, OperatingSystem,
-    Package, PackagePath, SHORTCUT_SCHEMA_VERSION, SpecError, Target,
+    PRODUCT_IDENTITY_SCHEMA_VERSION, Package, PackagePath, SHORTCUT_SCHEMA_VERSION, SpecError,
+    Target,
 };
 use tempfile::{NamedTempFile, TempDir, tempdir_in};
 
@@ -277,6 +278,20 @@ pub fn replace_payload_cancellable(
         if !keep_entrypoint {
             config.install.entrypoint = None;
             config.install.shortcuts = luxury_spec::ShortcutPolicy::default();
+        }
+    }
+    // Keep the icon only when the replacement still satisfies the schema-5 icon contract; a stale
+    // reference to a same-path file that is now executable or undecodable would make every later
+    // save fail with no way back through Studio. The staged `incoming` tree holds the new bytes.
+    if let Some(icon) = config.package.icon.as_ref() {
+        let keep_icon = imported_files.binary_search(icon).is_ok()
+            && !config.payload.executable.contains(icon)
+            && luxury_bundle::valid_native_icon(
+                config.target.os,
+                &incoming.join(icon.to_native_path()),
+            );
+        if !keep_icon {
+            config.package.icon = None;
         }
     }
     config.schema_version = schema_version(&config.package, &config.install);
@@ -827,7 +842,9 @@ fn restore_previous_payload(previous: &Path, payload: &Path, staging: TempDir) -
 }
 
 fn schema_version(package: &Package, install: &InstallPolicy) -> u32 {
-    if install.shortcuts.enabled() {
+    if package.has_native_identity_metadata() {
+        PRODUCT_IDENTITY_SCHEMA_VERSION
+    } else if install.shortcuts.enabled() {
         SHORTCUT_SCHEMA_VERSION
     } else if package.license.is_some() {
         LICENSE_SCHEMA_VERSION
@@ -884,6 +901,9 @@ mod tests {
             publisher: "Luxury Software".into(),
             description: None,
             license: None,
+            icon: None,
+            homepage: None,
+            support: None,
         };
         let install = InstallPolicy {
             scope: luxury_spec::InstallScope::User,

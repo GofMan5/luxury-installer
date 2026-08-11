@@ -34,6 +34,8 @@ const MAX_LAUNCH_MARKER_BYTES: u64 = 128;
 const FOREIGN_BYTES: &[u8] = b"foreign file preserved by lifecycle probe";
 const STRESS_PACKAGE_ID: &str = "dev.luxury.demo";
 const STRESS_INSTALL_DIRECTORY: &str = "Luxury Demo";
+const STRESS_PRODUCT_NAME: &str = "Luxury Demo";
+const STRESS_PRODUCT_PUBLISHER: &str = "Luxury Software";
 const STRESS_PUBLISHED_FILE: &str = "000-large.bin";
 const PRE_MUTATION_PHASES: &[&str] = &[
     "validating",

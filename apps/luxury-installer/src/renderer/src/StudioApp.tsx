@@ -49,6 +49,7 @@ export function StudioApp({ bridge }: { bridge: LuxuryBridge }) {
       onImportDirectory={() => void studio.importProject('directory')}
       onReplacePayload={() => void studio.importProject('replace')}
       onChooseEntrypoint={studio.chooseProjectEntrypoint}
+      onChooseIcon={studio.chooseProjectIcon}
       onBuild={(input) => void studio.buildProject(input)}
       onCancelBuild={() => void studio.cancelProjectBuild()}
       folderPending={studio.folderPending}
@@ -73,6 +74,7 @@ interface StudioViewProps {
   onImportDirectory(): void
   onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
+  onChooseIcon(): Promise<string | null>
   onBuild(input?: StudioProjectUpdate): void
   onCancelBuild(): void
   folderPending: boolean
@@ -95,6 +97,7 @@ export function StudioView({
   onImportDirectory,
   onReplacePayload,
   onChooseEntrypoint,
+  onChooseIcon,
   onBuild,
   onCancelBuild,
   folderPending,
@@ -107,6 +110,7 @@ export function StudioView({
     state.kind === 'saving' ||
     state.kind === 'importing' ||
     state.kind === 'choosingEntrypoint' ||
+    state.kind === 'choosingIcon' ||
     state.kind === 'building' ||
     folderPending
   const workspace = useRef<HTMLElement>(null)
@@ -191,6 +195,7 @@ export function StudioView({
             onImportDirectory={onImportDirectory}
             onReplacePayload={onReplacePayload}
             onChooseEntrypoint={onChooseEntrypoint}
+            onChooseIcon={onChooseIcon}
             onBuild={onBuild}
             onCancelBuild={onCancelBuild}
             onRevealBuildOutput={bridge.revealBuildOutput}
@@ -287,6 +292,9 @@ function projectUpdateFrom(project: StudioProject): StudioProjectUpdate {
     version: project.version,
     description: project.description,
     license: project.license,
+    icon: project.icon,
+    homepage: project.homepage,
+    support: project.support,
     targetOs: project.targetOs,
     targetArch: project.targetArch,
     installDirectory: project.installDirectory,
@@ -310,6 +318,7 @@ function ProjectView({
   onImportDirectory,
   onReplacePayload,
   onChooseEntrypoint,
+  onChooseIcon,
   onBuild,
   onCancelBuild,
   onRevealBuildOutput,
@@ -326,6 +335,7 @@ function ProjectView({
   onImportDirectory(): void
   onReplacePayload(): void
   onChooseEntrypoint(): Promise<string | null>
+  onChooseIcon(): Promise<string | null>
   onBuild(input?: StudioProjectUpdate): void
   onCancelBuild(): void
   onRevealBuildOutput(): Promise<void>
@@ -337,6 +347,7 @@ function ProjectView({
   const saving = state.kind === 'saving'
   const importing = state.kind === 'importing'
   const choosingEntrypoint = state.kind === 'choosingEntrypoint'
+  const choosingIcon = state.kind === 'choosingIcon'
   const buildable = project.formatVersion === 1
   const result = state.kind === 'built' ? state.result : null
   const error = state.kind === 'error' ? state.message : null
@@ -521,6 +532,27 @@ function ProjectView({
               <StudioField label="Описание" wide>
                 <input maxLength={1024} value={draft.description ?? ''} onChange={(event) => setDraft({ ...draft, description: event.target.value || null })} placeholder="Короткое описание приложения" />
               </StudioField>
+              <div className="studio-field studio-field--wide">
+                <label htmlFor="studio-product-icon">Значок приложения</label>
+                <div className="studio-entrypoint">
+                  <input id="studio-product-icon" maxLength={512} value={draft.icon ?? ''} onChange={(event) => setDraft({ ...draft, icon: event.target.value || null })} placeholder={iconPlaceholder(draft.targetOs)} />
+                  <button className="secondary-button" type="button" disabled={busy || dirty || draft.targetOs !== project.targetOs} onClick={() => {
+                    void onChooseIcon().then((path) => {
+                      if (path) setDraft((current) => ({ ...current, icon: path }))
+                    })
+                  }}>
+                    {choosingIcon ? <SquareDashed className="spin" size={15} aria-hidden="true" /> : <FolderOpen size={15} aria-hidden="true" />}
+                    {choosingIcon ? 'Выбираем…' : 'Выбрать'}
+                  </button>
+                </div>
+                <small>{dirty ? 'Сохраните изменения перед выбором файла.' : draft.targetOs === project.targetOs ? `Файл внутри payload: ${iconExtension(draft.targetOs)}` : 'Сохраните новую целевую систему перед выбором значка.'}</small>
+              </div>
+              <StudioField label="Сайт продукта" wide>
+                <input type="url" pattern="https://.*" maxLength={2048} value={draft.homepage ?? ''} onChange={(event) => setDraft({ ...draft, homepage: event.target.value || null })} placeholder="https://example.com" />
+              </StudioField>
+              <StudioField label="Поддержка" wide>
+                <input type="url" pattern="https://.*" maxLength={2048} value={draft.support ?? ''} onChange={(event) => setDraft({ ...draft, support: event.target.value || null })} placeholder="https://example.com/support" />
+              </StudioField>
             </div>
           </fieldset>
 
@@ -528,7 +560,14 @@ function ProjectView({
             <legend>Установка</legend>
             <div className="studio-form-grid">
               <StudioField label="Система">
-                <select value={draft.targetOs} onChange={(event) => setDraft({ ...draft, targetOs: event.target.value as StudioProjectUpdate['targetOs'] })}>
+                <select value={draft.targetOs} onChange={(event) => {
+                  const targetOs = event.target.value as StudioProjectUpdate['targetOs']
+                  setDraft({
+                    ...draft,
+                    targetOs,
+                    icon: draft.icon?.toLowerCase().endsWith(iconExtension(targetOs)) ? draft.icon : null,
+                  })
+                }}>
                   <option value="windows">Windows</option>
                   <option value="linux">Linux</option>
                   <option value="macos">macOS</option>
@@ -552,7 +591,7 @@ function ProjectView({
               <div className="studio-field studio-field--wide">
                 <label htmlFor="studio-entrypoint">Точка запуска</label>
                 <div className="studio-entrypoint">
-                  <input id="studio-entrypoint" aria-describedby="studio-entrypoint-hint" maxLength={4096} value={draft.entrypoint ?? ''} onChange={(event) => setDraft({
+                  <input id="studio-entrypoint" aria-describedby="studio-entrypoint-hint" maxLength={512} value={draft.entrypoint ?? ''} onChange={(event) => setDraft({
                     ...draft,
                     entrypoint: event.target.value || null,
                     shortcuts: event.target.value
@@ -562,7 +601,7 @@ function ProjectView({
                   <button
                     className="secondary-button"
                     type="button"
-                    disabled={busy}
+                    disabled={busy || dirty}
                     onClick={() => {
                       void onChooseEntrypoint().then((path) => {
                         if (path) setDraft((current) => ({ ...current, entrypoint: path }))
@@ -573,7 +612,7 @@ function ProjectView({
                     {choosingEntrypoint ? 'Выбираем…' : 'Выбрать'}
                   </button>
                 </div>
-                <small id="studio-entrypoint-hint">Путь внутри payload, например bin/app.exe</small>
+                <small id="studio-entrypoint-hint">{dirty ? 'Сохраните изменения перед выбором файла.' : 'Путь внутри payload, например bin/app.exe'}</small>
               </div>
             </div>
             <div className="studio-toggles">
@@ -715,6 +754,9 @@ function ReadOnlyProject({ project }: { project: StudioProject }) {
           <Fact label="Папка установки" value={project.installDirectory} mono />
           <Fact label="Область" value={project.scope === 'user' ? 'Текущий пользователь' : 'Вся система'} />
           <Fact label="Запуск" value={project.hasEntrypoint ? project.entrypoint ?? 'Настроен' : 'Не настроен'} />
+          <Fact label="Значок" value={project.icon ?? 'Не задан'} mono={project.icon !== null} />
+          <Fact label="Сайт" value={project.homepage ?? 'Не задан'} />
+          <Fact label="Поддержка" value={project.support ?? 'Не задана'} />
           <Fact label="Ярлыки" value={shortcutLabel(project.shortcuts)} />
         </dl>
       </section>
@@ -746,6 +788,14 @@ function StudioField({ label, hint, wide = false, children }: { label: string; h
       {hint ? <small>{hint}</small> : null}
     </label>
   )
+}
+
+function iconExtension(os: StudioProjectUpdate['targetOs']): string {
+  return { windows: '.ico', linux: '.png', macos: '.icns' }[os]
+}
+
+function iconPlaceholder(os: StudioProjectUpdate['targetOs']): string {
+  return `branding/app${iconExtension(os)}`
 }
 
 function BuildResult({ result, onReveal }: { result: StudioBuildResult; onReveal(): Promise<void> }) {
