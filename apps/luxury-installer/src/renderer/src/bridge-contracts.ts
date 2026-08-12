@@ -235,8 +235,8 @@ export const studioProjectSchema = z
   .strict()
   .superRefine((value, context) => {
     if (
-      value.schemaVersion >= 5 &&
-      (value.packageId === 'software.luxury.installer' || value.packageId.startsWith('software.luxury.installer.'))
+      value.packageId === 'software.luxury.installer' ||
+      value.packageId.startsWith('software.luxury.installer.')
     ) {
       context.addIssue({ code: 'custom', path: ['packageId'], message: 'reserved native identity' })
     }
@@ -287,8 +287,8 @@ export const studioProjectUpdateSchema = z
   .strict()
   .superRefine((value, context) => {
     if (
-      (value.icon !== null || value.homepage !== null || value.support !== null) &&
-      (value.packageId === 'software.luxury.installer' || value.packageId.startsWith('software.luxury.installer.'))
+      value.packageId === 'software.luxury.installer' ||
+      value.packageId.startsWith('software.luxury.installer.')
     ) {
       context.addIssue({ code: 'custom', path: ['packageId'], message: 'reserved native identity' })
     }

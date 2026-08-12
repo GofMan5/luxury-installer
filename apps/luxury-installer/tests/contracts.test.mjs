@@ -153,10 +153,6 @@ test('product links stay strict HTTPS metadata and icon paths stay target-native
     }).success,
     true,
   )
-  assert.equal(
-    packageSummarySchema.safeParse({ ...packageSummary, homepage: 'file:///tmp/icon' }).success,
-    false,
-  )
   const studio = {
     projectPath: String.raw`C:\projects\demo`,
     formatVersion: 1,
@@ -188,6 +184,27 @@ test('product links stay strict HTTPS metadata and icon paths stay target-native
   assert.equal(studioProjectSchema.safeParse(studio).success, true)
   assert.equal(studioProjectSchema.safeParse({ ...studio, icon: 'branding/app.png' }).success, false)
   assert.equal(studioProjectSchema.safeParse({ ...studio, schemaVersion: 4 }).success, false)
+  // These are the schemas that actually carry the product-URL policy.
+  for (const homepage of [
+    'http://example.com',
+    'https://user:pass@example.com',
+    'https://exa\u202emple.com',
+    'https://',
+    'https://-bad-.tld',
+  ]) {
+    assert.equal(studioProjectSchema.safeParse({ ...studio, homepage }).success, false)
+  }
+  // The reserved installer namespace is refused at every schema version, matching Rust.
+  assert.equal(
+    studioProjectSchema.safeParse({
+      ...studio,
+      schemaVersion: 1,
+      icon: null,
+      homepage: null,
+      packageId: 'software.luxury.installer.demo',
+    }).success,
+    false,
+  )
 })
 
 test('shortened UNC paths keep the server and share visible', () => {

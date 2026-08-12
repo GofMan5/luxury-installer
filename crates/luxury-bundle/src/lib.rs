@@ -15,8 +15,8 @@ use std::{
 
 use flate2::{Compression, GzBuilder, bufread::GzDecoder};
 use luxury_spec::{
-    FORMAT_VERSION, Manifest, OperatingSystem, PUBLISHER_ROTATION_FORMAT_VERSION, PackagePath,
-    SIGNED_FORMAT_VERSION, Sha256Digest, SpecError,
+    FORMAT_VERSION, MAX_PRODUCT_ICON_BYTES, Manifest, OperatingSystem,
+    PUBLISHER_ROTATION_FORMAT_VERSION, PackagePath, SIGNED_FORMAT_VERSION, Sha256Digest, SpecError,
 };
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -628,6 +628,12 @@ fn validate_product_icon_object(manifest: &Manifest, objects: &Path) -> Result<(
 /// Decodes an on-disk product icon with the target's native format and the same bounded budgets
 /// the package reader applies, so authoring can refuse bytes this crate would later reject.
 pub fn valid_native_icon(target: OperatingSystem, path: &Path) -> bool {
+    // Callers reach this with an unverified staged file, so the size cap applies before any read.
+    if !fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() <= MAX_PRODUCT_ICON_BYTES)
+    {
+        return false;
+    }
     match target {
         OperatingSystem::Windows => validate_ico(path),
         OperatingSystem::Linux => validate_png(path),
@@ -641,6 +647,20 @@ pub const fn native_icon_format(target: OperatingSystem) -> &'static str {
         OperatingSystem::Linux => "PNG",
         OperatingSystem::Macos => "ICNS",
     }
+}
+
+const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/// Both native decoders allocate from the embedded PNG header instead of the container's declared
+/// size, so a truthful declaration is what makes an aggregate decode budget meaningful.
+fn png_matches_declared_size(data: &[u8], width: u32, height: u32) -> bool {
+    if !data.starts_with(&PNG_MAGIC) {
+        return true;
+    }
+    data.get(16..24).is_some_and(|header| {
+        u32::from_be_bytes(header[..4].try_into().expect("fixed IHDR width")) == width
+            && u32::from_be_bytes(header[4..].try_into().expect("fixed IHDR height")) == height
+    })
 }
 
 fn validate_ico(path: &Path) -> bool {
@@ -673,7 +693,7 @@ fn validate_ico(path: &Path) -> bool {
 }
 
 fn valid_ico_structure(bytes: &[u8]) -> bool {
-    if bytes.len() < 6 || bytes.len() > luxury_spec::MAX_PRODUCT_ICON_BYTES as usize {
+    if bytes.len() < 6 || bytes.len() > MAX_PRODUCT_ICON_BYTES as usize {
         return false;
     }
     let little_u16 = |offset: usize| u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
@@ -709,10 +729,22 @@ fn valid_ico_structure(bytes: &[u8]) -> bool {
         if size == 0 || offset < table_end {
             return false;
         }
+        // The declared entry size drives the budget, so PNG-in-ICO data must not claim a different
+        // canvas than the directory entry: the decoder allocates from the embedded header.
+        let declared = |offset: usize| {
+            let value = u32::from(bytes[entry + offset]);
+            if value == 0 { 256 } else { value }
+        };
+        if !bytes
+            .get(offset..offset.saturating_add(size))
+            .is_some_and(|data| png_matches_declared_size(data, declared(0), declared(1)))
+        {
+            return false;
+        }
         let Some(total) = total_declared.checked_add(size) else {
             return false;
         };
-        if total > luxury_spec::MAX_PRODUCT_ICON_BYTES as usize {
+        if total > MAX_PRODUCT_ICON_BYTES as usize {
             return false;
         }
         total_declared = total;
@@ -756,6 +788,19 @@ fn validate_icns(path: &Path) -> bool {
     let Ok(family) = icns::IconFamily::read(bytes.as_slice()) else {
         return false;
     };
+    // A PNG-backed element allocates from its own header, so an element that lies about its canvas
+    // escapes the budget below entirely; one such element already panics inside the decoder.
+    if !family.elements.iter().all(|element| {
+        element.icon_type().is_none_or(|icon_type| {
+            png_matches_declared_size(
+                &element.data,
+                icon_type.pixel_width(),
+                icon_type.pixel_height(),
+            )
+        })
+    }) {
+        return false;
+    }
     let icons = family.available_icons();
     // `get_icon_with_type` resolves by OSType and always finds the first matching element, so
     // duplicate headers would decode the same real element repeatedly. Structure rejects them,
@@ -778,7 +823,7 @@ fn validate_icns(path: &Path) -> bool {
 }
 
 fn valid_icns_structure(bytes: &[u8]) -> bool {
-    if bytes.len() < 8 || bytes.len() > luxury_spec::MAX_PRODUCT_ICON_BYTES as usize {
+    if bytes.len() < 8 || bytes.len() > MAX_PRODUCT_ICON_BYTES as usize {
         return false;
     }
     if &bytes[..4] != b"icns" {

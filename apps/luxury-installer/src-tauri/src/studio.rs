@@ -1703,9 +1703,7 @@ fn validate_project_update(input: &StudioProjectUpdate) -> Result<(), PublicErro
         || input.finish_links.iter().any(|link| {
             !valid_text(&link.label)
                 || link.label.chars().count() > 48
-                || link.url.len() > 2_048
-                || !link.url.starts_with("https://")
-                || link.url.contains(['\\', '\0'])
+                || !valid_public_https_url(&link.url)
         })
     {
         return Err(PublicError::new(

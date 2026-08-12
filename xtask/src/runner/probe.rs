@@ -32,6 +32,8 @@ const AUTHENTICATED_VERIFY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const LAUNCH_PROOF_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_LAUNCH_MARKER_BYTES: u64 = 128;
 const FOREIGN_BYTES: &[u8] = b"foreign file preserved by lifecycle probe";
+// These mirror the `luxury init` scaffold on purpose: the probe is independent evidence and must
+// fail when the packaged backend drifts from the fixture it claims to have installed.
 const STRESS_PACKAGE_ID: &str = "dev.luxury.demo";
 const STRESS_INSTALL_DIRECTORY: &str = "Luxury Demo";
 const STRESS_PRODUCT_NAME: &str = "Luxury Demo";

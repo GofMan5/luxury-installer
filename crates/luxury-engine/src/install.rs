@@ -861,16 +861,16 @@ fn assess_install(
         return Err(InstallError::ReceiptMismatch { field: "directory" });
     }
     let precedence = plan.version().cmp_precedence(previous.version());
+    let publisher_migration_required =
+        assess_publisher_transition(plan.verified_identity(), previous, precedence)?;
     // A legacy receipt has no authenticated product metadata, so same-version repair is refused
-    // explicitly and uniformly for formats 1-6. Without this the publisher-transition check below
-    // reports the unrelated migration error for the oldest formats.
+    // explicitly and uniformly for formats 1-6. This runs after the publisher verdict so a real
+    // signer violation still reports itself instead of being masked as a reinstall mismatch.
     if precedence == Ordering::Equal && previous.product_metadata().is_none() {
         return Err(InstallError::ReinstallMismatch {
             version: plan.version().clone(),
         });
     }
-    let publisher_migration_required =
-        assess_publisher_transition(plan.verified_identity(), previous, precedence)?;
     if publisher_migration_required
         && matches!(
             mode,
