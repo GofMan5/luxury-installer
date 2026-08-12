@@ -447,9 +447,19 @@ fn public_backend_message(code: &str) -> (&str, &'static str) {
         "busy" => "Другая операция уже выполняется.",
         "cancel_rejected" => "Операцию уже нельзя отменить.",
         "cancelled" => "Операция отменена.",
+        "collision" => {
+            "Целевая папка уже содержит файл с этим именем, который принадлежит не этому приложению."
+        }
         "dialog_busy" => "Другой системный диалог уже открыт.",
         "downgrade_denied" => "Установка более старой версии запрещена.",
+        "install_failed" => "Установка прервана и изменения отменены.",
         "insufficient_space" => "Недостаточно свободного места.",
+        "integrity_failed" => {
+            "Проверка целостности файлов не пройдена: пакет или файлы изменились."
+        }
+        "invalid_package" => "Пакет приложения повреждён или не соответствует своему описанию.",
+        "invalid_params" => "Компонент установщика получил недопустимый запрос.",
+        "io_error" => "Файловая операция не выполнена. Проверьте доступность диска и права.",
         "invalid_backend_path"
         | "backend_missing"
         | "backend_spawn_failed"
@@ -575,6 +585,45 @@ mod tests {
             public_backend_message("payload_path_invalid").1,
             "Выберите обычный файл внутри payload проекта."
         );
+    }
+
+    #[test]
+    fn every_lifecycle_failure_code_keeps_its_own_public_message() {
+        // Exactly the codes the backend can return for an install/uninstall attempt; a missing arm
+        // would silently degrade a real remedy into the generic internal error.
+        let fallback = public_backend_message("private_backend_detail").1;
+        let mut seen = std::collections::BTreeSet::new();
+        for code in [
+            "collision",
+            "downgrade_denied",
+            "install_failed",
+            "insufficient_space",
+            "integrity_failed",
+            "invalid_package",
+            "invalid_params",
+            "io_error",
+            "license_not_accepted",
+            "permission_denied",
+            "publisher_mismatch",
+            "recovery_required",
+            "reinstall_mismatch",
+            "rollback_failed",
+            "state_conflict",
+            "uninstall_failed",
+            "unsigned_not_allowed",
+            "unsupported",
+        ] {
+            let (public_code, message) = public_backend_message(code);
+            assert_eq!(public_code, code, "`{code}` lost its public code");
+            assert_ne!(
+                message, fallback,
+                "`{code}` fell back to the generic message"
+            );
+            assert!(
+                seen.insert(message),
+                "`{code}` reused another code's message"
+            );
+        }
     }
 
     #[test]

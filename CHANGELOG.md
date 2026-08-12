@@ -51,6 +51,8 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Fixed
 
+- Six real backend failures (path collision, integrity, invalid package, filesystem error, aborted install, invalid request) reached Setup as the generic internal error; each now keeps its own code and an actionable message, and a table-driven test refuses a future regression.
+- The live-docs drift gate now requires every JSONL method to appear code-formatted in llms.txt, the AI guide and the CLI skill, so removing a method entry can no longer pass on a prose word match.
 - An unrecoverable Setup error is no longer a dead end: the screen shows the reportable backend error code as selectable text and always offers a close action when retrying cannot help.
 - A failed **Launch** action no longer discards the successful Setup result for a generic rebootstrap. It stays inline and retryable; after a successful launch, a separate close failure hides **Launch** and leaves **Done** available instead of starting a second application instance.
 - Setup no longer hides an unconfirmed cancellation request: install and uninstall keep running, show the bounded public error inline, and restore a retryable **Cancel** action instead of pretending cancellation started.

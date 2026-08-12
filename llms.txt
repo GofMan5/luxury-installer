@@ -129,7 +129,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 ## JSONL protocol v4
 
 - One bounded JSON object per line on inherited stdin/stdout; stdout is protocol-only
-- Methods: defaults, initProject, validateProject, updateProject, importPayload, resolvePayloadPath, buildProject, inspect, prepareInstall, install, uninstall, launch, cancel
+- Methods: `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, `cancel`
 - importPayload defaults to additive no-overwrite import; replace=true requires one source directory, uses its contents as the new payload root, restores ordinary failures, and preserves the staging backup when rollback itself fails
 - Studio project summaries expose bounded authoring.executableFiles, not a potentially multi-megabyte executable path list; omitted updateProject.executable preserves the list, adds a new Unix entrypoint, and removes its old marker only when the old file is gone
 - Validate protocol version, request ID, method params, absolute paths, results, errors, events, tags, bounds, and cross-field relations on both sides

@@ -115,12 +115,19 @@ fn public_ai_docs_cover_the_live_cli_and_jsonl_methods() {
         "Tauri and luxury stdio protocol versions differ"
     );
     for method in methods {
+        // Plain substring matching is not enough: every method name is also an ordinary word in
+        // prose, so a deleted method entry would keep passing. Require a code-shaped mention.
+        let quoted = format!("`{method}`");
+        let wire = format!("\"method\":\"{method}\"");
         for (name, document) in [
             ("llms.txt", llms.as_str()),
             ("docs/ai-build.md", ai_guide.as_str()),
             ("CLI skill", reference.as_str()),
         ] {
-            assert!(document.contains(method), "{name} misses JSONL `{method}`");
+            assert!(
+                document.contains(&quoted) || document.contains(&wire),
+                "{name} misses JSONL `{method}` as a code-formatted method"
+            );
         }
     }
 
