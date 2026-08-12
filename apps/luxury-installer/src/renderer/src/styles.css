@@ -1083,6 +1083,22 @@ code:focus-visible {
   text-align: left;
 }
 
+.error-code {
+  margin: 0 0 22px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.error-code > code {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  user-select: all;
+}
+
 .uninstall-summary {
   display: grid;
   width: min(440px, 100%);
@@ -1648,8 +1664,11 @@ code:focus-visible {
   line-height: 1.45;
 }
 
-.studio-field-hint {
-  margin: 0;
+.studio-field-hint--warning {
+  padding: 8px 10px;
+  border-left: 2px solid var(--warning);
+  background: rgb(231 184 75 / 8%);
+  color: var(--warning);
 }
 
 .studio-toggles {

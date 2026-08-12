@@ -116,7 +116,7 @@ My-App-Setup.exe --unattended-uninstall
 
 Use `--info-json` before deployment when an agent or MDM needs bound-package inventory. It performs the same validation but no preparation/authorization and keeps its schema-2 shape: license, finish links, schema-5 icon path/homepage/support, package paths, and native roots stay omitted. Setup retains the two product URLs in Rust and exposes only booleans plus a pathless `open_product_link` post-install action to the renderer. JSONL v4 is the separate full authoring contract.
 
-Linux uses the installed bound `luxury-installer` launcher. On macOS invoke `Luxury Installer.app/Contents/MacOS/Luxury Installer` directly so the caller receives the real exit code. The runner accepts no path, key, downgrade, launch, or command authority. Add `--accept-license` only for a package that offers a license and `--allow-publisher-migration` only for an offered migration. Exit codes are `0` successful inspection/operation or already absent, `1` inspection/operation failure, and `64` invalid arguments.
+Linux uses the installed bound `luxury-installer` launcher. On macOS invoke `Luxury Installer.app/Contents/MacOS/Luxury Installer` directly so the caller receives the real exit code. The runner accepts no path, key, downgrade, launch, or command authority. Add `--accept-license` only for a package that offers a license and `--allow-publisher-migration` only for an offered migration. Exit codes are `0` successful inspection/operation or already absent, `1` inspection/operation failure, and `64` invalid arguments; the Windows outer container additionally returns `70` when it could not start or wait for the bound runner and `74` when its own cleanup failed.
 
 Create, build, and inspect from the human CLI:
 

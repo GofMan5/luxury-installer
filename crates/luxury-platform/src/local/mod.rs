@@ -299,13 +299,17 @@ impl InstallPort for LocalInstallAdapter {
                         source,
                     ));
                 }
-                Ok(_) => {
-                    let (size, sha256) = hash_regular(&destination)?;
-                    if size == file.size
-                        && sha256 == file.sha256
-                        && regular_file_executable(&destination)? == file.executable
-                    {
-                        return Ok(());
+                Ok(metadata) => {
+                    // Hashing an existing file is only worth a full read when its size can still
+                    // match the requested one.
+                    if metadata.len() == file.size {
+                        let (size, sha256) = hash_regular(&destination)?;
+                        if size == file.size
+                            && sha256 == file.sha256
+                            && regular_file_executable(&destination)? == file.executable
+                        {
+                            return Ok(());
+                        }
                     }
                 }
             }
@@ -1259,13 +1263,8 @@ fn stage_verified_file(
         .sync_all()
         .map_err(|source| io_error("syncing staged installed file", staged, source))?;
     drop(output);
-    let (staged_size, staged_sha256) = hash_regular(staged)?;
-    if staged_size != expected.size || staged_sha256 != expected.sha256 {
-        return Err(PortError::with_kind(
-            PortErrorKind::Integrity,
-            format!("staged file `{}` failed verification", expected.path),
-        ));
-    }
+    // The staged bytes were hashed as they were written and are now synced, and the published file
+    // is hashed again after the rename, so re-reading the staged copy here proves nothing new.
     sync_parent(staged)
 }
 

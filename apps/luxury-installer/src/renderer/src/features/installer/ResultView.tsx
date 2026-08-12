@@ -105,15 +105,21 @@ export function CompleteView({
 }
 
 export function ErrorView({
+  code,
   message,
   canRetry,
   retryLabel,
+  closePending,
   onRetry,
+  onClose,
 }: {
+  code: string | null
   message: string
   canRetry: boolean
   retryLabel: string
+  closePending: boolean
   onRetry(): void
+  onClose(): void
 }) {
   return (
     <section className="screen result-screen" aria-labelledby="error-title">
@@ -121,16 +127,36 @@ export function ErrorView({
         <SquareX size={38} strokeWidth={1.9} />
       </div>
       <h1 id="error-title" data-view-heading tabIndex={-1}>Операция не завершена</h1>
-      <p>Проверьте сообщение ниже и повторите действие, если это доступно.</p>
+      <p>
+        {canRetry
+          ? 'Проверьте сообщение ниже и повторите действие.'
+          : 'Это состояние нельзя исправить повторной попыткой. Сообщите код ошибки, если обратитесь в поддержку.'}
+      </p>
       <div className="error-message" role="alert">
         {message}
       </div>
-      {canRetry ? (
-        <button className="primary-button" type="button" onClick={onRetry}>
-          <RotateCcw size={16} />
-          {retryLabel}
-        </button>
+      {code ? (
+        <p className="error-code">
+          Код ошибки: <code>{code}</code>
+        </p>
       ) : null}
+      <div className="result-actions">
+        {canRetry ? (
+          <button className="primary-button" type="button" onClick={onRetry}>
+            <RotateCcw size={16} />
+            {retryLabel}
+          </button>
+        ) : (
+          <button
+            className="primary-button"
+            type="button"
+            disabled={closePending}
+            onClick={onClose}
+          >
+            {closePending ? 'Закрываем…' : 'Закрыть'}
+          </button>
+        )}
+      </div>
     </section>
   )
 }

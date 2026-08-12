@@ -35,6 +35,11 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Changed
 
+- Installing a payload no longer re-reads every staged file to hash it a second time: the bytes are hashed as they are written and the published file is verified after the rename, which cut a 93 MiB / 401-file user install from about 7.5 s to about 5.7 s on the reference Windows NTFS host.
+- A replacement install only hashes an existing destination file when its size can still match the requested one, so a size-changed file no longer costs a full read of the previous tree.
+- Setup and Studio copy no longer names the implementation to the person using it; the license gate now says the installation will not start without consent.
+- Studio warns while either shortcut toggle is on that native publication is still fail-closed, so an installer built with shortcuts will be refused at preflight.
+- `luxury inspect` prints package license text as prefixed `license>` lines instead of a fence the package itself could forge.
 - Opt-in installation details can be expanded while files are being applied and remain available on the completed step; the panel still exposes only bounded authenticated relative paths and factual counters.
 - Desktop windows choose a DPI-aware fixed size from the monitor work area and no longer expose resize or maximize controls.
 - The completion screen separates optional links from the clear `Запустить` and `Готово` actions.
@@ -46,6 +51,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Fixed
 
+- An unrecoverable Setup error is no longer a dead end: the screen shows the reportable backend error code as selectable text and always offers a close action when retrying cannot help.
 - A failed **Launch** action no longer discards the successful Setup result for a generic rebootstrap. It stays inline and retryable; after a successful launch, a separate close failure hides **Launch** and leaves **Done** available instead of starting a second application instance.
 - Setup no longer hides an unconfirmed cancellation request: install and uninstall keep running, show the bounded public error inline, and restore a retryable **Cancel** action instead of pretending cancellation started.
 - Unsaved Studio settings now block project switching and reload, can be explicitly undone to the last validated baseline, and require a Rust-owned discard confirmation on close or Alt+F4.

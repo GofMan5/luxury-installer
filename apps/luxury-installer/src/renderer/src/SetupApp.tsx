@@ -179,6 +179,7 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
           <CancelledView onBack={installer.retry} />
         ) : view.kind === 'error' ? (
           <ErrorView
+            code={view.code}
             message={view.message}
             canRetry={view.canRetry}
             retryLabel={
@@ -186,7 +187,9 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
                 ? 'Настроить привязку издателя'
                 : 'Вернуться к проверке'
             }
+            closePending={resultPending === 'close'}
             onRetry={installer.retry}
+            onClose={() => void runResultAction('close', installer.bridge.closeWindow)}
           />
         ) : (
           <EmptyView />

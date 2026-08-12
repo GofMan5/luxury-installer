@@ -56,6 +56,7 @@ export type InstallerView =
     }
   | {
       kind: 'error'
+      code: string | null
       message: string
       canRetry: boolean
       publisherMigrationRequired: boolean
@@ -120,6 +121,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
         if (!active) return
         setView({
           kind: 'error',
+          code: errorCode(error),
           message: errorMessage(error),
           canRetry: true,
           publisherMigrationRequired: false,
@@ -212,6 +214,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
           if (!publisherMigrationRequired) setPublisherMigrationAccepted(false)
           setView({
             kind: 'error',
+            code: event.code,
             message: event.message,
             canRetry:
               event.code === 'publisher_migration_required'
@@ -309,6 +312,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
       setPublisherMigrationAccepted(false)
       setView({
         kind: 'error',
+        code: errorCode(error),
         message: errorMessage(error),
         canRetry: true,
         publisherMigrationRequired: false,
@@ -364,6 +368,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
       operationId.current = null
       setView({
         kind: 'error',
+        code: errorCode(error),
         message: errorMessage(error),
         canRetry: true,
         publisherMigrationRequired: false,
@@ -420,4 +425,10 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Неизвестная ошибка установщика.'
+}
+
+function errorCode(error: unknown): string | null {
+  return error instanceof Error && 'code' in error && typeof error.code === 'string' && error.code
+    ? error.code
+    : null
 }

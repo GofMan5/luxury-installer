@@ -853,6 +853,43 @@ test('product identity commands remain pathless and exact-capability scoped', as
   assert.equal(studio.match(/Сохраните изменения перед выбором файла\./g)?.length, 2)
 })
 
+test('unrecoverable errors expose a reportable code and always keep one way out', async () => {
+  const [result, app, controller] = await Promise.all([
+    readFile(new URL('../src/renderer/src/features/installer/ResultView.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/SetupApp.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/renderer/src/use-installer.ts', import.meta.url), 'utf8'),
+  ])
+  // The backend code reaches the screen and stays selectable for a support report.
+  assert.match(controller, /kind: 'error'\n\s+code: string \| null/)
+  assert.match(controller, /code: event\.code,/)
+  assert.match(result, /Код ошибки: <code>\{code\}<\/code>/)
+  // A state that cannot be retried still offers close, routed through the shared action gate.
+  assert.match(result, /canRetry \? \([\s\S]*?onRetry[\s\S]*?\) : \([\s\S]*?onClose[\s\S]*?\)/)
+  assert.match(app, /closePending=\{resultPending === 'close'\}[\s\S]*?onClose=\{\(\) => void runResultAction\('close'/)
+})
+
+test('user-facing copy never names the implementation and shortcut intent warns the author', async () => {
+  const files = await Promise.all(
+    [
+      '../src/renderer/src/StudioApp.tsx',
+      '../src/renderer/src/SetupApp.tsx',
+      '../src/renderer/src/features/installer/LicenseView.tsx',
+      '../src/renderer/src/features/installer/ProgressView.tsx',
+      '../src/renderer/src/features/installer/ResultView.tsx',
+      '../src/renderer/src/features/installer/ReviewView.tsx',
+    ].map((path) => readFile(new URL(path, import.meta.url), 'utf8')),
+  )
+  for (const source of files) {
+    assert.doesNotMatch(source, /Rust/)
+  }
+  const studio = files[0]
+  // Enabling shortcuts today produces an installer preflight refuses, so the author is told.
+  assert.match(
+    studio,
+    /draft\.shortcuts\.applicationMenu \|\| draft\.shortcuts\.desktop \?[\s\S]*?studio-field-hint--warning[\s\S]*?отклонит установку на проверке/,
+  )
+})
+
 test('completion launch failure stays inline and close failure cannot relaunch the app', async () => {
   const [app, controller, result] = await Promise.all([
     readFile(new URL('../src/renderer/src/SetupApp.tsx', import.meta.url), 'utf8'),

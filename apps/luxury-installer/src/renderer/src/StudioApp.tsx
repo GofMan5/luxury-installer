@@ -480,7 +480,7 @@ function ProjectView({
             <span>
               {state.cancellationRequested
                 ? 'Останавливаем native-сборку и очищаем временные файлы…'
-                : 'Rust проверяет проект и собирает готовый установщик…'}
+                : 'Проверяем проект и собираем готовый установщик…'}
             </span>
             <time
               className="studio-build-progress__elapsed"
@@ -504,7 +504,7 @@ function ProjectView({
       {importing ? (
         <div className="studio-build-progress" role="status" aria-live="polite">
           <SquareDashed className="spin" size={19} aria-hidden="true" />
-          Rust проверяет файлы приложения…
+          Проверяем файлы приложения…
         </div>
       ) : null}
 
@@ -654,6 +654,14 @@ function ProjectView({
             </div>
             {!draft.entrypoint ? (
               <p className="studio-field-hint">Сначала выберите точку запуска.</p>
+            ) : draft.shortcuts.applicationMenu || draft.shortcuts.desktop ? (
+              // Native publication stays fail-closed until the transactional shortcut slice lands,
+              // so preflight rejects such a package before it mutates anything.
+              <p className="studio-field-hint studio-field-hint--warning" role="alert">
+                Пока нативное создание ярлыков не реализовано, установщик с этой настройкой
+                отклонит установку на проверке. Выключите оба переключателя, если собираете
+                установщик для передачи пользователям.
+              </p>
             ) : (
               <p className="studio-field-hint">Настройка сохранится в проекте. Нативное создание ярлыков войдёт в следующий срез.</p>
             )}

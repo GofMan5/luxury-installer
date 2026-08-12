@@ -495,7 +495,12 @@ fn print_manifest(manifest: &Manifest, trust: PackageTrust) {
         );
     }
     if let Some(license) = &manifest.package.license {
-        println!("license:\n--- begin license ---\n{license}\n--- end license ---");
+        // Every line is prefixed instead of fenced, so package-supplied text cannot forge the
+        // boundary of its own block for anything that parses this output.
+        println!("license:");
+        for line in license.lines() {
+            println!("license>   {line}");
+        }
     } else {
         println!("license:   none");
     }

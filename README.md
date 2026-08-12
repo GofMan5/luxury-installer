@@ -34,7 +34,7 @@ Open Studio and describe the application instead of hand-writing a setup script:
 - keep unsaved edits visible and protected: project switching and reload stay locked until you save or undo, and closing Studio asks before discarding the draft;
 - add files or a complete folder through native dialogs, or safely replace the whole payload with a staged new build folder;
 - choose the launch file from the real payload;
-- add a license, optional installation details, up to four HTTPS finish links, schema 4 shortcuts, and schema 5 product icon/homepage/support identity;
+- add a license, optional installation details, up to four HTTPS finish links, schema 4 shortcuts, and schema 5 product identity (icon, homepage, support) that is authenticated and persisted in the receipt — native containers and shortcuts consume it in a later slice, so the produced Setup still carries the Luxury icon;
 - press one build action to save and revalidate current edits, build a real `.exe`, `.deb` + `.rpm`, or `.dmg` with a human-readable product-name file/folder suggestion, then reveal it directly from Studio.
 
 The internal package container stays between the Rust compiler and packager and is deleted with the build workspace. It is not the file a Studio user ships. Source and output paths stay in the Rust shell; React receives validated portable settings, not generic filesystem access. Replacing the complete payload clears a missing entrypoint and its now-unbound shortcut intent together.
@@ -43,7 +43,7 @@ The internal package container stays between the Rust compiler and packager and 
 
 Each Setup is bound to one reviewed payload. It shows the application description, publisher, version, destination, and exact operation without becoming a package browser.
 
-Setup's strict review contract already carries authenticated shortcut intent, but current bootstrap stops at typed native preflight before that screen is shown. The review becomes visible after WAL v5 provides transactional external-root publication and macOS has a real signed product `.app`; isolated Windows/Linux codecs alone never report a false successful integration.
+Setup's strict review contract already carries authenticated shortcut intent, but native publication is fail-closed: a package built with either shortcut toggle enabled is refused by preflight before anything is written, so leave both off for an installer you intend to ship. The review becomes visible after WAL v5 provides transactional external-root publication and macOS has a real signed product `.app`; isolated Windows/Linux codecs alone never report a false successful integration.
 
 - a newer downloaded version becomes an update;
 - the same version with the exact file set, launch entrypoint, shortcut intent, and authenticated display name becomes repair;
@@ -82,15 +82,18 @@ You need:
 - Node.js `22.12+` and pnpm `10.26.2`;
 - the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your host OS.
 
-Install the desktop dependencies once:
+Assemble a usable Studio you can run and ship installers from:
+
+```console
+cargo studio-assemble
+```
+
+That writes `dist/luxury-installer-studio-<version>-<host>/` containing `Luxury Installer.exe` (or the host equivalent) next to the `backend`, `packager`, `templates`, and `tools` directories it needs. Windows builds fetch the pinned NSIS 3.12 archive listed in `packaging/windows/nsis.lock.json` and verify its SHA-256 before use.
+
+To work on the renderer instead, install the desktop dependencies once and start the dev server:
 
 ```console
 pnpm --dir apps/luxury-installer install --frozen-lockfile
-```
-
-Start Studio:
-
-```console
 cargo build -p luxury -p xtask
 pnpm --dir apps/luxury-installer run dev:app
 ```
@@ -104,13 +107,27 @@ cargo project-installer -- <absolute-project-dir> <absolute-native-output>
 
 Native output is explicit:
 
-| Host | Output argument |
-| --- | --- |
-| Windows x64 | A new `Setup.exe` file. |
-| Linux x64/arm64 | A new directory containing verified `.deb` and `.rpm` files. |
-| macOS x64/arm64 | A new `.dmg` file. |
+| Host | Output argument | What is published next to it |
+| --- | --- | --- |
+| Windows x64 | A new `Setup.exe` file. | `provenance.json` |
+| Linux x64/arm64 | A new directory containing verified `.deb` and `.rpm` files. | `provenance.json` |
+| macOS x64/arm64 | A new `.dmg` file. | `provenance.json` |
 
-The normal Studio build needs no Rust, Node, or Tauri rebuild: released Studio bundles carry a verified host template and Rust packager. The Linux packager writes and independently inspects `.deb` and RPM containers in Rust, so users do not need `dpkg`, `rpm`, Cargo, or pnpm. Its current combined input limit is 256 MiB because the pinned RPM writer buffers payloads; the build fails clearly before exhausting memory. When the form has edits, the primary action first uses the existing Rust update flow to save and revalidate them; native build starts only after that succeeds. Studio gets the exact local OS/architecture from Rust, so a Windows process does not pretend it can build Linux or macOS: the unavailable action stays disabled and points to a matching runner or the Native project build workflow. The Rust shell suggests `Product-1.0-Setup.exe`, the Linux output folder `Product-1.0-linux-x86_64`, or `Product-1.0.dmg` instead of exposing the technical package ID, while the native dialog keeps final output authority. The build surface then shows monotonic elapsed time, including hours, so a long native toolchain run does not look frozen. A visible **Cancel** button stops the active native build without closing Studio and returns to the validated project. Studio runs the packager in a bounded Windows Job Object or Unix process group, so manual cancel, timeout, window close, and primary-process exit terminate the complete descendant build tree before a result is reported. Studio owns and removes the exact temporary build folder after success, cancellation, timeout, or failure, so an ordinary cancelled build does not leave a hidden assembly tree beside the selected output. Building all platforms still uses native Windows/Linux/macOS runners because Apple signing and native containers cannot be truthfully produced by one Windows process.
+The produced installer writes into a per-user root by default — `%LOCALAPPDATA%\Luxury Installer\Apps` on Windows, `~/Library/Application Support/Luxury Installer/Apps` on macOS, `$XDG_DATA_HOME/luxury-installer/apps` on Linux — with its ownership receipt kept in a sibling state root outside the removable tree. System scope is authenticated separately through the privileged helper.
+
+Keep the produced installer: it is also the uninstaller. There is no Windows Installed-Apps entry and no platform package-manager registration yet, so removal runs through the same file (`My-App-Setup.exe --unattended-uninstall`) or the development CLI. Durable native maintenance registration is a later roadmap row.
+
+The current output is unsigned, so Windows SmartScreen warns every end user until you supply Authenticode through the two-phase flow: identically signed inner shell/backend, `cargo windows-release-setup`, external signing of the outer container, then `cargo verify-windows-release`.
+
+### What the Studio build does
+
+- **No second toolchain.** A released Studio bundle carries a verified host template and the Rust packager, so a normal build needs no Rust, Node, or Tauri rebuild. The Linux packager writes and independently inspects `.deb` and RPM containers in Rust, so users need neither `dpkg`/`rpm` nor Cargo/pnpm.
+- **Save before build.** When the form has edits, the primary action first runs the existing Rust update flow to save and revalidate them; the native build starts only after that succeeds.
+- **Honest host targeting.** Studio reads the exact local OS/architecture from Rust, so a Windows process never pretends it can build Linux or macOS: the unavailable action stays disabled and points to a matching runner or the Native project build workflow.
+- **Human file names.** The Rust shell suggests `Product-1.0-Setup.exe`, the Linux folder `Product-1.0-linux-x86_64`, or `Product-1.0.dmg` instead of exposing the technical package ID, while the native dialog keeps final output authority.
+- **Visible progress, real cancel.** Elapsed time is monotonic and includes hours, so a long native toolchain run does not look frozen, and a **Cancel** button stops the active build without closing Studio, returning to the validated project.
+- **Nothing survives the build.** The packager runs inside a bounded Windows Job Object or Unix process group, so manual cancel, timeout, window close, and primary-process exit terminate the complete descendant tree before a result is reported. Studio then removes the exact temporary build folder it owns after success, cancellation, timeout, or failure.
+- **Three hosts stay three hosts.** Building every platform still uses native Windows/Linux/macOS runners, because Apple signing and native containers cannot be truthfully produced by one Windows process.
 
 ### Build all three desktop targets
 
@@ -160,7 +177,7 @@ My-App-Setup.exe --unattended-uninstall
 
 Current Studio builds are unsigned development artifacts, so they need explicit `--allow-unsigned`. Add `--accept-license` only when the authenticated package contains a license, and `--allow-publisher-migration` only when preflight requires that migration. Unattended removal is idempotent. Paths, keys, downgrade approval, launch, and arbitrary commands are not accepted.
 
-The same flags belong to the bound launcher inside Linux and macOS containers. System-scope operations can still show the OS-native UAC/polkit authorization prompt. Exit `0` means successful inspection or operation (including an already absent uninstall), `1` means inspection/operation failed, and `64` means invalid arguments. `--help` prints the exact surface.
+The same flags belong to the bound launcher inside Linux and macOS containers. System-scope operations can still show the OS-native UAC/polkit authorization prompt. Exit `0` means successful inspection or operation (including an already absent uninstall), `1` means inspection/operation failed, and `64` means invalid arguments. The Windows outer container adds `70` when it could not start or wait for the bound runner and `74` when its own cleanup failed after the operation. `--help` prints the exact surface.
 
 ## Signed packages
 
@@ -213,7 +230,7 @@ Use `native_scope=all` only when all three native lanes and the merged lifecycle
 | Platform | Implemented | Still required before release |
 | --- | --- | --- |
 | Windows 10/11 | Standalone Studio template-packager emits and runtime-verifies one NSIS `Setup.exe`; authenticated system lifecycle and two-phase signing flow are implemented. | Authenticode-signed final lifecycle and downloaded final-byte verification. |
-| Linux desktop | Native project build emits inspected `.deb` + `.rpm`; fixed helper/polkit lifecycle exists. | Remove the GTK3 advisory, prove installed root-owned lifecycle, and add distribution signing. |
+| Linux desktop | Native project build emits inspected `.deb` + `.rpm`; fixed helper/polkit lifecycle exists. Combined input is capped at 256 MiB because the pinned RPM writer buffers payloads, and the build fails clearly before exhausting memory. | Remove the GTK3 advisory, prove installed root-owned lifecycle, and add distribution signing. |
 | macOS 13+ | Native project build emits an inspected `.dmg`; signed `SMAppService` lifecycle and final DMG verification flows exist. | Developer ID signing, notarization, and downloaded final-byte proof. |
 
 Linux desktop publication remains blocked by `RUSTSEC-2024-0429` in the pinned GTK3/Wry dependency graph. The project does not hide that advisory or call the current Linux desktop artifact release-ready.
