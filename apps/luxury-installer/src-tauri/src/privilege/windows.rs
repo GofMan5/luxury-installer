@@ -61,7 +61,7 @@ use windows_sys::Win32::{
     },
 };
 
-const PROTOCOL_VERSION: u8 = 1;
+const PROTOCOL_VERSION: u8 = super::SYSTEM_PROTOCOL_VERSION;
 const MAX_FRAME_BYTES: usize = 4 * 1024;
 const PIPE_TIMEOUT: Duration = Duration::from_secs(15);
 const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -1143,14 +1143,14 @@ fn wait_child(child: &mut Child, timeout: Duration) -> io::Result<std::process::
 mod tests {
     use super::*;
     use crate::privilege::{
-        SystemOperationFrame, forward_system_operation_frame, require_system_frame,
-        system_frame_action,
+        SystemOperationFrame, SystemPreparation, forward_system_operation_frame,
+        require_system_frame, system_frame_action,
     };
 
     #[test]
     fn ready_contract_rejects_unknown_fields_and_wrong_values() {
         let valid = serde_json::json!({
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "ready",
             "operationId": "a".repeat(32),
             "serverPid": 1,
@@ -1277,7 +1277,7 @@ mod tests {
         assert!(encoded.get("stateRoot").is_none());
 
         let frame = serde_json::json!({
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "installProgress",
             "operationId": "a",
             "completedFiles": 1,
@@ -1291,6 +1291,26 @@ mod tests {
         assert!(serde_json::from_value::<SystemOperationFrame>(extra).is_err());
         assert!(require_system_frame(PROTOCOL_VERSION, "a", "a").is_ok());
         assert!(require_system_frame(PROTOCOL_VERSION, "b", "a").is_err());
+        assert!(require_system_frame(1, "a", "a").is_err());
+
+        let missing_preparation = serde_json::json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "type": "installComplete",
+            "operationId": "a",
+            "action": "install",
+            "packageId": "dev.luxury.demo",
+            "installDirectory": "Luxury Demo",
+            "installedFiles": 1,
+            "installedBytes": 2,
+        });
+        let frame = serde_json::from_value::<SystemOperationFrame>(missing_preparation).unwrap();
+        let SystemOperationFrame::Complete {
+            system_preparation, ..
+        } = frame
+        else {
+            panic!("install completion parsed as another frame");
+        };
+        assert!(system_preparation.0.is_null());
     }
 
     #[test]
@@ -1310,7 +1330,7 @@ mod tests {
         assert!(encoded.get("stateRoot").is_none());
 
         let frame = serde_json::json!({
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "uninstallProgress",
             "operationId": "a",
             "processedFiles": 1,
@@ -1328,7 +1348,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(cancel).unwrap(),
             serde_json::json!({
-                "protocolVersion": 1,
+                "protocolVersion": PROTOCOL_VERSION,
                 "type": "cancelOperation",
                 "operationId": "a",
                 "action": "uninstall",
@@ -1353,7 +1373,7 @@ mod tests {
         assert!(encoded.get("stateRoot").is_none());
 
         let frame = serde_json::json!({
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "launchComplete",
             "operationId": "a",
             "status": "launched",
@@ -1391,6 +1411,9 @@ mod tests {
                 install_directory: "Luxury Demo".into(),
                 installed_files: 1,
                 installed_bytes: 2,
+                system_preparation: SystemPreparation(serde_json::json!({
+                    "status": "recoveryRequired"
+                })),
             },
             job.request.action(),
             &job.operation_id,
@@ -1400,9 +1423,13 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            terminal,
+            &terminal,
             Some(crate::backend::OperationMessage::Complete(Ok(_)))
         ));
+        let Some(crate::backend::OperationMessage::Complete(Ok(value))) = terminal else {
+            unreachable!();
+        };
+        assert_eq!(value["systemPreparation"]["status"], "recoveryRequired");
         assert!(matches!(
             receiver.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -1416,6 +1443,7 @@ mod tests {
                 removed_files: 0,
                 missing_files: 0,
                 preserved_modified_files: 0,
+                system_preparation: SystemPreparation(serde_json::Value::Null),
             },
             job.request.action(),
             &job.operation_id,
@@ -1452,6 +1480,7 @@ mod tests {
                 removed_files: 2,
                 missing_files: 1,
                 preserved_modified_files: 3,
+                system_preparation: SystemPreparation(serde_json::Value::Null),
             },
             job.request.action(),
             &job.operation_id,

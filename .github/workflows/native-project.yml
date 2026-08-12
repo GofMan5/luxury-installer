@@ -1,0 +1,105 @@
+name: Native project build
+run-name: Native project build from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      windows_project:
+        description: Repository-relative Windows x64 project directory
+        required: true
+        default: examples/matrix/windows
+        type: string
+      linux_project:
+        description: Repository-relative Linux x64 project directory
+        required: true
+        default: examples/matrix/linux
+        type: string
+      macos_project:
+        description: Repository-relative macOS ARM64 project directory
+        required: true
+        default: examples/matrix/macos
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Development / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows-X64
+            project: ${{ inputs.windows_project || 'examples/matrix/windows' }}
+          - os: ubuntu-latest
+            label: Linux-X64
+            project: ${{ inputs.linux_project || 'examples/matrix/linux' }}
+          - os: macos-latest
+            label: macOS-ARM64
+            project: ${{ inputs.macos_project || 'examples/matrix/macos' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: runner.os == 'macOS'
+        name: Use a non-symlinked macOS temporary root
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - if: runner.os == 'Linux'
+        name: Install native Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev xvfb xauth rpm cpio
+          echo "NO_AT_BRIDGE=1" >> "$GITHUB_ENV"
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.26.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.12.0
+          cache: pnpm
+          cache-dependency-path: apps/luxury-installer/pnpm-lock.yaml
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: |
+            . -> target
+            apps/luxury-installer/src-tauri -> target
+      - run: pnpm --dir apps/luxury-installer install --frozen-lockfile
+      - name: Build verified host-native installer
+        shell: pwsh
+        env:
+          PROJECT_PATH: ${{ matrix.project }}
+        run: |
+          $outputRoot = Join-Path $env:RUNNER_TEMP 'native-project-output'
+          New-Item -ItemType Directory -Path $outputRoot | Out-Null
+          $output = if ($env:RUNNER_OS -eq 'Windows') {
+            Join-Path $outputRoot 'Setup.exe'
+          } elseif ($env:RUNNER_OS -eq 'Linux') {
+            Join-Path $outputRoot 'installers'
+          } else {
+            Join-Path $outputRoot 'Setup.dmg'
+          }
+          $arguments = @('run', '--locked', '-p', 'xtask', '--', '__workspace-project-installer', '--', $env:PROJECT_PATH, $output)
+          if ($env:RUNNER_OS -eq 'Linux') {
+            & xvfb-run -a cargo @arguments
+          } else {
+            & cargo @arguments
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath (Join-Path $outputRoot 'SHA256SUMS.txt') -PathType Leaf)) {
+            throw 'Rust build did not publish SHA256SUMS.txt'
+          }
+          "Built unsigned development artifact for $env:RUNNER_OS from $env:PROJECT_PATH." >> $env:GITHUB_STEP_SUMMARY
+      - name: Upload verified unsigned development artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-project-development-${{ matrix.label }}
+          path: ${{ runner.temp }}/native-project-output
+          if-no-files-found: error
+          retention-days: 14

@@ -17,8 +17,8 @@ use luxury_engine::{
         InstallPreparePort, PackageIdentity, install, prepare_install,
     },
     uninstall::{
-        OwnershipReceipt, RECEIPT_FORMAT_VERSION, UninstallCommand, UninstallError,
-        UninstallOutcome, UninstallPort, uninstall,
+        OwnershipReceipt, RECEIPT_FORMAT_VERSION, ShortcutArtifact, ShortcutLocation,
+        UninstallCommand, UninstallError, UninstallOutcome, UninstallPort, uninstall,
     },
 };
 use luxury_spec::{
@@ -41,8 +41,8 @@ use super::{
     ActiveTransaction, JournalRecord, LocalInstallAdapter, LocalUninstallAdapter, Operation,
     begin_transaction, begin_transaction_with_package_lock, begin_uninstall_transaction,
     ensure_directory, hash_regular, io_error, load_recovery, lock_package, open_regular,
-    read_receipt_with_hash, removed_file, same_file, staged_file, staged_receipt,
-    sync_movable_regular_snapshot, transaction_paths,
+    read_receipt_with_hash, removed_file, same_file, same_receipt_identity_for_test, staged_file,
+    staged_receipt, sync_movable_regular_snapshot, transaction_paths,
 };
 
 // Public deterministic fixtures. Never use these keys for a real package.
@@ -415,6 +415,90 @@ fn prepare_fresh_package_is_ready_without_creating_roots() {
             publisher_migration_required: false,
         }
     );
+    assert!(!install_base.exists());
+    assert!(!state_root.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn unmet_windows_requirement_fails_before_any_mutation() {
+    let temp = tempdir().unwrap();
+    let install_base = temp.path().join("install");
+    let state_root = temp.path().join("state");
+    let (discarded, mut manifest) = bundle(&[("bin/app.exe", b"owned")]);
+    drop(discarded);
+    manifest.schema_version = luxury_spec::REQUIREMENTS_SCHEMA_VERSION;
+    // No shipping Windows reports this build, so the predicate can only fail.
+    manifest.install.requires.windows_minimum_version =
+        Some(luxury_spec::WindowsVersion::new(99, 0, 0));
+    let payload = tempdir().unwrap();
+    let source = payload.path().join("bin").join("app.exe");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(source, b"owned").unwrap();
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, payload.path(), &manifest).unwrap();
+    let bundle = open_bundle(Cursor::new(encoded), None).unwrap();
+
+    let error = prepare_install(
+        manifest.clone(),
+        &mut LocalInstallAdapter::new(bundle, &install_base, &state_root),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        luxury_engine::install::InstallError::Port {
+            step: "preflight",
+            source,
+        } if source.kind() == luxury_engine::PortErrorKind::Unsupported
+    ));
+    assert!(!install_base.exists());
+    assert!(!state_root.exists());
+
+    // The same manifest with a requirement every supported host meets stays installable.
+    let mut allowed = manifest;
+    allowed.install.requires.windows_minimum_version =
+        Some(luxury_spec::WindowsVersion::new(6, 1, 7601));
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, payload.path(), &allowed).unwrap();
+    let bundle = open_bundle(Cursor::new(encoded), None).unwrap();
+    prepare_install(
+        allowed,
+        &mut LocalInstallAdapter::new(bundle, &install_base, &state_root),
+    )
+    .unwrap();
+}
+
+#[test]
+fn shortcut_intent_fails_before_local_mutation_until_native_adapter_exists() {
+    let temp = tempdir().unwrap();
+    let install_base = temp.path().join("install");
+    let state_root = temp.path().join("state");
+    let (discarded, mut manifest) = bundle(&[("bin/app.exe", b"owned")]);
+    drop(discarded);
+    manifest.schema_version = luxury_spec::SHORTCUT_SCHEMA_VERSION;
+    manifest.install.entrypoint = Some(manifest.files[0].path.clone());
+    manifest.files[0].executable = true;
+    manifest.install.shortcuts.application_menu = true;
+    let payload = tempdir().unwrap();
+    let source = payload.path().join("bin").join("app.exe");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(source, b"owned").unwrap();
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, payload.path(), &manifest).unwrap();
+    let bundle = open_bundle(Cursor::new(encoded), None).unwrap();
+
+    let error = prepare_install(
+        manifest,
+        &mut LocalInstallAdapter::new(bundle, &install_base, &state_root),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        luxury_engine::install::InstallError::Port {
+            step: "preflight",
+            source,
+        } if source.kind() == luxury_engine::PortErrorKind::Unsupported
+    ));
     assert!(!install_base.exists());
     assert!(!state_root.exists());
 }
@@ -3689,6 +3773,63 @@ fn active_uninstall_is_bound_to_the_locked_receipt() {
 }
 
 #[test]
+fn receipt_identity_binds_shortcut_display_and_artifacts() {
+    let artifact = ShortcutArtifact::new(
+        ShortcutLocation::ApplicationMenu,
+        PackagePath::parse("dev.luxury.demo.desktop").unwrap(),
+        42,
+        digest(b"shortcut"),
+        false,
+    )
+    .unwrap();
+    let base = OwnershipReceipt::new(
+        PackageId::parse("dev.luxury.demo").unwrap(),
+        Version::new(1, 0, 0),
+        InstallScope::User,
+        InstallDirectory::parse("LuxuryDemo").unwrap(),
+        PackageIdentity::Unsigned,
+        vec![FileEntry {
+            path: PackagePath::parse("bin/demo.exe").unwrap(),
+            size: 5,
+            sha256: digest(b"owned"),
+            executable: true,
+        }],
+    )
+    .unwrap();
+    let mut value = serde_json::to_value(base).unwrap();
+    value["entrypoint"] = serde_json::json!("bin/demo.exe");
+    value["shortcuts"] = serde_json::json!({"application_menu": true});
+    value["shortcut_display_name"] = serde_json::json!("Luxury Demo");
+    value["shortcut_artifacts"] = serde_json::to_value([artifact]).unwrap();
+    let receipt: OwnershipReceipt = serde_json::from_value(value).unwrap();
+    receipt.validate().unwrap();
+    let mut changed_display = serde_json::to_value(&receipt).unwrap();
+    changed_display["shortcut_display_name"] = serde_json::json!("Different Demo");
+    let changed_display: OwnershipReceipt = serde_json::from_value(changed_display).unwrap();
+    changed_display.validate().unwrap();
+    assert!(!same_receipt_identity_for_test(&receipt, &changed_display));
+
+    let mut changed_artifact = serde_json::to_value(&receipt).unwrap();
+    changed_artifact["shortcut_artifacts"][0]["sha256"] = serde_json::json!("f".repeat(64));
+    let changed_artifact: OwnershipReceipt = serde_json::from_value(changed_artifact).unwrap();
+    changed_artifact.validate().unwrap();
+    assert!(!same_receipt_identity_for_test(&receipt, &changed_artifact));
+
+    let mut with_metadata = serde_json::to_value(&receipt).unwrap();
+    with_metadata["format_version"] = serde_json::json!(7);
+    with_metadata["product_metadata"] = serde_json::json!({
+        "package_id": "dev.luxury.demo",
+        "name": "Luxury Demo",
+        "version": "1.0.0",
+        "publisher": "Luxury Software",
+        "support": "https://example.com/support"
+    });
+    let with_metadata: OwnershipReceipt = serde_json::from_value(with_metadata).unwrap();
+    with_metadata.validate().unwrap();
+    assert!(!same_receipt_identity_for_test(&receipt, &with_metadata));
+}
+
+#[test]
 fn state_root_inside_install_tree_is_rejected() {
     let temp = tempdir().unwrap();
     let install_base = temp.path().join("install");
@@ -3923,12 +4064,21 @@ fn interrupted_upgrade_with_legacy(
         .sync()
         .unwrap();
 
-    let new_receipt = OwnershipReceipt::new(
-        package_id.clone(),
-        Version::new(2, 0, 0),
+    let new_receipt = OwnershipReceipt::new_with_product_metadata(
         old_receipt.scope(),
         directory,
         PackageIdentity::Unsigned,
+        PackageIdentity::Unsigned,
+        luxury_spec::ProductMetadata {
+            package_id: package_id.clone(),
+            name: "Luxury Demo".into(),
+            version: Version::new(2, 0, 0),
+            publisher: "Luxury Software".into(),
+            description: None,
+            icon: None,
+            homepage: None,
+            support: None,
+        },
         vec![FileEntry {
             path,
             size: 3,
@@ -4135,6 +4285,9 @@ fn bundle_version_in_directory_scope(
             publisher: "Luxury Software".into(),
             description: None,
             license: None,
+            icon: None,
+            homepage: None,
+            support: None,
         },
         target: Target::host(),
         install: InstallPolicy {
@@ -4144,6 +4297,8 @@ fn bundle_version_in_directory_scope(
             entrypoint: None,
             show_install_log: false,
             finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy::default(),
+            requires: Default::default(),
         },
         publisher_rotation: None,
         files: files
@@ -4196,6 +4351,9 @@ fn signed_bundle_with_keys(
             publisher: "Luxury Software".into(),
             description: None,
             license: None,
+            icon: None,
+            homepage: None,
+            support: None,
         },
         target: Target::host(),
         install: InstallPolicy {
@@ -4205,6 +4363,8 @@ fn signed_bundle_with_keys(
             entrypoint: None,
             show_install_log: false,
             finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy::default(),
+            requires: Default::default(),
         },
         publisher_rotation: None,
         files: files
@@ -4262,6 +4422,9 @@ fn rotation_bundle(
             publisher: "Luxury Software".into(),
             description: None,
             license: None,
+            icon: None,
+            homepage: None,
+            support: None,
         },
         target: Target::host(),
         install: InstallPolicy {
@@ -4271,6 +4434,8 @@ fn rotation_bundle(
             entrypoint: None,
             show_install_log: false,
             finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy::default(),
+            requires: Default::default(),
         },
         publisher_rotation: Some(rotation),
         files: files
@@ -4371,6 +4536,7 @@ fn rewrite_stored_receipt_as_legacy(path: &Path) {
     receipt.remove("package_identity");
     receipt.remove("authorized_publisher");
     receipt.remove("payload_signer");
+    receipt.remove("product_metadata");
     fs::write(path, serde_json::to_vec_pretty(&stored).unwrap()).unwrap();
 }
 

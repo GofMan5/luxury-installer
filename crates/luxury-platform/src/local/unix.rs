@@ -3,6 +3,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+use std::fs::File;
+
 use rustix::{
     fd::OwnedFd,
     fs::{AtFlags, FileType, Mode, OFlags, RenameFlags},
@@ -147,7 +150,7 @@ fn path_parts(path: &Path) -> io::Result<(PathBuf, PathBuf)> {
     Ok((parent, name))
 }
 
-fn open_directory(path: &Path) -> io::Result<OwnedFd> {
+pub(super) fn open_directory(path: &Path) -> io::Result<OwnedFd> {
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut directory = rustix::fs::open("/", flags, Mode::empty()).map_err(io::Error::from)?;
     let mut components = path.components();
@@ -172,6 +175,34 @@ fn open_directory(path: &Path) -> io::Result<OwnedFd> {
         }
     }
     Ok(directory)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+pub(super) fn open_file_beneath(directory: &OwnedFd, path: &Path) -> io::Result<File> {
+    let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let file_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let mut parent = rustix::io::fcntl_dupfd_cloexec(directory, 0).map_err(io::Error::from)?;
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path beneath directory contains an unsupported component",
+            ));
+        };
+        if components.peek().is_some() {
+            parent = rustix::fs::openat(&parent, name, directory_flags, Mode::empty())
+                .map_err(io::Error::from)?;
+        } else {
+            return rustix::fs::openat(&parent, name, file_flags, Mode::empty())
+                .map(File::from)
+                .map_err(io::Error::from);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "path beneath directory has no file name",
+    ))
 }
 
 #[cfg(test)]
@@ -199,6 +230,22 @@ mod tests {
         assert!(rename_noreplace(&source, &root.join("linked/nested/owned.bin")).is_err());
         assert_eq!(fs::read(&source).unwrap(), b"owned");
         assert!(!external.join("nested/owned.bin").exists());
+    }
+
+    #[test]
+    fn file_beneath_rejects_an_intermediate_symlink() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("root");
+        let external = temp.path().join("external");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&external).unwrap();
+        fs::write(external.join("app"), b"external").unwrap();
+        symlink(&external, root.join("linked")).unwrap();
+        let root = open_directory(&root).unwrap();
+
+        assert!(open_file_beneath(&root, Path::new("linked/app")).is_err());
+        assert!(open_file_beneath(&root, Path::new("../external/app")).is_err());
+        assert!(open_file_beneath(&root, Path::new("/external/app")).is_err());
     }
 
     #[test]

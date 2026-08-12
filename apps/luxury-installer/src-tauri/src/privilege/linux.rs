@@ -24,7 +24,7 @@ use rustix::net::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-const PROTOCOL_VERSION: u8 = 1;
+const PROTOCOL_VERSION: u8 = super::SYSTEM_PROTOCOL_VERSION;
 const MAX_FRAME_BYTES: usize = 4 * 1024;
 const HELPER_TIMEOUT: Duration = Duration::from_secs(15);
 const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(5 * 60);

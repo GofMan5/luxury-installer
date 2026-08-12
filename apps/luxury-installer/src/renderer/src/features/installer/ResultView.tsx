@@ -2,34 +2,38 @@ import { Check, ExternalLink, FolderOpen, Play, RotateCcw, SquareDashed, SquareX
 
 import type { FinishLink, InstallResultAction } from '../../types'
 
+export type ProductLinkKind = 'homepage' | 'support'
+
 export function CompleteView({
   name,
   action,
   canLaunch,
   canReveal,
-  launchPending,
   actionPending,
   actionError,
   finishLinks,
+  productLinks,
   onLaunch,
   onReveal,
   onOpenLink,
+  onOpenProductLink,
   onClose,
 }: {
   name: string
   action: InstallResultAction
   canLaunch: boolean
   canReveal: boolean
-  launchPending: boolean
-  actionPending: 'reveal' | 'close' | number | null
+  actionPending: 'launch' | 'reveal' | 'close' | ProductLinkKind | number | null
   actionError: string | null
   finishLinks: FinishLink[]
+  productLinks: ProductLinkKind[]
   onLaunch(): void
   onReveal(): void
   onOpenLink(index: number): void
+  onOpenProductLink(kind: ProductLinkKind): void
   onClose(): void
 }) {
-  const hasLinks = canReveal || finishLinks.length > 0
+  const hasLinks = canReveal || finishLinks.length > 0 || productLinks.length > 0
   return (
     <section className="screen result-screen result-screen--complete" aria-labelledby="complete-title">
       <div className="result-complete__summary">
@@ -48,7 +52,7 @@ export function CompleteView({
 
       {hasLinks ? <div className="result-links" aria-label="Дополнительные действия">
         {canReveal ? (
-          <button className="secondary-button" type="button" disabled={launchPending || actionPending !== null} onClick={onReveal}>
+          <button className="secondary-button" type="button" disabled={actionPending !== null} onClick={onReveal}>
             {actionPending === 'reveal' ? <SquareDashed className="spin" size={16} /> : <FolderOpen size={16} />}
             <span>{actionPending === 'reveal' ? 'Открываем…' : 'Показать в папке'}</span>
           </button>
@@ -58,26 +62,38 @@ export function CompleteView({
             className="secondary-button"
             type="button"
             key={`${index}-${link.url}`}
-            disabled={launchPending || actionPending !== null}
+            disabled={actionPending !== null}
             onClick={() => onOpenLink(index)}
           >
             {actionPending === index ? <SquareDashed className="spin" size={16} /> : <ExternalLink size={16} />}
             <span>{actionPending === index ? 'Открываем…' : link.label}</span>
           </button>
         ))}
+        {productLinks.map((kind) => (
+          <button
+            className="secondary-button"
+            type="button"
+            key={kind}
+            disabled={actionPending !== null}
+            onClick={() => onOpenProductLink(kind)}
+          >
+            {actionPending === kind ? <SquareDashed className="spin" size={16} /> : <ExternalLink size={16} />}
+            <span>{actionPending === kind ? 'Открываем…' : kind === 'homepage' ? 'Сайт продукта' : 'Поддержка'}</span>
+          </button>
+        ))}
       </div> : null}
 
       <div className="result-actions result-actions--complete">
         {canLaunch ? (
-          <button className="secondary-button" type="button" disabled={launchPending || actionPending !== null} onClick={onLaunch}>
-            {launchPending ? <SquareDashed className="spin" size={16} /> : <Play size={16} />}
-            {launchPending ? 'Запускаем…' : 'Запустить'}
+          <button className="secondary-button" type="button" disabled={actionPending !== null} onClick={onLaunch}>
+            {actionPending === 'launch' ? <SquareDashed className="spin" size={16} /> : <Play size={16} />}
+            {actionPending === 'launch' ? 'Запускаем…' : 'Запустить'}
           </button>
         ) : null}
         <button
           className="primary-button"
           type="button"
-          disabled={launchPending || actionPending !== null}
+          disabled={actionPending !== null}
           onClick={onClose}
         >
           {actionPending === 'close' ? <SquareDashed className="spin" size={16} /> : null}
@@ -89,15 +105,23 @@ export function CompleteView({
 }
 
 export function ErrorView({
+  code,
   message,
   canRetry,
   retryLabel,
+  closePending,
+  actionError,
   onRetry,
+  onClose,
 }: {
+  code: string | null
   message: string
   canRetry: boolean
   retryLabel: string
+  closePending: boolean
+  actionError: string | null
   onRetry(): void
+  onClose(): void
 }) {
   return (
     <section className="screen result-screen" aria-labelledby="error-title">
@@ -105,16 +129,41 @@ export function ErrorView({
         <SquareX size={38} strokeWidth={1.9} />
       </div>
       <h1 id="error-title" data-view-heading tabIndex={-1}>Операция не завершена</h1>
-      <p>Проверьте сообщение ниже и повторите действие, если это доступно.</p>
+      <p>
+        {canRetry
+          ? 'Проверьте сообщение ниже и повторите действие.'
+          : 'Это состояние нельзя исправить повторной попыткой. Сообщите код ошибки, если обратитесь в поддержку.'}
+      </p>
       <div className="error-message" role="alert">
         {message}
       </div>
-      {canRetry ? (
-        <button className="primary-button" type="button" onClick={onRetry}>
-          <RotateCcw size={16} />
-          {retryLabel}
-        </button>
+      {code ? (
+        <p className="error-code">
+          Код ошибки: <code>{code}</code>
+        </p>
       ) : null}
+      {actionError ? (
+        <div className="error-message" role="alert">
+          {actionError}
+        </div>
+      ) : null}
+      <div className="result-actions">
+        {canRetry ? (
+          <button className="primary-button" type="button" onClick={onRetry}>
+            <RotateCcw size={16} />
+            {retryLabel}
+          </button>
+        ) : (
+          <button
+            className="primary-button"
+            type="button"
+            disabled={closePending}
+            onClick={onClose}
+          >
+            {closePending ? 'Закрываем…' : 'Закрыть'}
+          </button>
+        )}
+      </div>
     </section>
   )
 }

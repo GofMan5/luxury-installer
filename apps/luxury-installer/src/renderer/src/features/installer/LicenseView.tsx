@@ -48,7 +48,7 @@ export function LicenseView({
         <FileText size={19} aria-hidden="true" />
         <span>
           <strong>Я принимаю условия соглашения.</strong>
-          <small>Без явного согласия Rust не начнёт установку.</small>
+          <small>Установка не начнётся без вашего согласия.</small>
         </span>
       </label>
 

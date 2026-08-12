@@ -1,11 +1,17 @@
 mod capacity;
 mod launch;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)] // Wired by the transactional shortcut slice.
+mod linux_shortcuts;
 mod transaction;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod windows;
+#[cfg(windows)]
+#[allow(dead_code, unsafe_code)] // Wired by the transactional shortcut slice.
+mod windows_shortcuts;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -293,13 +299,17 @@ impl InstallPort for LocalInstallAdapter {
                         source,
                     ));
                 }
-                Ok(_) => {
-                    let (size, sha256) = hash_regular(&destination)?;
-                    if size == file.size
-                        && sha256 == file.sha256
-                        && regular_file_executable(&destination)? == file.executable
-                    {
-                        return Ok(());
+                Ok(metadata) => {
+                    // Hashing an existing file is only worth a full read when its size can still
+                    // match the requested one.
+                    if metadata.len() == file.size {
+                        let (size, sha256) = hash_regular(&destination)?;
+                        if size == file.size
+                            && sha256 == file.sha256
+                            && regular_file_executable(&destination)? == file.executable
+                        {
+                            return Ok(());
+                        }
                     }
                 }
             }
@@ -370,6 +380,9 @@ impl InstallPort for LocalInstallAdapter {
         })?;
         let (installed_size, installed_hash) = hash_regular(&destination)?;
         if installed_size != file.size || installed_hash != file.sha256 {
+            // This transaction owns the file it just published, so remove it instead of leaving a
+            // divergent copy behind for rollback to reason about.
+            let _ = remove_regular(&destination);
             return Err(PortError::with_kind(
                 PortErrorKind::Integrity,
                 format!(
@@ -905,12 +918,51 @@ impl UninstallPort for LocalUninstallAdapter {
     }
 }
 
+/// Evaluates declarative host requirements read-only, before anything is written. Each predicate
+/// is target-scoped, so a host that cannot answer a predicate never sees it: the manifest refuses a
+/// Windows predicate on a non-Windows target.
+fn check_host_requirements(plan: &InstallPlan) -> Result<(), PortError> {
+    let requires = plan.requires();
+    #[cfg(windows)]
+    if let Some(minimum) = requires.windows_minimum_version {
+        let host = self::windows::host_windows_version().map_err(|error| {
+            PortError::with_kind(
+                PortErrorKind::Unsupported,
+                format!("could not read the running Windows version: {error}"),
+            )
+        })?;
+        if host < minimum {
+            return Err(PortError::with_kind(
+                PortErrorKind::Unsupported,
+                format!(
+                    "this application requires Windows {minimum} or newer; this system reports {host}"
+                ),
+            ));
+        }
+    }
+    #[cfg(not(windows))]
+    if requires.windows_minimum_version.is_some() {
+        return Err(PortError::with_kind(
+            PortErrorKind::Unsupported,
+            "a Windows version requirement cannot be evaluated on this host",
+        ));
+    }
+    Ok(())
+}
+
 fn check_install_plan(
     install_base: &Path,
     state_root: &Path,
     plan: &InstallPlan,
     previous: Option<&OwnershipReceipt>,
 ) -> Result<(), PortError> {
+    if plan.shortcuts().enabled() {
+        return Err(PortError::with_kind(
+            PortErrorKind::Unsupported,
+            "native shortcut mutation is not implemented for this adapter",
+        ));
+    }
+    check_host_requirements(plan)?;
     validate_install_directory_namespace(plan.directory())?;
     validate_directory_chain(install_base)?;
     validate_directory_chain(state_root)?;
@@ -1012,6 +1064,16 @@ fn same_receipt_identity(left: &OwnershipReceipt, right: &OwnershipReceipt) -> b
         && left.directory() == right.directory()
         && left.package_identity() == right.package_identity()
         && left.payload_signer() == right.payload_signer()
+        && left.entrypoint() == right.entrypoint()
+        && left.shortcuts() == right.shortcuts()
+        && left.shortcut_display_name() == right.shortcut_display_name()
+        && left.shortcut_artifacts() == right.shortcut_artifacts()
+        && left.product_metadata() == right.product_metadata()
+}
+
+#[cfg(test)]
+fn same_receipt_identity_for_test(left: &OwnershipReceipt, right: &OwnershipReceipt) -> bool {
+    same_receipt_identity(left, right)
 }
 
 fn check_destination_files(
@@ -1237,13 +1299,9 @@ fn stage_verified_file(
         .sync_all()
         .map_err(|source| io_error("syncing staged installed file", staged, source))?;
     drop(output);
-    let (staged_size, staged_sha256) = hash_regular(staged)?;
-    if staged_size != expected.size || staged_sha256 != expected.sha256 {
-        return Err(PortError::with_kind(
-            PortErrorKind::Integrity,
-            format!("staged file `{}` failed verification", expected.path),
-        ));
-    }
+    // The staged bytes were hashed as they were written and are now synced. Divergence is caught by
+    // the post-rename hash of the published file, which also unlinks it, so a second read of the
+    // staged copy would only repeat that detection one step earlier.
     sync_parent(staged)
 }
 

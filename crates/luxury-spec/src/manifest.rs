@@ -5,7 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use crate::{
     ENTRYPOINT_SCHEMA_VERSION, FORMAT_VERSION, InstallDirectory, LICENSE_SCHEMA_VERSION,
-    MANIFEST_SCHEMA_VERSION, PUBLISHER_ROTATION_FORMAT_VERSION, PackagePath, PublisherRotation,
+    MANIFEST_SCHEMA_VERSION, PRODUCT_IDENTITY_SCHEMA_VERSION, PUBLISHER_ROTATION_FORMAT_VERSION,
+    PackagePath, PublisherRotation, REQUIREMENTS_SCHEMA_VERSION, SHORTCUT_SCHEMA_VERSION,
     SIGNED_FORMAT_VERSION, SpecError,
 };
 
@@ -16,6 +17,8 @@ const MAX_LICENSE_CHARS: usize = 16_384;
 const MAX_FINISH_LINKS: usize = 4;
 const MAX_FINISH_LINK_LABEL_CHARS: usize = 48;
 const MAX_FINISH_LINK_URL_BYTES: usize = 2_048;
+pub const MAX_PRODUCT_ICON_BYTES: u64 = 4 * 1024 * 1024;
+const RESERVED_NATIVE_ID: &str = "software.luxury.installer";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,6 +84,28 @@ impl Manifest {
         if let Some(description) = &self.package.description {
             validate_text("package.description", description, 1024)?;
         }
+        if self.package.has_native_identity_metadata()
+            && self.schema_version < PRODUCT_IDENTITY_SCHEMA_VERSION
+        {
+            return Err(SpecError::ProductIdentityRequiresSchema {
+                found: self.schema_version,
+                required: PRODUCT_IDENTITY_SCHEMA_VERSION,
+            });
+        }
+        // The namespace belongs to the installer infrastructure at every schema version: receipts
+        // persist product identity for legacy schemas too, so opting out of schema 5 must not
+        // hand an author the reserved ID.
+        if self.package.id.is_reserved_native_identity() {
+            return Err(SpecError::ReservedNativePackageId(
+                self.package.id.to_string(),
+            ));
+        }
+        if let Some(homepage) = &self.package.homepage {
+            validate_product_url("homepage", homepage)?;
+        }
+        if let Some(support) = &self.package.support {
+            validate_product_url("support", support)?;
+        }
         if self.schema_version < ENTRYPOINT_SCHEMA_VERSION && self.install.entrypoint.is_some() {
             return Err(SpecError::EntrypointRequiresSchema {
                 found: self.schema_version,
@@ -95,6 +120,26 @@ impl Manifest {
                 });
             }
             validate_license(license)?;
+        }
+        if self.install.shortcuts.enabled() {
+            if self.schema_version < SHORTCUT_SCHEMA_VERSION {
+                return Err(SpecError::ShortcutsRequireSchema {
+                    found: self.schema_version,
+                    required: SHORTCUT_SCHEMA_VERSION,
+                });
+            }
+            if self.install.entrypoint.is_none() {
+                return Err(SpecError::ShortcutsRequireEntrypoint);
+            }
+        }
+        if !self.install.requires.is_empty() {
+            if self.schema_version < REQUIREMENTS_SCHEMA_VERSION {
+                return Err(SpecError::RequirementsRequireSchema {
+                    found: self.schema_version,
+                    required: REQUIREMENTS_SCHEMA_VERSION,
+                });
+            }
+            self.install.requires.validate(self.target.os)?;
         }
         if self.install.finish_links.len() > MAX_FINISH_LINKS {
             return Err(SpecError::TooManyFinishLinks(
@@ -149,6 +194,7 @@ impl Manifest {
             self.install.entrypoint.as_ref(),
             &self.files,
         )?;
+        validate_product_icon(self.target.os, self.package.icon.as_ref(), &self.files)?;
         Ok(())
     }
 
@@ -171,7 +217,14 @@ fn is_false(value: &bool) -> bool {
 
 fn validate_text(field: &'static str, value: &str, max: usize) -> Result<(), SpecError> {
     let length = value.chars().count();
-    if length == 0 || length > max || value.chars().any(char::is_control) {
+    // Every one of these strings is display-bound, so bidi overrides are rejected here for the
+    // same reason shortcut display names and finish-link labels reject them.
+    if length == 0
+        || length > max
+        || value
+            .chars()
+            .any(|character| character.is_control() || is_bidi_control(character))
+    {
         return Err(SpecError::InvalidText { field, max });
     }
     Ok(())
@@ -243,6 +296,14 @@ fn valid_https_url(value: &str) -> bool {
     port.is_none_or(|port| port.parse::<u16>().is_ok_and(|port| port != 0))
 }
 
+fn validate_product_url(field: &'static str, value: &str) -> Result<(), SpecError> {
+    if valid_https_url(value) {
+        Ok(())
+    } else {
+        Err(SpecError::InvalidProductUrl { field })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Package {
@@ -254,6 +315,113 @@ pub struct Package {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<PackagePath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support: Option<String>,
+}
+
+impl Package {
+    pub const fn has_native_identity_metadata(&self) -> bool {
+        self.icon.is_some() || self.homepage.is_some() || self.support.is_some()
+    }
+
+    pub fn product_metadata(&self, files: &[FileEntry]) -> ProductMetadata {
+        ProductMetadata {
+            package_id: self.id.clone(),
+            name: self.name.clone(),
+            version: self.version.clone(),
+            publisher: self.publisher.clone(),
+            description: self.description.clone(),
+            icon: self.icon.as_ref().and_then(|path| {
+                files
+                    .iter()
+                    .find(|file| file.path == *path)
+                    .map(|file| ProductIcon {
+                        path: file.path.clone(),
+                        size: file.size,
+                        sha256: file.sha256.clone(),
+                    })
+            }),
+            homepage: self.homepage.clone(),
+            support: self.support.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductMetadata {
+    pub package_id: PackageId,
+    pub name: String,
+    pub version: Version,
+    pub publisher: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<ProductIcon>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support: Option<String>,
+}
+
+impl ProductMetadata {
+    pub fn from_package(package: &Package, files: &[FileEntry]) -> Self {
+        package.product_metadata(files)
+    }
+
+    pub fn validate(&self, target: OperatingSystem) -> Result<(), SpecError> {
+        validate_text("product_metadata.name", &self.name, 128)?;
+        validate_text("product_metadata.publisher", &self.publisher, 128)?;
+        if let Some(description) = &self.description {
+            validate_text("product_metadata.description", description, 1024)?;
+        }
+        if let Some(homepage) = &self.homepage {
+            validate_product_url("homepage", homepage)?;
+        }
+        if let Some(support) = &self.support {
+            validate_product_url("support", support)?;
+        }
+        if let Some(icon) = &self.icon {
+            validate_icon_identity(target, icon)?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_against_files(
+        &self,
+        target: OperatingSystem,
+        files: &[FileEntry],
+    ) -> Result<(), SpecError> {
+        self.validate(target)?;
+        let Some(icon) = &self.icon else {
+            return Ok(());
+        };
+        let file = files
+            .iter()
+            .find(|file| file.path == icon.path)
+            .ok_or_else(|| SpecError::ProductIconMissingFile(icon.path.to_string()))?;
+        if file.executable {
+            return Err(SpecError::ProductIconExecutable(icon.path.to_string()));
+        }
+        if file.size != icon.size || file.sha256 != icon.sha256 {
+            return Err(SpecError::ProductIconIdentityMismatch(
+                icon.path.to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProductIcon {
+    pub path: PackagePath,
+    pub size: u64,
+    pub sha256: Sha256Digest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -285,6 +453,67 @@ impl PackageId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn is_reserved_native_identity(&self) -> bool {
+        self.0 == RESERVED_NATIVE_ID
+            || self
+                .0
+                .strip_prefix(RESERVED_NATIVE_ID)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+    }
+}
+
+fn validate_product_icon(
+    target: OperatingSystem,
+    icon: Option<&PackagePath>,
+    files: &[FileEntry],
+) -> Result<(), SpecError> {
+    let Some(icon) = icon else {
+        return Ok(());
+    };
+    let file = files
+        .iter()
+        .find(|file| file.path == *icon)
+        .ok_or_else(|| SpecError::ProductIconMissingFile(icon.to_string()))?;
+    if file.executable {
+        return Err(SpecError::ProductIconExecutable(icon.to_string()));
+    }
+    validate_icon_identity(
+        target,
+        &ProductIcon {
+            path: file.path.clone(),
+            size: file.size,
+            sha256: file.sha256.clone(),
+        },
+    )
+}
+
+fn validate_icon_identity(target: OperatingSystem, icon: &ProductIcon) -> Result<(), SpecError> {
+    if icon.size == 0 || icon.size > MAX_PRODUCT_ICON_BYTES {
+        return Err(SpecError::ProductIconTooLarge {
+            path: icon.path.to_string(),
+            size: icon.size,
+            limit: MAX_PRODUCT_ICON_BYTES,
+        });
+    }
+    let (extension, target_name, expected) = match target {
+        OperatingSystem::Windows => ("ico", "Windows", ".ico"),
+        OperatingSystem::Linux => ("png", "Linux", ".png"),
+        OperatingSystem::Macos => ("icns", "macOS", ".icns"),
+    };
+    if !icon
+        .path
+        .as_str()
+        .rsplit_once('.')
+        .is_some_and(|(_, found)| found.eq_ignore_ascii_case(extension))
+    {
+        return Err(SpecError::ProductIconWrongFormat {
+            path: icon.path.to_string(),
+            target: target_name,
+            expected,
+        });
+    }
+    Ok(())
 }
 
 impl fmt::Display for PackageId {
@@ -400,6 +629,112 @@ pub struct InstallPolicy {
     pub show_install_log: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub finish_links: Vec<FinishLink>,
+    #[serde(default, skip_serializing_if = "ShortcutPolicy::is_disabled")]
+    pub shortcuts: ShortcutPolicy,
+    #[serde(default, skip_serializing_if = "HostRequirements::is_empty")]
+    pub requires: HostRequirements,
+}
+
+/// Declarative host requirements evaluated read-only before any mutation. Each predicate is
+/// target-scoped on purpose: one OS cannot honestly answer another OS's version question.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostRequirements {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_minimum_version: Option<WindowsVersion>,
+}
+
+impl HostRequirements {
+    pub const fn is_empty(&self) -> bool {
+        self.windows_minimum_version.is_none()
+    }
+
+    fn validate(&self, target: OperatingSystem) -> Result<(), SpecError> {
+        if self.windows_minimum_version.is_some() && target != OperatingSystem::Windows {
+            return Err(SpecError::RequirementTargetMismatch {
+                field: "windows_minimum_version",
+                expected: "windows",
+            });
+        }
+        Ok(())
+    }
+}
+
+/// A `major.minor.build` Windows version, the exact triple `RtlGetVersion` reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WindowsVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub build: u32,
+}
+
+impl WindowsVersion {
+    pub const fn new(major: u32, minor: u32, build: u32) -> Self {
+        Self {
+            major,
+            minor,
+            build,
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, SpecError> {
+        let invalid = || SpecError::InvalidWindowsVersion(value.to_owned());
+        let mut parts = value.split('.');
+        let mut next = || {
+            parts
+                .next()
+                .filter(|part| !part.is_empty() && part.len() <= 10)
+                .filter(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
+                .filter(|part| *part == "0" || !part.starts_with('0'))
+                .and_then(|part| part.parse::<u32>().ok())
+                .ok_or_else(invalid)
+        };
+        let version = Self::new(next()?, next()?, next()?);
+        if parts.next().is_some() {
+            return Err(invalid());
+        }
+        Ok(version)
+    }
+}
+
+impl fmt::Display for WindowsVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}.{}.{}", self.major, self.minor, self.build)
+    }
+}
+
+impl<'de> Deserialize<'de> for WindowsVersion {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(D::Error::custom)
+    }
+}
+
+impl Serialize for WindowsVersion {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+/// Portable, bounded desktop-integration intent. The target is always the
+/// manifest's exact entrypoint; packages cannot provide arguments or paths.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShortcutPolicy {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub application_menu: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub desktop: bool,
+}
+
+impl ShortcutPolicy {
+    pub const fn enabled(self) -> bool {
+        self.application_menu || self.desktop
+    }
+
+    pub const fn is_disabled(&self) -> bool {
+        !self.enabled()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -506,6 +841,9 @@ mod tests {
                 publisher: "Luxury Software".into(),
                 description: Some("Test package".into()),
                 license: None,
+                icon: None,
+                homepage: None,
+                support: None,
             },
             target: Target::host(),
             install: InstallPolicy {
@@ -515,6 +853,8 @@ mod tests {
                 entrypoint: None,
                 show_install_log: false,
                 finish_links: Vec::new(),
+                shortcuts: ShortcutPolicy::default(),
+                requires: Default::default(),
             },
             publisher_rotation: None,
             files: vec![FileEntry {
@@ -537,6 +877,7 @@ mod tests {
         assert!(!encoded.contains("entrypoint"));
         assert!(!encoded.contains("show_install_log"));
         assert!(!encoded.contains("finish_links"));
+        assert!(!encoded.contains("shortcuts"));
         let decoded = Manifest::from_toml(&encoded).unwrap();
         assert_eq!(decoded, manifest);
 
@@ -655,6 +996,39 @@ mod tests {
     }
 
     #[test]
+    fn shortcuts_require_schema_four_and_an_exact_entrypoint() {
+        let mut manifest = valid_manifest();
+        manifest.install.shortcuts.application_menu = true;
+        assert!(matches!(
+            manifest.validate(),
+            Err(SpecError::ShortcutsRequireSchema {
+                found: 1,
+                required: SHORTCUT_SCHEMA_VERSION
+            })
+        ));
+
+        manifest.schema_version = SHORTCUT_SCHEMA_VERSION;
+        assert_eq!(
+            manifest.validate(),
+            Err(SpecError::ShortcutsRequireEntrypoint)
+        );
+
+        manifest.install.entrypoint = Some(manifest.files[0].path.clone());
+        if manifest.target.os != OperatingSystem::Windows {
+            manifest.files[0].executable = true;
+        } else {
+            manifest.files[0].path = PackagePath::parse("bin/demo.exe").unwrap();
+            manifest.install.entrypoint = Some(manifest.files[0].path.clone());
+        }
+        manifest.validate().unwrap();
+        let encoded = manifest.to_toml().unwrap();
+        assert!(encoded.contains("[install.shortcuts]"));
+        assert!(encoded.contains("application_menu = true"));
+        assert!(!encoded.contains("desktop = false"));
+        assert_eq!(Manifest::from_toml(&encoded).unwrap(), manifest);
+    }
+
+    #[test]
     fn package_description_is_bounded_plain_text() {
         let mut manifest = valid_manifest();
         manifest.package.description = Some("Human-facing summary".into());
@@ -678,6 +1052,179 @@ mod tests {
                 max: 1024,
             })
         ));
+    }
+
+    #[test]
+    fn host_requirements_are_schema_gated_target_scoped_and_exactly_parsed() {
+        let mut manifest = valid_manifest();
+        manifest.target.os = OperatingSystem::Windows;
+        manifest.install.requires.windows_minimum_version = Some(WindowsVersion::new(10, 0, 19045));
+        assert_eq!(
+            manifest.validate(),
+            Err(SpecError::RequirementsRequireSchema {
+                found: 1,
+                required: REQUIREMENTS_SCHEMA_VERSION,
+            })
+        );
+
+        manifest.schema_version = REQUIREMENTS_SCHEMA_VERSION;
+        manifest.validate().unwrap();
+        let encoded = manifest.to_toml().unwrap();
+        assert!(encoded.contains("windows_minimum_version = \"10.0.19045\""));
+        assert_eq!(Manifest::from_toml(&encoded).unwrap(), manifest);
+
+        // One OS cannot honestly answer another OS's version question.
+        manifest.target.os = OperatingSystem::Linux;
+        assert_eq!(
+            manifest.validate(),
+            Err(SpecError::RequirementTargetMismatch {
+                field: "windows_minimum_version",
+                expected: "windows",
+            })
+        );
+
+        for value in [
+            "10",
+            "10.0",
+            "10.0.0.0",
+            "10.0.019045",
+            "10.0.-1",
+            "",
+            "a.b.c",
+        ] {
+            assert!(
+                WindowsVersion::parse(value).is_err(),
+                "`{value}` must not parse"
+            );
+        }
+        assert_eq!(
+            WindowsVersion::parse("10.0.19045").unwrap(),
+            WindowsVersion::new(10, 0, 19045)
+        );
+        assert!(WindowsVersion::new(10, 0, 19045) > WindowsVersion::new(10, 0, 19044));
+        assert!(WindowsVersion::new(11, 0, 1) > WindowsVersion::new(10, 9, 99999));
+    }
+
+    #[test]
+    fn product_identity_requires_schema_five_and_round_trips() {
+        let mut manifest = valid_manifest();
+        manifest.target.os = OperatingSystem::Linux;
+        manifest.package.icon = Some(PackagePath::parse("branding/app.png").unwrap());
+        manifest.package.homepage = Some("https://example.com/product".into());
+        manifest.package.support = Some("https://support.example.com/help".into());
+        manifest.files.push(FileEntry {
+            path: manifest.package.icon.clone().unwrap(),
+            size: 128,
+            sha256: Sha256Digest::parse("a".repeat(64)).unwrap(),
+            executable: false,
+        });
+        assert_eq!(
+            manifest.validate(),
+            Err(SpecError::ProductIdentityRequiresSchema {
+                found: 1,
+                required: PRODUCT_IDENTITY_SCHEMA_VERSION,
+            })
+        );
+
+        manifest.schema_version = PRODUCT_IDENTITY_SCHEMA_VERSION;
+        manifest.validate().unwrap();
+        let encoded = manifest.to_toml().unwrap();
+        assert!(encoded.contains("icon = \"branding/app.png\""));
+        assert!(encoded.contains("homepage = \"https://example.com/product\""));
+        assert!(encoded.contains("support = \"https://support.example.com/help\""));
+        assert_eq!(Manifest::from_toml(&encoded).unwrap(), manifest);
+
+        let metadata = manifest.package.product_metadata(&manifest.files);
+        metadata.validate(manifest.target.os).unwrap();
+        let icon = metadata.icon.unwrap();
+        assert_eq!(icon.path.as_str(), "branding/app.png");
+        assert_eq!(icon.size, 128);
+    }
+
+    #[test]
+    fn product_identity_rejects_unsafe_urls_icons_and_owned_namespace() {
+        let mut manifest = valid_manifest();
+        manifest.schema_version = PRODUCT_IDENTITY_SCHEMA_VERSION;
+        manifest.target.os = OperatingSystem::Windows;
+
+        for value in [
+            "http://example.com",
+            "https://user@example.com",
+            "https://example.com\\help",
+            "https://example.com/hidden\u{202e}txt",
+            "https://bad_host.example",
+            "https://example.com:0",
+        ] {
+            manifest.package.homepage = Some(value.into());
+            assert_eq!(
+                manifest.validate(),
+                Err(SpecError::InvalidProductUrl { field: "homepage" })
+            );
+        }
+        manifest.package.homepage = None;
+
+        manifest.package.icon = Some(PackagePath::parse("branding/app.png").unwrap());
+        assert!(matches!(
+            manifest.validate(),
+            Err(SpecError::ProductIconMissingFile(_))
+        ));
+        manifest.files.push(FileEntry {
+            path: manifest.package.icon.clone().unwrap(),
+            size: 1,
+            sha256: Sha256Digest::parse("b".repeat(64)).unwrap(),
+            executable: false,
+        });
+        assert!(matches!(
+            manifest.validate(),
+            Err(SpecError::ProductIconWrongFormat {
+                expected: ".ico",
+                ..
+            })
+        ));
+        manifest.files.last_mut().unwrap().path = PackagePath::parse("branding/app.ico").unwrap();
+        manifest.package.icon = Some(manifest.files.last().unwrap().path.clone());
+        manifest.files.last_mut().unwrap().executable = true;
+        assert!(matches!(
+            manifest.validate(),
+            Err(SpecError::ProductIconExecutable(_))
+        ));
+        manifest.files.last_mut().unwrap().executable = false;
+        manifest.files.last_mut().unwrap().size = MAX_PRODUCT_ICON_BYTES + 1;
+        assert!(matches!(
+            manifest.validate(),
+            Err(SpecError::ProductIconTooLarge { .. })
+        ));
+
+        manifest.package.icon = None;
+        manifest.files.pop();
+        manifest.package.id = PackageId::parse("software.luxury.installer.product").unwrap();
+        assert!(matches!(
+            manifest.validate(),
+            Err(SpecError::ReservedNativePackageId(_))
+        ));
+
+        // The reserved namespace is not an opt-in of schema 5: legacy schemas write the same
+        // receipt product identity, so they must be refused too.
+        manifest.schema_version = SHORTCUT_SCHEMA_VERSION;
+        assert!(matches!(
+            manifest.validate(),
+            Err(SpecError::ReservedNativePackageId(_))
+        ));
+        manifest.package.id = PackageId::parse("dev.luxury.demo").unwrap();
+        assert!(
+            manifest.validate().is_ok(),
+            "legacy schema remains readable"
+        );
+
+        // Display-bound identity text rejects bidi overrides at every schema version.
+        manifest.package.name = "Setup\u{202e}drowssap".into();
+        assert_eq!(
+            manifest.validate(),
+            Err(SpecError::InvalidText {
+                field: "package.name",
+                max: 128,
+            })
+        );
     }
 
     #[test]

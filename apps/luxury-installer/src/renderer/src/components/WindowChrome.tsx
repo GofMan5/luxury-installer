@@ -25,9 +25,10 @@ export function WindowChrome({ bridge }: { bridge: LuxuryBridge }) {
     try {
       await bridge.closeWindow()
     } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Не удалось закрыть окно.')
+    } finally {
       closingRef.current = false
       setClosing(false)
-      setError(failure instanceof Error ? failure.message : 'Не удалось закрыть окно.')
     }
   }
 

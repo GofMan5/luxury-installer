@@ -20,6 +20,7 @@ type RunningInstall = {
   completedBytes: number
   totalBytes: number
   cancellationRequested: boolean
+  cancellationError: string | null
   action: InstallResultAction | null
 }
 
@@ -30,6 +31,7 @@ type RunningUninstall = {
   processedFiles: number
   totalFiles: number
   cancellationRequested: boolean
+  cancellationError: string | null
 }
 
 export type InstallerView =
@@ -54,6 +56,7 @@ export type InstallerView =
     }
   | {
       kind: 'error'
+      code: string | null
       message: string
       canRetry: boolean
       publisherMigrationRequired: boolean
@@ -71,7 +74,6 @@ export interface InstallerController {
   licenseAccepted: boolean
   publisherMigrationRequired: boolean
   publisherMigrationAccepted: boolean
-  launchPending: boolean
   destinationPending: boolean
   destinationError: string | null
   view: InstallerView
@@ -84,7 +86,6 @@ export interface InstallerController {
   startInstall(): Promise<void>
   startUninstall(): Promise<void>
   cancelOperation(): Promise<void>
-  launchInstalled(): Promise<void>
   continueAfterInstall(): void
   retry(): void
 }
@@ -97,9 +98,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
   const operationId = useRef<string | null>(null)
   const operationPending = useRef(false)
   const cancelPending = useRef(false)
-  const launchPendingRef = useRef(false)
   const destinationPendingRef = useRef(false)
-  const [launchPending, setLaunchPending] = useState(false)
   const [destinationPending, setDestinationPending] = useState(false)
   const [destinationError, setDestinationError] = useState<string | null>(null)
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0)
@@ -122,8 +121,9 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
         if (!active) return
         setView({
           kind: 'error',
+          code: errorCode(error),
           message: errorMessage(error),
-          canRetry: true,
+          canRetry: !UNRECOVERABLE_CODES.includes(errorCode(error) ?? ''),
           publisherMigrationRequired: false,
         })
       })
@@ -163,7 +163,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
               : current,
           )
         } else if (event.kind === 'complete') {
-          if (event.review) setReview(event.review)
+          setReview(event.review)
           setPublisherMigrationAccepted(false)
           setView({
             kind: 'installFinished',
@@ -190,9 +190,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
               : current,
           )
         } else if (event.kind === 'uninstallComplete') {
-          setReview((current) =>
-            current ? { ...current, canUninstall: false } : current,
-          )
+          setReview(event.review)
           setView({
             kind: 'uninstallComplete',
             removedFiles: event.removedFiles,
@@ -216,17 +214,12 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
           if (!publisherMigrationRequired) setPublisherMigrationAccepted(false)
           setView({
             kind: 'error',
+            code: event.code,
             message: event.message,
             canRetry:
               event.code === 'publisher_migration_required'
                 ? publisherMigrationRequired
-                : ![
-                    'state_conflict',
-                    'downgrade_denied',
-                    'reinstall_mismatch',
-                    'publisher_mismatch',
-                    'publisher_rotation_denied',
-                  ].includes(event.code),
+                : !UNRECOVERABLE_CODES.includes(event.code),
             publisherMigrationRequired,
           })
           operationPending.current = false
@@ -257,11 +250,15 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
   const sendCancellation = useCallback(async () => {
     try {
       await bridge.cancelOperation()
-    } catch {
+    } catch (error) {
       cancelPending.current = false
       setView((current) =>
         current.kind === 'running'
-          ? { ...current, cancellationRequested: false }
+          ? {
+              ...current,
+              cancellationRequested: false,
+              cancellationError: errorMessage(error),
+            }
           : current,
       )
     }
@@ -286,6 +283,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
       completedBytes: 0,
       totalBytes: review.package.bytes,
       cancellationRequested: false,
+      cancellationError: null,
       action: null,
     })
     operationId.current = null
@@ -308,6 +306,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
       setPublisherMigrationAccepted(false)
       setView({
         kind: 'error',
+        code: errorCode(error),
         message: errorMessage(error),
         canRetry: true,
         publisherMigrationRequired: false,
@@ -347,6 +346,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
       processedFiles: 0,
       totalFiles: 0,
       cancellationRequested: false,
+      cancellationError: null,
     })
     operationId.current = null
     operationPending.current = true
@@ -362,6 +362,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
       operationId.current = null
       setView({
         kind: 'error',
+        code: errorCode(error),
         message: errorMessage(error),
         canRetry: true,
         publisherMigrationRequired: false,
@@ -374,36 +375,12 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
     cancelPending.current = true
     setView((current) =>
       current.kind === 'running'
-        ? { ...current, cancellationRequested: true }
+        ? { ...current, cancellationRequested: true, cancellationError: null }
         : current,
     )
     if (!operationId.current) return
     await sendCancellation()
   }, [sendCancellation])
-
-  const launchInstalled = useCallback(async () => {
-    if (
-      launchPendingRef.current ||
-      view.kind !== 'installComplete' ||
-      !review?.package.hasEntrypoint
-    ) return
-    launchPendingRef.current = true
-    setLaunchPending(true)
-    try {
-      await bridge.launchInstalled()
-      await bridge.closeWindow()
-    } catch (error) {
-      setView({
-        kind: 'error',
-        message: errorMessage(error),
-        canRetry: true,
-        publisherMigrationRequired: false,
-      })
-    } finally {
-      launchPendingRef.current = false
-      setLaunchPending(false)
-    }
-  }, [bridge, review, view.kind])
 
   const retry = useCallback(() => {
     if (view.kind === 'error') setPublisherMigrationAccepted(false)
@@ -423,7 +400,6 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
     licenseAccepted,
     publisherMigrationRequired: review?.publisherMigrationRequired ?? false,
     publisherMigrationAccepted,
-    launchPending,
     destinationPending,
     destinationError,
     view,
@@ -436,7 +412,6 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
     startInstall,
     startUninstall,
     cancelOperation,
-    launchInstalled,
     continueAfterInstall,
     retry,
   }
@@ -444,4 +419,23 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Неизвестная ошибка установщика.'
+}
+
+// Retrying cannot change any of these verdicts: the host, the installed state or the publisher
+// identity has to change first.
+const UNRECOVERABLE_CODES = [
+  'state_conflict',
+  'downgrade_denied',
+  'reinstall_mismatch',
+  'publisher_mismatch',
+  'publisher_rotation_denied',
+  'unsupported',
+  'unsupported_scope',
+  'unsupported_target',
+]
+
+function errorCode(error: unknown): string | null {
+  return error instanceof Error && 'code' in error && typeof error.code === 'string' && error.code
+    ? error.code
+    : null
 }

@@ -4,8 +4,9 @@ use luxury_engine::{
     PortError,
     install::PackageIdentity,
     uninstall::{
-        OwnershipReceipt, ReceiptError, RemoveFileOutcome, UninstallCommand, UninstallError,
-        UninstallEvent, UninstallOutcome, UninstallPhase, UninstallPort, uninstall,
+        OwnershipReceipt, ReceiptError, RemoveFileOutcome, ShortcutArtifact, ShortcutLocation,
+        ShortcutRemovalSummary, UninstallCommand, UninstallError, UninstallEvent, UninstallOutcome,
+        UninstallPhase, UninstallPort, uninstall,
     },
 };
 use luxury_spec::{
@@ -22,6 +23,7 @@ struct FakeUninstallPort {
     fail_at: Option<&'static str>,
     rollback_fails: bool,
     processed: Rc<Cell<usize>>,
+    shortcut_removal: ShortcutRemovalSummary,
 }
 
 impl FakeUninstallPort {
@@ -34,6 +36,7 @@ impl FakeUninstallPort {
             fail_at: None,
             rollback_fails: false,
             processed,
+            shortcut_removal: ShortcutRemovalSummary::default(),
         }
     }
 
@@ -64,6 +67,15 @@ impl UninstallPort for FakeUninstallPort {
     fn begin(&mut self, _receipt: &OwnershipReceipt) -> Result<(), PortError> {
         self.calls.push("begin".into());
         self.fail("begin")
+    }
+
+    fn remove_shortcuts(
+        &mut self,
+        _receipt: &OwnershipReceipt,
+    ) -> Result<ShortcutRemovalSummary, PortError> {
+        self.calls.push("remove shortcuts".into());
+        self.fail("remove shortcuts")?;
+        Ok(self.shortcut_removal)
     }
 
     fn remove_if_unchanged(
@@ -134,6 +146,25 @@ fn removes_only_unchanged_owned_files_and_preserves_everything_else() {
             preserved_modified_files: 1,
         }
     );
+    assert!(
+        port.calls.iter().position(|call| call == "begin").unwrap()
+            < port
+                .calls
+                .iter()
+                .position(|call| call == "remove shortcuts")
+                .unwrap()
+    );
+    assert!(
+        port.calls
+            .iter()
+            .position(|call| call == "remove shortcuts")
+            .unwrap()
+            < port
+                .calls
+                .iter()
+                .position(|call| call.starts_with("remove:"))
+                .unwrap()
+    );
     assert!(!port.files.contains_key("bin/demo.exe"));
     assert!(port.files.contains_key("share/readme.txt"));
     assert!(port.files.contains_key("notes/user.txt"));
@@ -184,12 +215,16 @@ fn missing_receipt_is_an_idempotent_noop() {
 }
 
 #[test]
-fn receipt_v4_binds_entrypoint_provenance_and_reads_v1_through_v3() {
+fn receipt_v7_reads_v1_through_v6_and_binds_current_authority() {
     let current = receipt("dev.luxury.demo");
-    assert_eq!(current.format_version(), 4);
+    assert_eq!(
+        current.format_version(),
+        luxury_engine::uninstall::RECEIPT_FORMAT_VERSION
+    );
     assert_eq!(current.package_identity(), Some(PackageIdentity::Unsigned));
     assert_eq!(current.payload_signer(), Some(PackageIdentity::Unsigned));
     assert_eq!(current.entrypoint(), None);
+    assert_eq!(current.shortcuts(), luxury_spec::ShortcutPolicy::default());
     let current_json = serde_json::to_value(&current).unwrap();
     assert_eq!(
         current_json["authorized_publisher"],
@@ -203,15 +238,53 @@ fn receipt_v4_binds_entrypoint_provenance_and_reads_v1_through_v3() {
 
     let mut v3_json = current_json.clone();
     v3_json["format_version"] = serde_json::json!(3);
+    v3_json.as_object_mut().unwrap().remove("product_metadata");
     let v3: OwnershipReceipt = serde_json::from_value(v3_json.clone()).unwrap();
     v3.validate().unwrap();
     assert_eq!(v3.entrypoint(), None);
+
+    let mut v4_json = current_json.clone();
+    v4_json["format_version"] = serde_json::json!(4);
+    v4_json.as_object_mut().unwrap().remove("product_metadata");
+    let v4: OwnershipReceipt = serde_json::from_value(v4_json).unwrap();
+    v4.validate().unwrap();
+    assert_eq!(v4.shortcuts(), luxury_spec::ShortcutPolicy::default());
+
+    let mut v6_json = current_json.clone();
+    v6_json["format_version"] = serde_json::json!(6);
+    v6_json.as_object_mut().unwrap().remove("product_metadata");
+    let v6: OwnershipReceipt = serde_json::from_value(v6_json).unwrap();
+    v6.validate().unwrap();
+    assert_eq!(v6.product_metadata(), None);
+
+    let mut legacy_shortcuts_json = current_json.clone();
+    legacy_shortcuts_json["format_version"] = serde_json::json!(4);
+    legacy_shortcuts_json
+        .as_object_mut()
+        .unwrap()
+        .remove("product_metadata");
+    legacy_shortcuts_json["shortcuts"] = serde_json::json!({"application_menu": true});
+    let legacy_shortcuts: OwnershipReceipt = serde_json::from_value(legacy_shortcuts_json).unwrap();
+    assert_eq!(
+        legacy_shortcuts.validate(),
+        Err(ReceiptError::LegacyShortcuts)
+    );
+
+    let mut shortcuts_without_entrypoint_json = current_json.clone();
+    shortcuts_without_entrypoint_json["shortcuts"] = serde_json::json!({"desktop": true});
+    let shortcuts_without_entrypoint: OwnershipReceipt =
+        serde_json::from_value(shortcuts_without_entrypoint_json).unwrap();
+    assert_eq!(
+        shortcuts_without_entrypoint.validate(),
+        Err(ReceiptError::ShortcutsWithoutEntrypoint)
+    );
 
     let mut legacy_json = current_json.clone();
     legacy_json["format_version"] = serde_json::json!(1);
     let legacy_fields = legacy_json.as_object_mut().unwrap();
     legacy_fields.remove("authorized_publisher");
     legacy_fields.remove("payload_signer");
+    legacy_fields.remove("product_metadata");
     let legacy: OwnershipReceipt = serde_json::from_value(legacy_json).unwrap();
     legacy.validate().unwrap();
     assert_eq!(legacy.package_identity(), None);
@@ -222,6 +295,7 @@ fn receipt_v4_binds_entrypoint_provenance_and_reads_v1_through_v3() {
     let v2_fields = v2_json.as_object_mut().unwrap();
     v2_fields.remove("authorized_publisher");
     v2_fields.remove("payload_signer");
+    v2_fields.remove("product_metadata");
     v2_fields.insert(
         "package_identity".into(),
         serde_json::json!({"kind": "unsigned"}),
@@ -265,13 +339,13 @@ fn receipt_v4_binds_entrypoint_provenance_and_reads_v1_through_v3() {
     );
 
     let mut unsupported = current_json.clone();
-    unsupported["format_version"] = serde_json::json!(5);
+    unsupported["format_version"] = serde_json::json!(8);
     let unsupported: OwnershipReceipt = serde_json::from_value(unsupported).unwrap();
     assert_eq!(
         unsupported.validate(),
         Err(ReceiptError::UnsupportedFormat {
-            found: 5,
-            supported: 4,
+            found: 8,
+            supported: luxury_engine::uninstall::RECEIPT_FORMAT_VERSION,
         })
     );
 
@@ -324,6 +398,236 @@ fn receipt_v4_binds_entrypoint_provenance_and_reads_v1_through_v3() {
     .unwrap();
     assert!(matches!(outcome, UninstallOutcome::Uninstalled { .. }));
     assert!(port.receipt.is_none());
+}
+
+#[test]
+fn receipt_v7_product_metadata_is_strict_and_legacy_cannot_claim_it() {
+    let current = receipt("dev.luxury.demo");
+    let mut value = serde_json::to_value(&current).unwrap();
+    value["product_metadata"] = serde_json::json!({
+        "package_id": "dev.luxury.demo",
+        "name": "Luxury Demo",
+        "version": "1.2.3",
+        "publisher": "Luxury Software",
+        "description": "Desktop app",
+        "homepage": "https://example.com",
+        "support": "https://example.com/support"
+    });
+    let receipt: OwnershipReceipt = serde_json::from_value(value.clone()).unwrap();
+    receipt.validate().unwrap();
+    assert_eq!(receipt.product_metadata().unwrap().name, "Luxury Demo");
+
+    let mut legacy = value.clone();
+    legacy["format_version"] = serde_json::json!(6);
+    let legacy: OwnershipReceipt = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.validate(), Err(ReceiptError::LegacyProductMetadata));
+
+    for (field, replacement) in [
+        ("package_id", serde_json::json!("dev.luxury.other")),
+        ("version", serde_json::json!("2.0.0")),
+    ] {
+        let mut mismatched = value.clone();
+        mismatched["product_metadata"][field] = replacement;
+        let mismatched: OwnershipReceipt = serde_json::from_value(mismatched).unwrap();
+        assert_eq!(
+            mismatched.validate(),
+            Err(ReceiptError::ProductMetadataIdentityMismatch)
+        );
+    }
+
+    let mut unsafe_url = value;
+    unsafe_url["product_metadata"]["support"] = serde_json::json!("http://example.com");
+    let unsafe_url: OwnershipReceipt = serde_json::from_value(unsafe_url).unwrap();
+    assert!(matches!(
+        unsafe_url.validate(),
+        Err(ReceiptError::InvalidProductMetadata(
+            SpecError::InvalidProductUrl { field: "support" }
+        ))
+    ));
+
+    let mut mismatched_icon = serde_json::to_value(&receipt).unwrap();
+    let icon_path = if cfg!(target_os = "windows") {
+        "bin/demo.ico"
+    } else if cfg!(target_os = "linux") {
+        "bin/demo.png"
+    } else {
+        "bin/demo.icns"
+    };
+    mismatched_icon["files"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "path": icon_path,
+            "size": 4,
+            "sha256": "e".repeat(64),
+            "executable": false
+        }));
+    mismatched_icon["product_metadata"]["icon"] = serde_json::json!({
+        "path": icon_path,
+        "size": 4,
+        "sha256": "f".repeat(64)
+    });
+    let mismatched_icon: OwnershipReceipt = serde_json::from_value(mismatched_icon).unwrap();
+    assert!(matches!(
+        mismatched_icon.validate(),
+        Err(ReceiptError::InvalidProductMetadata(
+            SpecError::ProductIconIdentityMismatch(_)
+        ))
+    ));
+}
+
+#[test]
+fn receipt_v5_keeps_intent_without_authority_and_v6_requires_exact_artifacts() {
+    let artifact = ShortcutArtifact::new(
+        ShortcutLocation::ApplicationMenu,
+        PackagePath::parse("Luxury Demo.lnk").unwrap(),
+        17,
+        digest('d'),
+        false,
+    )
+    .unwrap();
+    let current = receipt("dev.luxury.demo");
+    let mut v6 = serde_json::to_value(&current).unwrap();
+    v6["format_version"] = serde_json::json!(6);
+    v6.as_object_mut().unwrap().remove("product_metadata");
+    v6["entrypoint"] = serde_json::json!("bin/demo.exe");
+    v6["shortcuts"] = serde_json::json!({"application_menu": true});
+    v6["shortcut_display_name"] = serde_json::json!("Luxury Demo");
+    v6["shortcut_artifacts"] = serde_json::to_value([artifact.clone()]).unwrap();
+    let receipt: OwnershipReceipt = serde_json::from_value(v6.clone()).unwrap();
+    receipt.validate().unwrap();
+    assert_eq!(receipt.shortcut_display_name(), Some("Luxury Demo"));
+    assert_eq!(receipt.shortcut_artifacts(), [artifact]);
+
+    let mut v5 = v6.clone();
+    v5["format_version"] = serde_json::json!(5);
+    v5.as_object_mut().unwrap().remove("shortcut_display_name");
+    v5.as_object_mut().unwrap().remove("shortcut_artifacts");
+    let legacy_intent: OwnershipReceipt = serde_json::from_value(v5.clone()).unwrap();
+    legacy_intent.validate().unwrap();
+    assert!(legacy_intent.shortcuts().application_menu);
+    assert_eq!(legacy_intent.shortcut_display_name(), None);
+    assert!(legacy_intent.shortcut_artifacts().is_empty());
+
+    v5["shortcut_display_name"] = serde_json::json!("Luxury Demo");
+    let legacy_authority: OwnershipReceipt = serde_json::from_value(v5).unwrap();
+    assert_eq!(
+        legacy_authority.validate(),
+        Err(ReceiptError::LegacyShortcutArtifacts)
+    );
+
+    let mut missing_display = v6.clone();
+    missing_display
+        .as_object_mut()
+        .unwrap()
+        .remove("shortcut_display_name");
+    let missing_display: OwnershipReceipt = serde_json::from_value(missing_display).unwrap();
+    assert_eq!(
+        missing_display.validate(),
+        Err(ReceiptError::MissingShortcutDisplayName)
+    );
+
+    let mut missing_artifact = v6.clone();
+    missing_artifact["shortcut_artifacts"] = serde_json::json!([]);
+    let missing_artifact: OwnershipReceipt = serde_json::from_value(missing_artifact).unwrap();
+    assert_eq!(
+        missing_artifact.validate(),
+        Err(ReceiptError::ShortcutArtifactCount {
+            expected: 1,
+            found: 0,
+        })
+    );
+
+    let mut wrong_location = v6.clone();
+    wrong_location["shortcut_artifacts"][0]["location"] = serde_json::json!("desktop");
+    let wrong_location: OwnershipReceipt = serde_json::from_value(wrong_location).unwrap();
+    assert_eq!(
+        wrong_location.validate(),
+        Err(ReceiptError::ShortcutArtifactLocations)
+    );
+
+    let mut nested_leaf = v6.clone();
+    nested_leaf["shortcut_artifacts"][0]["leaf"] = serde_json::json!("nested/Luxury Demo.lnk");
+    let nested_leaf: OwnershipReceipt = serde_json::from_value(nested_leaf).unwrap();
+    assert_eq!(
+        nested_leaf.validate(),
+        Err(ReceiptError::InvalidShortcutLeaf(
+            "nested/Luxury Demo.lnk".into()
+        ))
+    );
+
+    let mut invalid_display = v6;
+    invalid_display["shortcut_display_name"] = serde_json::json!("Luxury\u{202e}Demo");
+    let invalid_display: OwnershipReceipt = serde_json::from_value(invalid_display).unwrap();
+    assert_eq!(
+        invalid_display.validate(),
+        Err(ReceiptError::InvalidShortcutDisplayName)
+    );
+}
+
+#[test]
+fn default_port_uninstalls_v5_intent_without_inventing_artifact_authority() {
+    struct LegacyPort(FakeUninstallPort);
+
+    impl UninstallPort for LegacyPort {
+        fn recover_pending(&mut self, package_id: &PackageId) -> Result<(), PortError> {
+            self.0.recover_pending(package_id)
+        }
+
+        fn load_receipt(
+            &mut self,
+            package_id: &PackageId,
+        ) -> Result<Option<OwnershipReceipt>, PortError> {
+            self.0.load_receipt(package_id)
+        }
+
+        fn begin(&mut self, receipt: &OwnershipReceipt) -> Result<(), PortError> {
+            self.0.begin(receipt)
+        }
+
+        fn remove_if_unchanged(
+            &mut self,
+            receipt: &OwnershipReceipt,
+            file: &FileEntry,
+        ) -> Result<RemoveFileOutcome, PortError> {
+            self.0.remove_if_unchanged(receipt, file)
+        }
+
+        fn commit(&mut self) -> Result<(), PortError> {
+            self.0.commit()
+        }
+
+        fn rollback(&mut self) -> Result<(), PortError> {
+            self.0.rollback()
+        }
+    }
+
+    let mut value = serde_json::to_value(receipt("dev.luxury.demo")).unwrap();
+    value["format_version"] = serde_json::json!(5);
+    value.as_object_mut().unwrap().remove("product_metadata");
+    value["entrypoint"] = serde_json::json!("bin/demo.exe");
+    value["shortcuts"] = serde_json::json!({"application_menu": true});
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("shortcut_display_name");
+    value.as_object_mut().unwrap().remove("shortcut_artifacts");
+    let legacy: OwnershipReceipt = serde_json::from_value(value).unwrap();
+    legacy.validate().unwrap();
+
+    let mut port = LegacyPort(FakeUninstallPort::new(Some(legacy), Rc::new(Cell::new(0))));
+    port.0.files.insert("bin/demo.exe".into(), digest('a'));
+    let outcome = uninstall(
+        UninstallCommand::new(PackageId::parse("dev.luxury.demo").unwrap()),
+        &mut port,
+        || false,
+        |_| {},
+    )
+    .unwrap();
+
+    assert!(matches!(outcome, UninstallOutcome::Uninstalled { .. }));
+    assert!(port.0.receipt.is_none());
+    assert!(!port.0.files.contains_key("bin/demo.exe"));
 }
 
 #[test]
@@ -399,6 +703,41 @@ fn commit_failure_rolls_back_removed_files_and_keeps_receipt() {
     assert!(port.files.contains_key("share/readme.txt"));
     assert!(port.receipt.is_some());
     assert_eq!(port.calls.last().map(String::as_str), Some("rollback"));
+}
+
+#[test]
+fn shortcut_removal_failure_or_invalid_summary_rolls_back_before_payload_files() {
+    for (fail_at, summary) in [
+        (Some("remove shortcuts"), ShortcutRemovalSummary::default()),
+        (
+            None,
+            ShortcutRemovalSummary {
+                removed: 1,
+                ..ShortcutRemovalSummary::default()
+            },
+        ),
+    ] {
+        let receipt = receipt("dev.luxury.demo");
+        let mut port = FakeUninstallPort::new(Some(receipt), Rc::new(Cell::new(0)));
+        port.fail_at = fail_at;
+        port.shortcut_removal = summary;
+        let error = uninstall(
+            UninstallCommand::new(PackageId::parse("dev.luxury.demo").unwrap()),
+            &mut port,
+            || false,
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            UninstallError::Port {
+                step: "remove owned shortcuts",
+                ..
+            }
+        ));
+        assert_eq!(port.calls.last().map(String::as_str), Some("rollback"));
+        assert!(!port.calls.iter().any(|call| call.starts_with("remove:")));
+    }
 }
 
 #[test]
@@ -504,12 +843,21 @@ fn observer_panic_after_mutation_rolls_back() {
 }
 
 fn receipt(package_id: &str) -> OwnershipReceipt {
-    OwnershipReceipt::new(
-        PackageId::parse(package_id).unwrap(),
-        Version::new(1, 2, 3),
+    OwnershipReceipt::new_with_product_metadata(
         InstallScope::User,
         InstallDirectory::parse("LuxuryDemo").unwrap(),
         PackageIdentity::Unsigned,
+        PackageIdentity::Unsigned,
+        luxury_spec::ProductMetadata {
+            package_id: PackageId::parse(package_id).unwrap(),
+            name: "Luxury Demo".into(),
+            version: Version::new(1, 2, 3),
+            publisher: "Luxury Software".into(),
+            description: None,
+            icon: None,
+            homepage: None,
+            support: None,
+        },
         vec![
             file("bin/demo.exe", 'a'),
             file("share/readme.txt", 'b'),

@@ -52,6 +52,9 @@ fn manifest(files: Vec<(&str, &[u8])>) -> Manifest {
             publisher: "Luxury Software".into(),
             description: None,
             license: None,
+            icon: None,
+            homepage: None,
+            support: None,
         },
         target: Target {
             os: OperatingSystem::Windows,
@@ -64,6 +67,8 @@ fn manifest(files: Vec<(&str, &[u8])>) -> Manifest {
             entrypoint: None,
             show_install_log: false,
             finish_links: Vec::new(),
+            shortcuts: luxury_spec::ShortcutPolicy::default(),
+            requires: Default::default(),
         },
         publisher_rotation: None,
         files: files
@@ -76,6 +81,41 @@ fn manifest(files: Vec<(&str, &[u8])>) -> Manifest {
             })
             .collect(),
     }
+}
+
+fn png_icon() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, 1, 1);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&[0x10, 0x20, 0x30, 0xff]).unwrap();
+    drop(writer);
+    bytes
+}
+
+fn ico_icon() -> Vec<u8> {
+    let image = ico::IconImage::from_rgba_data(1, 1, vec![0x10, 0x20, 0x30, 0xff]);
+    let mut directory = ico::IconDir::new(ico::ResourceType::Icon);
+    directory.add_entry(ico::IconDirEntry::encode(&image).unwrap());
+    let mut bytes = Vec::new();
+    directory.write(&mut bytes).unwrap();
+    bytes
+}
+
+fn icns_icon() -> Vec<u8> {
+    let image = icns::Image::from_data(
+        icns::PixelFormat::RGBA,
+        16,
+        16,
+        [0x10, 0x20, 0x30, 0xff].repeat(16 * 16),
+    )
+    .unwrap();
+    let mut family = icns::IconFamily::new();
+    family.add_icon(&image).unwrap();
+    let mut bytes = Vec::new();
+    family.write(&mut bytes).unwrap();
+    bytes
 }
 
 fn signed_manifest(files: Vec<(&str, &[u8])>) -> Manifest {
@@ -774,6 +814,297 @@ fn writer_rejects_source_mismatch() {
         create_unsigned_bundle(Vec::new(), &fake_root, &manifest),
         Err(BundleError::SourceRootNotDirectory { .. })
     ));
+}
+
+#[test]
+fn bundle_open_decodes_each_target_native_product_icon() {
+    for (target, path, bytes) in [
+        (OperatingSystem::Windows, "branding/app.ico", ico_icon()),
+        (OperatingSystem::Linux, "branding/app.png", png_icon()),
+        (OperatingSystem::Macos, "branding/app.icns", icns_icon()),
+    ] {
+        let files = [(path, bytes.as_slice()), ("bin/app", b"payload".as_slice())];
+        let root = payload_root(&files);
+        let mut manifest = manifest(files.to_vec());
+        manifest.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+        manifest.target.os = target;
+        manifest.package.icon = Some(PackagePath::parse(path).unwrap());
+        let mut encoded = Vec::new();
+        create_unsigned_bundle(&mut encoded, root.path(), &manifest).unwrap();
+        let bundle = open_bundle(Cursor::new(encoded), None).unwrap();
+        assert_eq!(
+            bundle.manifest().package.icon.as_ref().unwrap().as_str(),
+            path
+        );
+    }
+}
+
+#[test]
+fn bundle_open_rejects_extension_only_product_icon() {
+    let bytes = b"not an icon".as_slice();
+    let files = [
+        ("branding/app.ico", bytes),
+        ("bin/app", b"payload".as_slice()),
+    ];
+    let root = payload_root(&files);
+    let mut manifest = manifest(files.to_vec());
+    manifest.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+    manifest.package.icon = Some(PackagePath::parse("branding/app.ico").unwrap());
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, root.path(), &manifest).unwrap();
+    assert!(matches!(
+        open_bundle(Cursor::new(encoded), None),
+        Err(BundleError::InvalidProductIcon { format: "ICO", .. })
+    ));
+}
+
+#[test]
+fn bundle_open_rejects_icns_element_length_bomb_before_decode() {
+    let mut bytes = b"icns".to_vec();
+    bytes.extend_from_slice(&16_u32.to_be_bytes());
+    bytes.extend_from_slice(b"ic10");
+    bytes.extend_from_slice(&u32::MAX.to_be_bytes());
+    let files = [
+        ("branding/app.icns", bytes.as_slice()),
+        ("bin/app", b"payload".as_slice()),
+    ];
+    let root = payload_root(&files);
+    let mut manifest = manifest(files.to_vec());
+    manifest.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+    manifest.target.os = OperatingSystem::Macos;
+    manifest.package.icon = Some(PackagePath::parse("branding/app.icns").unwrap());
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, root.path(), &manifest).unwrap();
+    assert!(matches!(
+        open_bundle(Cursor::new(encoded), None),
+        Err(BundleError::InvalidProductIcon { format: "ICNS", .. })
+    ));
+}
+
+#[test]
+fn bundle_open_rejects_ico_data_length_bomb_before_decode() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&[1, 1, 0, 0]);
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&32_u16.to_le_bytes());
+    bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+    bytes.extend_from_slice(&22_u32.to_le_bytes());
+    let files = [
+        ("branding/app.ico", bytes.as_slice()),
+        ("bin/app", b"payload".as_slice()),
+    ];
+    let root = payload_root(&files);
+    let mut manifest = manifest(files.to_vec());
+    manifest.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+    manifest.package.icon = Some(PackagePath::parse("branding/app.ico").unwrap());
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, root.path(), &manifest).unwrap();
+    assert!(matches!(
+        open_bundle(Cursor::new(encoded), None),
+        Err(BundleError::InvalidProductIcon { format: "ICO", .. })
+    ));
+}
+
+#[test]
+fn bundle_open_rejects_ico_overlapping_aggregate_allocation_bomb() {
+    let count = 32_u16;
+    let table_end = 6 + usize::from(count) * 16;
+    let payload_size = 256 * 1024_u32;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&count.to_le_bytes());
+    for _ in 0..count {
+        bytes.extend_from_slice(&[1, 1, 0, 0]);
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&32_u16.to_le_bytes());
+        bytes.extend_from_slice(&payload_size.to_le_bytes());
+        bytes.extend_from_slice(&(table_end as u32).to_le_bytes());
+    }
+    bytes.resize(table_end + payload_size as usize, 0);
+    let files = [
+        ("branding/app.ico", bytes.as_slice()),
+        ("bin/app", b"payload".as_slice()),
+    ];
+    let root = payload_root(&files);
+    let mut manifest = manifest(files.to_vec());
+    manifest.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+    manifest.package.icon = Some(PackagePath::parse("branding/app.ico").unwrap());
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, root.path(), &manifest).unwrap();
+    assert!(matches!(
+        open_bundle(Cursor::new(encoded), None),
+        Err(BundleError::InvalidProductIcon { format: "ICO", .. })
+    ));
+}
+
+#[test]
+fn bundle_open_rejects_ico_compressed_aggregate_decode_bomb() {
+    // Each entry points at one compressed 2048x2048 PNG, so the declared bytes stay tiny while
+    // every decode costs 16 MiB. Only an aggregate budget can stop the repetition.
+    let mut png = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png, 2048, 2048);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&vec![0; 2048 * 2048 * 4]).unwrap();
+    drop(writer);
+
+    let count = 5_u16;
+    let table_end = 6 + usize::from(count) * 16;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&count.to_le_bytes());
+    for _ in 0..count {
+        bytes.extend_from_slice(&[0, 0, 0, 0]);
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&32_u16.to_le_bytes());
+        bytes.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(table_end as u32).to_le_bytes());
+    }
+    bytes.extend_from_slice(&png);
+    assert!(bytes.len() < luxury_spec::MAX_PRODUCT_ICON_BYTES as usize);
+
+    let files = [
+        ("branding/app.ico", bytes.as_slice()),
+        ("bin/app", b"payload".as_slice()),
+    ];
+    let root = payload_root(&files);
+    let mut manifest = manifest(files.to_vec());
+    manifest.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+    manifest.package.icon = Some(PackagePath::parse("branding/app.ico").unwrap());
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, root.path(), &manifest).unwrap();
+    assert!(matches!(
+        open_bundle(Cursor::new(encoded), None),
+        Err(BundleError::InvalidProductIcon { format: "ICO", .. })
+    ));
+}
+
+#[test]
+fn bundle_open_rejects_icns_duplicate_element_types() {
+    // `get_icon_with_type` always resolves the first element of a type, so duplicate headers
+    // would decode the same real element once per duplicate.
+    let real = icns_icon();
+    let mut bytes = real[8..].to_vec();
+    let duplicate_type = &bytes[..4];
+    let mut duplicate = duplicate_type.to_vec();
+    duplicate.extend_from_slice(&8_u32.to_be_bytes());
+    bytes.extend_from_slice(&duplicate);
+    let mut icns = b"icns".to_vec();
+    icns.extend_from_slice(&((bytes.len() + 8) as u32).to_be_bytes());
+    icns.extend_from_slice(&bytes);
+
+    let files = [
+        ("branding/app.icns", icns.as_slice()),
+        ("bin/app", b"payload".as_slice()),
+    ];
+    let root = payload_root(&files);
+    let mut manifest = manifest(files.to_vec());
+    manifest.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+    manifest.target.os = OperatingSystem::Macos;
+    manifest.package.icon = Some(PackagePath::parse("branding/app.icns").unwrap());
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, root.path(), &manifest).unwrap();
+    assert!(matches!(
+        open_bundle(Cursor::new(encoded), None),
+        Err(BundleError::InvalidProductIcon { format: "ICNS", .. })
+    ));
+}
+
+#[test]
+fn bundle_open_rejects_ico_entry_that_lies_about_its_png_canvas() {
+    // The declared entry size drives the aggregate budget, but the decoder allocates from the
+    // embedded PNG header, so a small entry claiming a huge canvas must be refused before decode.
+    let mut png = Vec::new();
+    let mut encoder = png::Encoder::new(&mut png, 4096, 4096);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&vec![0; 4096 * 4096 * 4]).unwrap();
+    drop(writer);
+
+    let table_end = 6 + 16;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&[16, 16, 0, 0]);
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&32_u16.to_le_bytes());
+    bytes.extend_from_slice(&(png.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&(table_end as u32).to_le_bytes());
+    bytes.extend_from_slice(&png);
+
+    let files = [
+        ("branding/app.ico", bytes.as_slice()),
+        ("bin/app", b"payload".as_slice()),
+    ];
+    let root = payload_root(&files);
+    let mut manifest = manifest(files.to_vec());
+    manifest.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+    manifest.package.icon = Some(PackagePath::parse("branding/app.ico").unwrap());
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, root.path(), &manifest).unwrap();
+    assert!(matches!(
+        open_bundle(Cursor::new(encoded), None),
+        Err(BundleError::InvalidProductIcon { format: "ICO", .. })
+    ));
+}
+
+#[test]
+fn bundle_open_rejects_icns_element_that_lies_about_its_png_canvas() {
+    // Same class of bug on the Apple path. An icp4 element is nominally 16x16, so the budget
+    // charges 4 MiB while the decoder allocates from the embedded header: patching a 1x1 PNG to
+    // claim 65535x65535 costs 80 bytes on disk and overflows the decoder size computation.
+    let mut png = png_icon();
+    let ihdr = 16;
+    png[ihdr..ihdr + 4].copy_from_slice(&65535_u32.to_be_bytes());
+    png[ihdr + 4..ihdr + 8].copy_from_slice(&65535_u32.to_be_bytes());
+    let crc = crc32(&png[ihdr - 4..ihdr + 13]);
+    png[ihdr + 13..ihdr + 17].copy_from_slice(&crc.to_be_bytes());
+
+    let mut element = b"icp4".to_vec();
+    element.extend_from_slice(&((png.len() + 8) as u32).to_be_bytes());
+    element.extend_from_slice(&png);
+    let mut bytes = b"icns".to_vec();
+    bytes.extend_from_slice(&((element.len() + 8) as u32).to_be_bytes());
+    bytes.extend_from_slice(&element);
+
+    let files = [
+        ("branding/app.icns", bytes.as_slice()),
+        ("bin/app", b"payload".as_slice()),
+    ];
+    let root = payload_root(&files);
+    let mut manifest = manifest(files.to_vec());
+    manifest.schema_version = luxury_spec::PRODUCT_IDENTITY_SCHEMA_VERSION;
+    manifest.target.os = OperatingSystem::Macos;
+    manifest.package.icon = Some(PackagePath::parse("branding/app.icns").unwrap());
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, root.path(), &manifest).unwrap();
+    assert!(matches!(
+        open_bundle(Cursor::new(encoded), None),
+        Err(BundleError::InvalidProductIcon { format: "ICNS", .. })
+    ));
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
 }
 
 #[cfg(unix)]

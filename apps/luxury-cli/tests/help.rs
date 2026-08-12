@@ -63,11 +63,7 @@ fn public_ai_docs_cover_the_live_cli_and_jsonl_methods() {
     }
 
     let stdio = fs::read_to_string(manifest.join("src/stdio.rs")).unwrap();
-    let protocol_version = stdio
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("const PROTOCOL_VERSION: u32 = "))
-        .and_then(|value| value.strip_suffix(';'))
-        .unwrap();
+    let protocol_version = luxury_spec::JSONL_PROTOCOL_VERSION.to_string();
     let methods = stdio
         .split("fn handle_request")
         .nth(1)
@@ -83,6 +79,21 @@ fn public_ai_docs_cover_the_live_cli_and_jsonl_methods() {
     assert!(!methods.is_empty());
     let ai_guide = fs::read_to_string(root.join("docs/ai-build.md")).unwrap();
     let readme = fs::read_to_string(root.join("README.md")).unwrap();
+    let roadmap = fs::read_to_string(root.join("docs/product-roadmap.md")).unwrap();
+    let schema_version = luxury_spec::MANIFEST_SCHEMA_VERSION.to_string();
+    for (name, document) in [
+        ("README.md", readme.as_str()),
+        ("llms.txt", llms.as_str()),
+        ("docs/product-roadmap.md", roadmap.as_str()),
+        ("CLI skill", reference.as_str()),
+    ] {
+        assert!(
+            document.contains(&format!("schema {schema_version}"))
+                || document.contains(&format!("schema-v{schema_version}"))
+                || document.contains(&format!("schema_version = {schema_version}")),
+            "{name} misses manifest schema {schema_version}"
+        );
+    }
     for (name, document) in [
         ("README.md", readme.as_str()),
         ("llms.txt", llms.as_str()),
@@ -99,16 +110,42 @@ fn public_ai_docs_cover_the_live_cli_and_jsonl_methods() {
         fs::read_to_string(root.join("apps/luxury-installer/src-tauri/src/backend/protocol.rs"))
             .unwrap();
     assert!(
-        tauri_protocol.contains(&format!("PROTOCOL_VERSION: u64 = {protocol_version};")),
+        tauri_protocol
+            .contains("PROTOCOL_VERSION: u64 = luxury_spec::JSONL_PROTOCOL_VERSION as u64;"),
         "Tauri and luxury stdio protocol versions differ"
     );
     for method in methods {
+        // Plain substring matching is not enough: every method name is also an ordinary word in
+        // prose, so a deleted method entry would keep passing. Require a code-shaped mention.
+        let quoted = format!("`{method}`");
+        let wire = format!("\"method\":\"{method}\"");
         for (name, document) in [
             ("llms.txt", llms.as_str()),
             ("docs/ai-build.md", ai_guide.as_str()),
             ("CLI skill", reference.as_str()),
         ] {
-            assert!(document.contains(method), "{name} misses JSONL `{method}`");
+            assert!(
+                document.contains(&quoted) || document.contains(&wire),
+                "{name} misses JSONL `{method}` as a code-formatted method"
+            );
+        }
+    }
+
+    let tauri_shell =
+        fs::read_to_string(root.join("apps/luxury-installer/src-tauri/src/lib.rs")).unwrap();
+    for flag in [
+        "--info-json",
+        "--unattended-install",
+        "--unattended-uninstall",
+    ] {
+        assert!(tauri_shell.contains(flag), "Tauri Setup misses `{flag}`");
+        for (name, document) in [
+            ("README.md", readme.as_str()),
+            ("llms.txt", llms.as_str()),
+            ("docs/ai-build.md", ai_guide.as_str()),
+            ("CLI skill", reference.as_str()),
+        ] {
+            assert!(document.contains(flag), "{name} misses Setup `{flag}`");
         }
     }
 

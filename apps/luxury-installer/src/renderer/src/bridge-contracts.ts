@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
-const text = z.string().min(1).max(1024)
+const text = z
+  .string()
+  .min(1)
+  .refine((value) => [...value].length <= 1024)
+  .refine((value) => !/[\u0000-\u001f\u007f-\u009f]/u.test(value))
 const license = z
   .string()
   .min(1)
@@ -62,19 +66,39 @@ const installLogPath = z
 export const portablePath = z
   .string()
   .min(1)
-  .max(4_096)
+  .refine((value) => new TextEncoder().encode(value).length <= 512)
   .refine(
     (value) =>
       !value.startsWith('/') &&
       !value.startsWith('\\') &&
-      !/[\\:\0]/u.test(value) &&
-      value.split('/').every((component) => component.length > 0 && component !== '.' && component !== '..'),
+      !/[\\:\0<>"|?*]/u.test(value) &&
+      value.split('/').every((component) => {
+        const stem = (component.split('.', 1)[0] ?? '').toUpperCase()
+        const windowsDevice = /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])$/u.test(stem)
+        return component.length > 0 &&
+          component !== '.' &&
+          component !== '..' &&
+          new TextEncoder().encode(component).length <= 255 &&
+          !component.endsWith('.') &&
+          !component.endsWith(' ') &&
+          !/[\u0000-\u001f\u007f-\u009f]/u.test(component) &&
+          !windowsDevice
+      }),
   )
 const installLog = z
   .object({ files: z.array(installLogPath).max(128), omittedFiles: count })
   .strict()
 const finishLink = z
   .object({ label: text.max(48), url: z.string().max(2_048).refine(validHttpsUrl) })
+  .strict()
+const shortcutPolicy = z
+  .object({ applicationMenu: z.boolean(), desktop: z.boolean() })
+  .strict()
+const productUrl = z.string().max(2_048).refine(validHttpsUrl)
+// Exactly the triple RtlGetVersion reports, without leading zeroes.
+const windowsVersion = z.string().regex(/^(0|[1-9]\d{0,9})\.(0|[1-9]\d{0,9})\.(0|[1-9]\d{0,9})$/)
+const hostRequirements = z
+  .object({ windowsMinimumVersion: windowsVersion.nullable() })
   .strict()
 
 const trust = z.discriminatedUnion('kind', [
@@ -92,7 +116,10 @@ export const packageSummarySchema = z
     name: text,
     publisher: text,
     version: text,
+    description: text.nullable(),
     license: license.nullable(),
+    hasHomepage: z.boolean(),
+    hasSupport: z.boolean(),
     targetOs,
     targetArch,
     installDirectory,
@@ -100,6 +127,7 @@ export const packageSummarySchema = z
     hasEntrypoint: z.boolean(),
     installLog: installLog.nullable(),
     finishLinks: z.array(finishLink).max(4),
+    shortcuts: shortcutPolicy,
     files: count,
     bytes: count,
     trust,
@@ -112,6 +140,9 @@ export const packageSummarySchema = z
       value.installLog.files.length + value.installLog.omittedFiles !== value.files
     ) {
       context.addIssue({ code: 'custom', path: ['installLog'], message: 'invalid install log' })
+    }
+    if ((value.shortcuts.applicationMenu || value.shortcuts.desktop) && !value.hasEntrypoint) {
+      context.addIssue({ code: 'custom', path: ['shortcuts'], message: 'entrypoint required' })
     }
     if (
       value.publisherRotation &&
@@ -181,13 +212,23 @@ export const studioProjectSchema = z
   .object({
     projectPath: path,
     formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    schemaVersion: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+      z.literal(5),
+      z.literal(6),
+    ]),
     packageId,
     name: text,
     publisher: text,
     version: text,
     description: text.nullable(),
     license: license.nullable(),
+    icon: portablePath.nullable(),
+    homepage: productUrl.nullable(),
+    support: productUrl.nullable(),
     hasLicense: z.boolean(),
     targetOs,
     targetArch,
@@ -198,17 +239,43 @@ export const studioProjectSchema = z
     hasEntrypoint: z.boolean(),
     showInstallLog: z.boolean(),
     finishLinks: z.array(finishLink).max(4),
+    shortcuts: shortcutPolicy,
+    requires: hostRequirements,
     executableFiles: count,
     files: count,
     bytes: count,
   })
   .strict()
   .superRefine((value, context) => {
+    if (
+      value.packageId === 'software.luxury.installer' ||
+      value.packageId.startsWith('software.luxury.installer.')
+    ) {
+      context.addIssue({ code: 'custom', path: ['packageId'], message: 'reserved native identity' })
+    }
     if (value.hasEntrypoint !== (value.entrypoint !== null) || (value.hasEntrypoint && value.schemaVersion < 2)) {
       context.addIssue({ code: 'custom', path: ['hasEntrypoint'], message: 'schema mismatch' })
     }
     if (value.hasLicense !== (value.license !== null) || (value.hasLicense && value.schemaVersion < 3)) {
       context.addIssue({ code: 'custom', path: ['hasLicense'], message: 'schema mismatch' })
+    }
+    if (
+      (value.shortcuts.applicationMenu || value.shortcuts.desktop) &&
+      (!value.hasEntrypoint || value.schemaVersion < 4)
+    ) {
+      context.addIssue({ code: 'custom', path: ['shortcuts'], message: 'schema mismatch' })
+    }
+    if (
+      value.requires.windowsMinimumVersion !== null &&
+      (value.schemaVersion < 6 || value.targetOs !== 'windows')
+    ) {
+      context.addIssue({ code: 'custom', path: ['requires'], message: 'schema mismatch' })
+    }
+    if ((value.icon !== null || value.homepage !== null || value.support !== null) && value.schemaVersion < 5) {
+      context.addIssue({ code: 'custom', path: ['icon'], message: 'schema mismatch' })
+    }
+    if (value.icon !== null && !validIconPath(value.icon, value.targetOs)) {
+      context.addIssue({ code: 'custom', path: ['icon'], message: 'target icon format required' })
     }
     if (value.executableFiles > value.files) {
       context.addIssue({ code: 'custom', path: ['executableFiles'], message: 'count mismatch' })
@@ -223,6 +290,9 @@ export const studioProjectUpdateSchema = z
     version: text,
     description: text.nullable(),
     license: license.nullable(),
+    icon: portablePath.nullable(),
+    homepage: productUrl.nullable(),
+    support: productUrl.nullable(),
     targetOs,
     targetArch,
     installDirectory,
@@ -231,16 +301,54 @@ export const studioProjectUpdateSchema = z
     entrypoint: portablePath.nullable(),
     showInstallLog: z.boolean(),
     finishLinks: z.array(finishLink).max(4),
+    shortcuts: shortcutPolicy,
+    requires: hostRequirements,
   })
   .strict()
+  .superRefine((value, context) => {
+    if (
+      value.packageId === 'software.luxury.installer' ||
+      value.packageId.startsWith('software.luxury.installer.')
+    ) {
+      context.addIssue({ code: 'custom', path: ['packageId'], message: 'reserved native identity' })
+    }
+    if (value.icon !== null && !validIconPath(value.icon, value.targetOs)) {
+      context.addIssue({ code: 'custom', path: ['icon'], message: 'target icon format required' })
+    }
+    if (value.requires.windowsMinimumVersion !== null && value.targetOs !== 'windows') {
+      context.addIssue({ code: 'custom', path: ['requires'], message: 'windows target required' })
+    }
+  })
+  .refine(
+    (value) =>
+      !(value.shortcuts.applicationMenu || value.shortcuts.desktop) || value.entrypoint !== null,
+    { path: ['shortcuts'], message: 'entrypoint required' },
+  )
 
 export const studioBuildResultSchema = z
   .object({ outputPath: path, project: studioProjectSchema })
   .strict()
 
+export const buildCancellationResultSchema = z.object({ accepted: z.boolean() }).strict()
+
+export const recentProjectSchema = z
+  .object({
+    projectPath: path,
+    name: text,
+    publisher: text,
+    version: text,
+    targetOs,
+    targetArch,
+  })
+  .strict()
+export const recentProjectIndexSchema = z.number().int().min(0).max(5)
+export const recentProjectsSchema = z.array(recentProjectSchema).max(6)
+
 export const operationStartedSchema = z.object({ operationId: requestId }).strict()
+export const studioCloseQuerySchema = z.object({ requestId }).strict()
 export const eventEnvelopeSchema = z.object({ operationId: requestId }).passthrough()
 export const appModeSchema = z.enum(['studio', 'setup'])
+export const studioHostSchema = z.object({ os: targetOs, arch: targetArch }).strict()
 export const installRequestSchema = z
   .object({
     allowUnsigned: z.boolean(),
@@ -248,6 +356,11 @@ export const installRequestSchema = z
     allowPublisherMigration: z.boolean(),
   })
   .strict()
+
+function validIconPath(value: string, os: z.infer<typeof targetOs>): boolean {
+  const extension = { windows: '.ico', linux: '.png', macos: '.icns' }[os]
+  return value.toLowerCase().endsWith(extension)
+}
 
 const installPhase = z.enum([
   'validating',
@@ -294,16 +407,17 @@ export const setupEventSchema = z.discriminatedUnion('kind', [
       action: installAction,
       installedFiles: count,
       installedBytes: count,
-      review: installerReviewSchema.optional(),
+      review: installerReviewSchema.nullable(),
     })
     .strict()
     .refine(
       (value) =>
-        value.review === undefined ||
+        value.review === null ||
+        value.review.package.scope === 'system' ||
         (value.review.action === 'repair' &&
           value.review.installedVersion !== null &&
           value.review.canUninstall),
-      { path: ['review'], message: 'complete event contains stale review' },
+      { path: ['review'], message: 'complete event contains stale user review' },
     ),
   z
     .object({ kind: z.literal('uninstallPhase'), operationId: requestId, phase: uninstallPhase })
@@ -324,12 +438,21 @@ export const setupEventSchema = z.discriminatedUnion('kind', [
       removedFiles: count,
       missingFiles: count,
       preservedModifiedFiles: count,
+      review: installerReviewSchema.nullable(),
     })
     .strict()
     .refine(
       (value) =>
         value.removedFiles + value.missingFiles + value.preservedModifiedFiles <=
         Number.MAX_SAFE_INTEGER,
+    )
+    .refine(
+      (value) =>
+        value.review === null ||
+        value.review.package.scope !== 'system' ||
+        value.review.action === 'install' ||
+        value.review.action === 'recover',
+      { path: ['review'], message: 'uninstall event contains stale system review' },
     ),
   z
     .object({

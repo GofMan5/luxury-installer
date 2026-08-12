@@ -7,8 +7,8 @@ use std::{
 };
 
 use luxury_spec::{
-    FileEntry, InstallDirectory, InstallScope, Manifest, PackageId, PackagePath, PublisherKeyId,
-    SpecError, Target,
+    FileEntry, HostRequirements, InstallDirectory, InstallScope, Manifest, PackageId, PackagePath,
+    ProductMetadata, PublisherKeyId, ShortcutPolicy, SpecError, Target,
 };
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -158,7 +158,11 @@ pub struct InstallPlan {
     version: Version,
     scope: InstallScope,
     directory: InstallDirectory,
+    display_name: String,
+    product_metadata: ProductMetadata,
     entrypoint: Option<PackagePath>,
+    shortcuts: ShortcutPolicy,
+    requires: HostRequirements,
     verified_identity: VerifiedPackageIdentity,
     files: Vec<FileEntry>,
     total_bytes: u64,
@@ -171,7 +175,11 @@ impl InstallPlan {
             version: manifest.package.version.clone(),
             scope: manifest.install.scope,
             directory: manifest.install.directory.clone(),
+            display_name: manifest.package.name.clone(),
+            product_metadata: ProductMetadata::from_package(&manifest.package, &manifest.files),
             entrypoint: manifest.install.entrypoint.clone(),
+            shortcuts: manifest.install.shortcuts,
+            requires: manifest.install.requires.clone(),
             verified_identity,
             files: manifest.files.clone(),
             total_bytes: manifest.payload_size(),
@@ -194,8 +202,28 @@ impl InstallPlan {
         &self.directory
     }
 
+    /// Authenticated package display name used only to derive host-native
+    /// shortcut presentation. It never controls an arbitrary target path.
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    /// Authenticated portable metadata that later native integration adapters may consume.
+    pub fn product_metadata(&self) -> &ProductMetadata {
+        &self.product_metadata
+    }
+
     pub fn entrypoint(&self) -> Option<&PackagePath> {
         self.entrypoint.as_ref()
+    }
+
+    pub const fn shortcuts(&self) -> ShortcutPolicy {
+        self.shortcuts
+    }
+
+    /// Declarative host requirements the platform adapter evaluates read-only in preflight.
+    pub const fn requires(&self) -> &HostRequirements {
+        &self.requires
     }
 
     pub fn package_identity(&self) -> PackageIdentity {
@@ -218,9 +246,25 @@ impl InstallPlan {
         self.total_bytes
     }
 
-    /// Build the durable ownership state for this verified plan.
+    /// Conservative serialized-byte reserve for the bounded shortcut fields
+    /// omitted by [`Self::ownership_receipt`]. Capacity adapters add this to
+    /// their stored-receipt estimate without inventing runtime ownership.
+    pub const fn shortcut_receipt_capacity_reserve_bytes(&self) -> u64 {
+        if self.shortcuts.enabled() { 4_096 } else { 0 }
+    }
+
+    /// Build a conservative receipt used only for preflight sizing. Shortcut
+    /// intent is deliberately omitted because no adapter artifacts exist yet.
     pub fn ownership_receipt(&self) -> OwnershipReceipt {
-        OwnershipReceipt::from_install_plan(self)
+        OwnershipReceipt::from_install_plan_without_shortcuts(self)
+    }
+
+    /// Bind real, adapter-created shortcut artifacts into durable ownership.
+    pub fn ownership_receipt_with_shortcuts(
+        &self,
+        artifacts: Vec<crate::uninstall::ShortcutArtifact>,
+    ) -> Result<OwnershipReceipt, ReceiptError> {
+        OwnershipReceipt::from_install_plan(self, artifacts)
     }
 }
 
@@ -334,6 +378,25 @@ pub trait InstallPort: InstallPreparePort {
     /// Stage/apply exactly one verified regular file from the package.
     fn apply_file(&mut self, file: &FileEntry) -> Result<(), PortError>;
 
+    /// Reconcile the exact policy-derived shortcut set after payload files are
+    /// present. Every mutation must be journalled so rollback restores prior state.
+    fn reconcile_shortcuts(
+        &mut self,
+        plan: &InstallPlan,
+        previous: Option<&OwnershipReceipt>,
+    ) -> Result<Vec<crate::uninstall::ShortcutArtifact>, PortError> {
+        if plan.shortcuts().is_disabled()
+            && previous.is_none_or(|receipt| receipt.shortcuts().is_disabled())
+        {
+            Ok(Vec::new())
+        } else {
+            Err(PortError::with_kind(
+                PortErrorKind::Unsupported,
+                "shortcut reconciliation is not implemented by this adapter",
+            ))
+        }
+    }
+
     /// Stage the receipt in the platform state root, outside the installed tree.
     fn stage_receipt(&mut self, receipt: &OwnershipReceipt) -> Result<(), PortError>;
 
@@ -386,7 +449,7 @@ pub enum InstallError {
         requested: Version,
     },
     #[error(
-        "installed version {version} has different files or entrypoint; same-version reinstall is refused"
+        "installed version {version} has different files, entrypoint, shortcut intent, authenticated display name, or product metadata; same-version reinstall is refused"
     )]
     ReinstallMismatch { version: Version },
     #[error(
@@ -448,6 +511,7 @@ where
                 source,
             })?;
     let plan = InstallPlan::from_manifest(&manifest, verified_identity);
+    OwnershipReceipt::validate_install_plan(&plan)?;
     if port
         .recovery_pending(plan.package_id())
         .map_err(|source| InstallError::Port {
@@ -520,6 +584,14 @@ where
     if command.manifest.package.license.is_some() && !command.license_accepted {
         emit(InstallEvent::Phase(InstallPhase::Failed));
         return Err(InstallError::LicenseNotAccepted);
+    }
+    if command.manifest.install.shortcuts.enabled()
+        && !crate::uninstall::valid_shortcut_display_name(&command.manifest.package.name)
+    {
+        emit(InstallEvent::Phase(InstallPhase::Failed));
+        return Err(InstallError::InvalidReceipt(
+            ReceiptError::InvalidShortcutDisplayName,
+        ));
     }
 
     emit(InstallEvent::Phase(InstallPhase::Verifying));
@@ -670,8 +742,37 @@ where
             return Err(error);
         }
 
+        let shortcut_artifacts = match port.reconcile_shortcuts(&plan, previous.as_ref()) {
+            Ok(artifacts) => artifacts,
+            Err(source) => {
+                let error = rollback(
+                    port,
+                    InstallError::Port {
+                        step: "reconcile shortcuts",
+                        source,
+                    },
+                    &mut emit,
+                );
+                emit_terminal_error(&error, &mut emit);
+                return Err(error);
+            }
+        };
+
+        if is_cancelled() {
+            let error = rollback(port, InstallError::Cancelled, &mut emit);
+            emit_terminal_error(&error, &mut emit);
+            return Err(error);
+        }
+
         emit(InstallEvent::Phase(InstallPhase::Committing));
-        let receipt = plan.ownership_receipt();
+        let receipt = match plan.ownership_receipt_with_shortcuts(shortcut_artifacts) {
+            Ok(receipt) => receipt,
+            Err(source) => {
+                let error = rollback(port, InstallError::InvalidReceipt(source), &mut emit);
+                emit_terminal_error(&error, &mut emit);
+                return Err(error);
+            }
+        };
         if let Err(source) = port.stage_receipt(&receipt) {
             let error = rollback(
                 port,
@@ -769,6 +870,14 @@ fn assess_install(
     let precedence = plan.version().cmp_precedence(previous.version());
     let publisher_migration_required =
         assess_publisher_transition(plan.verified_identity(), previous, precedence)?;
+    // A legacy receipt has no authenticated product metadata, so same-version repair is refused
+    // explicitly and uniformly for formats 1-6. This runs after the publisher verdict so a real
+    // signer violation still reports itself instead of being masked as a reinstall mismatch.
+    if precedence == Ordering::Equal && previous.product_metadata().is_none() {
+        return Err(InstallError::ReinstallMismatch {
+            version: plan.version().clone(),
+        });
+    }
     if publisher_migration_required
         && matches!(
             mode,
@@ -801,7 +910,13 @@ fn assess_install(
             InstallAction::Downgrade
         }
         Ordering::Equal => {
-            if previous.files() != plan.files() || previous.entrypoint() != plan.entrypoint() {
+            if previous.files() != plan.files()
+                || previous.entrypoint() != plan.entrypoint()
+                || previous.shortcuts() != plan.shortcuts()
+                || previous.shortcut_display_name()
+                    != plan.shortcuts().enabled().then_some(plan.display_name())
+                || previous.product_metadata() != Some(plan.product_metadata())
+            {
                 return Err(InstallError::ReinstallMismatch {
                     version: plan.version().clone(),
                 });

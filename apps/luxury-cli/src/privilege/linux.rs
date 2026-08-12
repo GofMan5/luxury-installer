@@ -35,7 +35,7 @@ use rustix::net::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-const PROTOCOL_VERSION: u8 = 1;
+const PROTOCOL_VERSION: u8 = 2;
 const MAX_FRAME_BYTES: usize = 4 * 1024;
 const MAX_ENVIRONMENT_BYTES: usize = 64 * 1024;
 const HELPER_PATH: &str = "/usr/libexec/luxury-installer-helper";
@@ -236,6 +236,7 @@ struct InstallCompleteFrame<'a> {
     install_directory: &'a str,
     installed_files: u64,
     installed_bytes: u64,
+    system_preparation: Option<&'a crate::stdio::PrepareInstallResult>,
 }
 
 #[derive(Serialize)]
@@ -281,6 +282,7 @@ struct UninstallCompleteFrame<'a> {
     removed_files: u64,
     missing_files: u64,
     preserved_modified_files: u64,
+    system_preparation: Option<&'a crate::stdio::PrepareInstallResult>,
 }
 
 #[derive(Serialize)]
@@ -444,6 +446,7 @@ fn execute_system_install(
     }
     let transport = start_cancel_reader(socket, caller.credentials, operation_id, "install")?;
     let install_directory = manifest.install.directory.as_str().to_owned();
+    let preparation_manifest = manifest.clone();
     let command = InstallCommand::for_system(manifest)
         .with_license_acceptance(request.accept_license)
         .with_publisher_migration_approval(request.allow_publisher_migration);
@@ -464,19 +467,23 @@ fn execute_system_install(
     );
     require_transport(&transport)?;
     match result {
-        Ok(outcome) => send_frame(
-            socket,
-            &InstallCompleteFrame {
-                protocol_version: PROTOCOL_VERSION,
-                kind: "installComplete",
-                operation_id,
-                action: install_action(outcome.action),
-                package_id: outcome.package_id.as_str(),
-                install_directory: &install_directory,
-                installed_files: outcome.installed_files as u64,
-                installed_bytes: outcome.installed_bytes,
-            },
-        ),
+        Ok(outcome) => {
+            let preparation = super::system_preparation(preparation_manifest, &mut adapter);
+            send_frame(
+                socket,
+                &InstallCompleteFrame {
+                    protocol_version: PROTOCOL_VERSION,
+                    kind: "installComplete",
+                    operation_id,
+                    action: install_action(outcome.action),
+                    package_id: outcome.package_id.as_str(),
+                    install_directory: &install_directory,
+                    installed_files: outcome.installed_files as u64,
+                    installed_bytes: outcome.installed_bytes,
+                    system_preparation: preparation.as_ref(),
+                },
+            )
+        }
         Err(error) => send_frame(
             socket,
             &InstallFailedFrame {
@@ -505,8 +512,10 @@ fn execute_system_uninstall(
     let package = File::from(package.ok_or_else(missing_package_descriptor)?);
     let (bundle, install_base, state_root) =
         validate_authorized_package(package, &request.package_id, &request.package_fingerprint)?;
-    let package_id = bundle.manifest().package.id.clone();
-    drop(bundle);
+    let manifest = bundle.manifest().clone();
+    let package_id = manifest.package.id.clone();
+    let mut preparation_adapter =
+        LocalInstallAdapter::for_system(bundle, install_base.clone(), state_root.clone());
     let transport = start_cancel_reader(socket, caller.credentials, operation_id, "uninstall")?;
     let mut adapter = LocalUninstallAdapter::for_system(install_base, state_root);
     let last_progress = Cell::new(None::<u64>);
@@ -525,36 +534,44 @@ fn execute_system_uninstall(
     );
     require_transport(&transport)?;
     match result {
-        Ok(UninstallOutcome::NotInstalled) => send_frame(
-            socket,
-            &UninstallCompleteFrame {
-                protocol_version: PROTOCOL_VERSION,
-                kind: "uninstallComplete",
-                operation_id,
-                status: "notInstalled",
-                package_id: package_id.as_str(),
-                removed_files: 0,
-                missing_files: 0,
-                preserved_modified_files: 0,
-            },
-        ),
+        Ok(UninstallOutcome::NotInstalled) => {
+            let preparation = super::system_preparation(manifest, &mut preparation_adapter);
+            send_frame(
+                socket,
+                &UninstallCompleteFrame {
+                    protocol_version: PROTOCOL_VERSION,
+                    kind: "uninstallComplete",
+                    operation_id,
+                    status: "notInstalled",
+                    package_id: package_id.as_str(),
+                    removed_files: 0,
+                    missing_files: 0,
+                    preserved_modified_files: 0,
+                    system_preparation: preparation.as_ref(),
+                },
+            )
+        }
         Ok(UninstallOutcome::Uninstalled {
             removed_files,
             missing_files,
             preserved_modified_files,
-        }) => send_frame(
-            socket,
-            &UninstallCompleteFrame {
-                protocol_version: PROTOCOL_VERSION,
-                kind: "uninstallComplete",
-                operation_id,
-                status: "uninstalled",
-                package_id: package_id.as_str(),
-                removed_files: removed_files as u64,
-                missing_files: missing_files as u64,
-                preserved_modified_files: preserved_modified_files as u64,
-            },
-        ),
+        }) => {
+            let preparation = super::system_preparation(manifest, &mut preparation_adapter);
+            send_frame(
+                socket,
+                &UninstallCompleteFrame {
+                    protocol_version: PROTOCOL_VERSION,
+                    kind: "uninstallComplete",
+                    operation_id,
+                    status: "uninstalled",
+                    package_id: package_id.as_str(),
+                    removed_files: removed_files as u64,
+                    missing_files: missing_files as u64,
+                    preserved_modified_files: preserved_modified_files as u64,
+                    system_preparation: preparation.as_ref(),
+                },
+            )
+        }
         Err(error) => send_frame(
             socket,
             &UninstallFailedFrame {
@@ -1259,7 +1276,7 @@ mod tests {
         rustix::net::sockopt::set_socket_passcred(&receiver, true).unwrap();
         let package = tempfile::tempfile().unwrap();
         let mut frame = serde_json::to_vec(&serde_json::json!({
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "launchSystem",
             "operationId": "a".repeat(32),
             "action": "launch",
@@ -1297,7 +1314,7 @@ mod tests {
     #[test]
     fn requests_are_pathless_strict_and_action_bound() {
         let value = serde_json::json!({
-            "protocolVersion": 1,
+            "protocolVersion": PROTOCOL_VERSION,
             "type": "installSystem",
             "operationId": "a".repeat(32),
             "action": "install",

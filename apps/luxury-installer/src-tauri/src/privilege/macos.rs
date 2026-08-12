@@ -32,7 +32,7 @@ use rustix::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-const PROTOCOL_VERSION: u8 = 1;
+const PROTOCOL_VERSION: u8 = super::SYSTEM_PROTOCOL_VERSION;
 const MAX_FRAME_BYTES: usize = 4 * 1024;
 const HELPER_TIMEOUT: Duration = Duration::from_secs(15);
 const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -820,7 +820,7 @@ mod tests {
     #[test]
     fn frames_are_single_bounded_json_lines() {
         let frame = encode_frame(&Challenge {
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             kind: "challenge",
             operation_id: &"a".repeat(32),
             action: "install",

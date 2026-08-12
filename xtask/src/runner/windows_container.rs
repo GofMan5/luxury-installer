@@ -3,7 +3,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write, copy},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     time::Duration,
 };
 
@@ -12,14 +12,16 @@ use sha2::{Digest, Sha256};
 
 use super::{
     HostLayout, ShellFlavor, assemble_into, bounded_output, exact_object, is_link_or_reparse,
+    patch_setup_template_binding,
     probe::{
         probe_authenticated_container_runner, probe_authenticated_runner, probe_backend,
         probe_container_runner, probe_runner,
     },
-    required_hash, required_string, required_u64, sha256_hex,
+    require_setup_template_binding, required, required_hash, required_string, required_u64,
+    sha256_hex,
     staging::{
-        WorkDirectory, checked_input, copy_file, ensure_real_directory, require_missing,
-        require_only_file, require_regular_file, retry_transient_io, sha256_file,
+        WorkDirectory, checked_input, copy_file, ensure_real_directory, publish_file_no_clobber,
+        require_missing, require_only_file, require_regular_file, retry_transient_io, sha256_file,
     },
     validate_portable_bundle,
 };
@@ -84,6 +86,208 @@ pub(super) fn build(package: &Path, nsis_archive: &Path) -> Result<(), String> {
     }
 }
 
+pub(super) fn build_project(
+    project: &Path,
+    destination: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
+    if env::consts::OS != "windows" || env::consts::ARCH != "x86_64" {
+        return Err("Windows Setup.exe project builds require native Windows x86_64".into());
+    }
+    let parent = validate_project_output(project, destination)?;
+    ensure_real_directory(parent)?;
+    require_missing(destination, "Windows Setup.exe output")?;
+
+    let root = crate::workspace_root();
+    let target = super::resolve_target_dir(&root, env::var_os("CARGO_TARGET_DIR").as_deref());
+    fs::create_dir_all(&target)
+        .map_err(|error| format!("could not create target directory: {error}"))?;
+    ensure_real_directory(&target)?;
+    let pin = parse_pin(NSIS_LOCK)?;
+    let nsis_archive = cached_nsis_archive(&target, &pin)?;
+
+    let work = WorkDirectory::project(parent, managed_work)?;
+    let package = work.path.join("internal-package.luxpkg");
+    luxury_compiler::compile_project(project, &package)
+        .map_err(|error| format!("could not compile installer project: {error}"))?;
+    let package = checked_input(&package, "internal Windows Setup payload")?;
+
+    let output = work.path.join("container-output");
+    let container_work = work.path.join("container-work");
+    fs::create_dir(&output)
+        .map_err(|error| format!("could not create container output directory: {error}"))?;
+    fs::create_dir(&container_work)
+        .map_err(|error| format!("could not create container work directory: {error}"))?;
+    let artifact = build_in_work(&output, &container_work, &package, &nsis_archive, &pin)?;
+    let setup = artifact.join(SETUP_FILENAME);
+    publish_file_no_clobber(&setup, destination)?;
+    work.cleanup().map_err(|error| {
+        format!(
+            "verified Windows Setup.exe was published at `{}`, but {error}",
+            destination.display()
+        )
+    })?;
+    println!(
+        "verified unsigned Windows development Setup.exe: {}",
+        destination.display()
+    );
+    Ok(())
+}
+
+pub(super) fn build_packaged_project(
+    project: &Path,
+    destination: &Path,
+    resources: &Path,
+    managed_work: Option<&Path>,
+) -> Result<(), String> {
+    if env::consts::OS != "windows" || env::consts::ARCH != "x86_64" {
+        return Err("packaged Windows project builds require native Windows x86_64".into());
+    }
+    let parent = validate_project_output(project, destination)?;
+    ensure_real_directory(parent)?;
+    require_missing(destination, "Windows Setup.exe output")?;
+
+    let host = HostLayout::new("windows", "x86_64")?;
+    let template = resources.join("templates").join("windows-x86_64");
+    validate_portable_bundle(&template, host, ShellFlavor::SetupTemplate, None)?;
+    require_setup_template_binding(&host.launcher(&template))?;
+    let nsis_archive = resources.join("tools").join("nsis-3.12.zip");
+    let pin = parse_pin(NSIS_LOCK)?;
+    verify_pinned_archive(&nsis_archive, &pin)?;
+
+    let work = WorkDirectory::project(parent, managed_work)?;
+    let package = work.path.join("internal-package.luxpkg");
+    luxury_compiler::compile_project(project, &package)
+        .map_err(|error| format!("could not compile installer project: {error}"))?;
+    let package = checked_input(&package, "internal Windows Setup payload")?;
+    let template_backend = host
+        .resources_directory(&template)
+        .join("backend")
+        .join(host.backend_name);
+    let fingerprint = probe_backend(&template_backend, &package, host)?;
+
+    let runner_name = super::artifact_name(host, &fingerprint)?;
+    let runner = work.path.join(runner_name);
+    copy_tree(&template, &runner)?;
+    let launcher = host.launcher(&runner);
+    patch_setup_template_binding(&launcher, &fingerprint)?;
+    let payload = host
+        .resources_directory(&runner)
+        .join("payload")
+        .join("package.luxpkg");
+    fs::create_dir(
+        payload
+            .parent()
+            .ok_or_else(|| "packaged Windows payload has no parent".to_owned())?,
+    )
+    .map_err(|error| format!("could not create packaged Windows payload directory: {error}"))?;
+    copy_file(&package, &payload)?;
+    validate_portable_bundle(&runner, host, ShellFlavor::Setup, None)?;
+    let backend = host
+        .resources_directory(&runner)
+        .join("backend")
+        .join(host.backend_name);
+    if probe_backend(&backend, &payload, host)? != fingerprint {
+        return Err("packaged Windows template inspected a different payload".into());
+    }
+    probe_runner(&launcher)?;
+
+    let nsis = prepare_nsis(&work.path, &nsis_archive, &pin)?;
+    let output = work.path.join("container-output");
+    fs::create_dir(&output)
+        .map_err(|error| format!("could not create container output directory: {error}"))?;
+    let artifact = wrap_runner(
+        &output,
+        &work.path,
+        &runner,
+        &super::artifact_name(host, &fingerprint)?,
+        &sha256_hex(sha256_file(&package)?),
+        None,
+        &nsis,
+        &pin,
+    )?;
+    publish_file_no_clobber(&artifact.join(SETUP_FILENAME), destination)?;
+    work.cleanup().map_err(|error| {
+        format!(
+            "verified Windows Setup.exe was published at `{}`, but {error}",
+            destination.display()
+        )
+    })?;
+    println!(
+        "verified unsigned Windows development Setup.exe: {}",
+        destination.display()
+    );
+    Ok(())
+}
+
+fn validate_project_output<'a>(project: &Path, destination: &'a Path) -> Result<&'a Path, String> {
+    if !project.is_absolute() || !destination.is_absolute() {
+        return Err("project-installer paths must be absolute".into());
+    }
+    if !destination
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("exe"))
+    {
+        return Err("Windows project-installer output must end in .exe".into());
+    }
+    destination
+        .parent()
+        .ok_or_else(|| "Windows Setup.exe output has no parent directory".to_owned())
+}
+
+fn cached_nsis_archive(target: &Path, pin: &NsisPin) -> Result<PathBuf, String> {
+    let cache = target.join("tool-cache");
+    fs::create_dir_all(&cache)
+        .map_err(|error| format!("could not create tool cache directory: {error}"))?;
+    ensure_real_directory(&cache)?;
+    let archive = cache.join(&pin.archive_name);
+    if archive.exists() {
+        verify_pinned_archive(&archive, pin)?;
+        return Ok(archive);
+    }
+
+    let work = WorkDirectory::new(&cache)?;
+    let downloaded = work.path.join(&pin.archive_name);
+    let status = Command::new("curl.exe")
+        .args([
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--ssl-revoke-best-effort",
+            "--http1.1",
+            "--retry",
+            "3",
+            "--retry-all-errors",
+            "--output",
+        ])
+        .arg(&downloaded)
+        .arg(&pin.url)
+        .status()
+        .map_err(|error| format!("could not start the built-in Windows curl client: {error}"))?;
+    if !status.success()
+        && let Err(verification) = verify_pinned_archive(&downloaded, pin)
+    {
+        return Err(format!(
+            "pinned NSIS download exited with {status}; {verification}"
+        ));
+    }
+    verify_pinned_archive(&downloaded, pin)?;
+    if let Err(error) = copy_file(&downloaded, &archive)
+        && (!archive.exists() || verify_pinned_archive(&archive, pin).is_err())
+    {
+        return Err(error);
+    }
+    verify_pinned_archive(&archive, pin)?;
+    work.cleanup()?;
+    Ok(archive)
+}
+
+pub(super) fn cached_studio_nsis(target: &Path) -> Result<PathBuf, String> {
+    cached_nsis_archive(target, &parse_pin(NSIS_LOCK)?)
+}
+
 pub(super) fn build_signed_runner(runner: &Path, nsis_archive: &Path) -> Result<(), String> {
     if env::consts::OS != "windows" || env::consts::ARCH != "x86_64" {
         return Err("windows-release-setup requires a native Windows x86_64 host".into());
@@ -134,6 +338,7 @@ pub(super) fn verify_signed_setup(setup: &Path) -> Result<(), String> {
     let work = WorkDirectory::new(&verification)?;
     let result = (|| {
         probe_authenticated_container_runner(&setup, &work.path)?;
+        require_info_json(&setup, &work.path, None)?;
         require_argument_rejection(&setup, &work.path)?;
         require_empty_directory(&work.path, "signed Setup probe temp")?;
         if sha256_file(&setup)? != before {
@@ -322,6 +527,7 @@ fn wrap_runner(
         return Err("NSIS compilation changed the verified runner tree".into());
     }
     probe_container_runner(&setup, &setup_probe_temp)?;
+    require_info_json(&setup, &setup_probe_temp, Some(runner_artifact))?;
     require_argument_rejection(&setup, &setup_probe_temp)?;
     require_empty_directory(&setup_probe_temp, "Setup probe temp")?;
     if sha256_hex(sha256_file(&setup)?) != setup_sha256 {
@@ -362,6 +568,7 @@ fn wrap_runner(
     if sha256_hex(sha256_file(&published_setup)?) != setup_sha256 {
         return Err("published Setup bytes changed after verification".into());
     }
+    drop(published_setup_guard);
 
     let provenance = json!({
         "schemaVersion": 1,
@@ -409,10 +616,12 @@ fn wrap_runner(
             final_artifact.display()
         )
     })?;
-    if sha256_hex(sha256_file(&final_artifact.join(published_filename))?) != setup_sha256 {
+    let final_setup = final_artifact.join(published_filename);
+    let final_setup_guard = open_read_guard(&final_setup)?;
+    if sha256_hex(sha256_file(&final_setup)?) != setup_sha256 {
         return Err("published Setup bytes changed during atomic publication".into());
     }
-    drop(published_setup_guard);
+    drop(final_setup_guard);
     Ok(final_artifact)
 }
 
@@ -547,6 +756,7 @@ fn open_read_guard(path: &Path) -> Result<File, String> {
 }
 
 fn verify_pinned_archive(path: &Path, pin: &NsisPin) -> Result<(), String> {
+    require_regular_file(path, "pinned NSIS archive")?;
     let size = fs::metadata(path)
         .map_err(|error| format!("could not inspect pinned NSIS archive: {error}"))?
         .len();
@@ -895,36 +1105,201 @@ fn require_pe(path: &Path) -> Result<(), String> {
 }
 
 fn require_argument_rejection(setup: &Path, private_temp: &Path) -> Result<(), String> {
-    let mut command = Command::new(setup);
-    command
-        .arg("--unexpected-argument")
-        .env("TEMP", private_temp)
-        .env("TMP", private_temp)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let (mut child, mut containment) =
-        super::containment::ChildContainment::spawn(&mut command, Duration::from_secs(10))
-            .map_err(|error| {
-                format!("could not run Windows Setup argument rejection probe: {error}")
-            })?;
-    containment
-        .wait_for_primary_exit(&child)
-        .map_err(|error| format!("could not wait for Setup argument rejection probe: {error}"))?;
-    let status = child
-        .wait()
-        .map_err(|error| format!("could not reap Setup argument rejection probe: {error}"))?;
-    let timed_out = containment.timed_out();
-    containment.disarm();
-    if timed_out {
-        return Err("Windows Setup argument rejection probe timed out".into());
-    }
-    if status.code() != Some(64) {
+    let output = run_setup_probe(
+        setup,
+        private_temp,
+        &["--unexpected-argument"],
+        "argument rejection",
+        Duration::from_secs(10),
+    )?;
+    if output.status.code() != Some(64) {
         return Err(format!(
-            "Windows Setup accepted an unexpected argument or returned {status}"
+            "Windows Setup accepted an unexpected argument or returned {}",
+            output.status
+        ));
+    }
+    if !output.stdout.is_empty()
+        || output.stderr.is_empty()
+        || output
+            .stderr
+            .windows(b"unexpected-argument".len())
+            .any(|window| window == b"unexpected-argument")
+    {
+        return Err(format!(
+            "Windows Setup argument rejection used invalid output channels; stdout: {}; stderr: {}",
+            bounded_output(&output.stdout),
+            bounded_output(&output.stderr)
         ));
     }
     Ok(())
+}
+
+fn require_info_json(
+    setup: &Path,
+    private_temp: &Path,
+    runner_artifact: Option<&str>,
+) -> Result<(), String> {
+    let output = run_setup_probe(
+        setup,
+        private_temp,
+        &["--info-json"],
+        "info-json",
+        Duration::from_secs(5 * 60),
+    )?;
+    if !output.status.success() || !output.stderr.is_empty() {
+        return Err(format!(
+            "Windows Setup info-json failed with {}; stdout: {}; stderr: {}",
+            output.status,
+            bounded_output(&output.stdout),
+            bounded_output(&output.stderr)
+        ));
+    }
+    let line = output
+        .stdout
+        .strip_suffix(b"\n")
+        .ok_or_else(|| "Windows Setup info-json was not exactly one line".to_owned())?;
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    if line.is_empty() || line.contains(&b'\n') || line.contains(&b'\r') {
+        return Err("Windows Setup info-json was not exactly one line".into());
+    }
+    let value: Value = serde_json::from_slice(line)
+        .map_err(|error| format!("Windows Setup info-json is invalid JSON: {error}"))?;
+    let root = exact_object(
+        &value,
+        "Setup info-json",
+        &["schemaVersion", "package", "target", "install", "payload"],
+    )?;
+    if required_u64(root, "schemaVersion")? != 2 {
+        return Err("Windows Setup info-json has an unsupported schema".into());
+    }
+
+    let package = exact_object(
+        required(root, "package")?,
+        "Setup info-json package",
+        &[
+            "id",
+            "fingerprint",
+            "name",
+            "publisher",
+            "version",
+            "description",
+            "trust",
+            "requiresLicense",
+            "publisherRotation",
+        ],
+    )?;
+    for field in ["id", "name", "publisher", "version"] {
+        if required_string(package, field)?.is_empty() {
+            return Err(format!("Setup info-json `{field}` is empty"));
+        }
+    }
+    let fingerprint = required_hash(package, "fingerprint")?;
+    if runner_artifact.is_some_and(|artifact| !artifact.ends_with(&fingerprint[..12])) {
+        return Err("Setup info-json fingerprint does not match its runner".into());
+    }
+    let description = required(package, "description")?;
+    if !description.is_null() && description.as_str().is_none() {
+        return Err("Setup info-json description must be text or null".into());
+    }
+    let trust_value = required(package, "trust")?;
+    let trust = trust_value
+        .as_object()
+        .ok_or_else(|| "Setup info-json trust must be an object".to_owned())?;
+    match required_string(trust, "kind")? {
+        "unsigned" => {
+            exact_object(trust_value, "Setup info-json unsigned trust", &["kind"])?;
+        }
+        "trustedPublisher" => {
+            exact_object(
+                trust_value,
+                "Setup info-json trusted publisher",
+                &["kind", "keyId"],
+            )?;
+            required_hash(trust, "keyId")?;
+        }
+        _ => return Err("Setup info-json trust kind is invalid".into()),
+    }
+    for field in ["requiresLicense", "publisherRotation"] {
+        if required(package, field)?.as_bool().is_none() {
+            return Err(format!("Setup info-json `{field}` must be boolean"));
+        }
+    }
+
+    let target = exact_object(
+        required(root, "target")?,
+        "Setup info-json target",
+        &["os", "arch"],
+    )?;
+    if required_string(target, "os")? != "windows" || required_string(target, "arch")? != "x86_64" {
+        return Err("Setup info-json target does not match the Windows runner".into());
+    }
+    let install = exact_object(
+        required(root, "install")?,
+        "Setup info-json install",
+        &[
+            "scope",
+            "directory",
+            "hasEntrypoint",
+            "showInstallLog",
+            "finishLinks",
+            "shortcuts",
+        ],
+    )?;
+    let shortcuts = exact_object(
+        required(install, "shortcuts")?,
+        "Setup info-json shortcuts",
+        &["applicationMenu", "desktop"],
+    )?;
+    if !matches!(required_string(install, "scope")?, "user" | "system")
+        || required_string(install, "directory")?.is_empty()
+        || required(install, "hasEntrypoint")?.as_bool().is_none()
+        || required(install, "showInstallLog")?.as_bool().is_none()
+        || required_u64(install, "finishLinks")? > 4
+        || required(shortcuts, "applicationMenu")?.as_bool().is_none()
+        || required(shortcuts, "desktop")?.as_bool().is_none()
+        || ((required(shortcuts, "applicationMenu")?.as_bool() == Some(true)
+            || required(shortcuts, "desktop")?.as_bool() == Some(true))
+            && required(install, "hasEntrypoint")?.as_bool() != Some(true))
+    {
+        return Err("Setup info-json install metadata is invalid".into());
+    }
+    let payload = exact_object(
+        required(root, "payload")?,
+        "Setup info-json payload",
+        &["files", "bytes"],
+    )?;
+    required_u64(payload, "files")?;
+    required_u64(payload, "bytes")?;
+    Ok(())
+}
+
+fn run_setup_probe(
+    setup: &Path,
+    private_temp: &Path,
+    arguments: &[&str],
+    label: &str,
+    timeout: Duration,
+) -> Result<Output, String> {
+    let mut command = Command::new(setup);
+    command
+        .args(arguments)
+        .env("TEMP", private_temp)
+        .env("TMP", private_temp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (child, mut containment) =
+        luxury_process::ChildContainment::spawn(&mut command, timeout)
+            .map_err(|error| format!("could not run Windows Setup {label} probe: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("could not collect Windows Setup {label} probe: {error}"))?;
+    let timed_out = containment.timed_out();
+    containment.disarm();
+    if timed_out {
+        return Err(format!("Windows Setup {label} probe timed out"));
+    }
+    Ok(output)
 }
 
 fn require_empty_directory(directory: &Path, label: &str) -> Result<(), String> {
@@ -988,6 +1363,19 @@ mod tests {
     }
 
     #[test]
+    fn project_output_is_an_absolute_setup_executable() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        let output = temp.path().join("Demo-Setup.EXE");
+        assert_eq!(
+            validate_project_output(&project, &output).unwrap(),
+            temp.path()
+        );
+        assert!(validate_project_output(&project, &temp.path().join("demo.luxpkg")).is_err());
+        assert!(validate_project_output(Path::new("demo"), Path::new("Demo-Setup.exe")).is_err());
+    }
+
+    #[test]
     fn nsis_authenticated_mode_binds_inner_runner_to_container_parent() {
         let source = std::str::from_utf8(NSIS_SCRIPT).unwrap();
         assert!(source.contains("--verify-authenticated-transport"));
@@ -995,6 +1383,21 @@ mod tests {
             "--verify-runner --verify-authenticated-transport --verify-container-parent"
         ));
         assert_eq!(source.matches("--verify-container-parent").count(), 1);
+    }
+
+    #[test]
+    fn nsis_forwards_public_arguments_to_the_strict_bound_runner() {
+        let source = std::str::from_utf8(NSIS_SCRIPT).unwrap();
+        assert!(source.contains("normal_with_parameters:"));
+        assert!(source.contains("Luxury Installer.exe\" $Parameters"));
+        assert!(source.contains("CreateProcessW"));
+        assert!(source.contains("GetStdHandle"));
+        assert!(source.contains("StrCpy $StartupFlags 0"));
+        assert!(source.contains("StrCpy $StartupFlags 256"));
+        assert!(!source.contains("StrCpy $StartupFlags 257"));
+        assert!(!source.contains("ExecWait"));
+        assert!(!source.contains("cmd.exe"));
+        assert!(!source.contains("invalid_parameters:"));
     }
 
     #[test]

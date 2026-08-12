@@ -2,6 +2,11 @@ export type AppMode = 'studio' | 'setup'
 export type TargetOs = 'windows' | 'linux' | 'macos'
 export type TargetArch = 'x86_64' | 'aarch64'
 export type InstallScope = 'user' | 'system'
+
+export interface NativeTarget {
+  os: TargetOs
+  arch: TargetArch
+}
 export type SetupAction = 'install' | 'update' | 'repair' | 'recover'
 export type InstallResultAction = Exclude<SetupAction, 'recover'>
 export type PackageTrust =
@@ -18,6 +23,15 @@ export interface FinishLink {
   url: string
 }
 
+export interface HostRequirements {
+  windowsMinimumVersion: string | null
+}
+
+export interface ShortcutPolicy {
+  applicationMenu: boolean
+  desktop: boolean
+}
+
 export interface InstallLog {
   files: string[]
   omittedFiles: number
@@ -27,7 +41,10 @@ export interface PackageSummary {
   name: string
   publisher: string
   version: string
+  description: string | null
   license: string | null
+  hasHomepage: boolean
+  hasSupport: boolean
   targetOs: TargetOs
   targetArch: TargetArch
   installDirectory: string
@@ -35,6 +52,7 @@ export interface PackageSummary {
   hasEntrypoint: boolean
   installLog: InstallLog | null
   finishLinks: FinishLink[]
+  shortcuts: ShortcutPolicy
   files: number
   bytes: number
   trust: PackageTrust
@@ -59,13 +77,16 @@ export interface InstallerReview {
 export interface StudioProject {
   projectPath: string
   formatVersion: 1 | 2 | 3
-  schemaVersion: 1 | 2 | 3
+  schemaVersion: 1 | 2 | 3 | 4 | 5 | 6
   packageId: string
   name: string
   publisher: string
   version: string
   description: string | null
   license: string | null
+  icon: string | null
+  homepage: string | null
+  support: string | null
   hasLicense: boolean
   targetOs: TargetOs
   targetArch: TargetArch
@@ -76,6 +97,8 @@ export interface StudioProject {
   hasEntrypoint: boolean
   showInstallLog: boolean
   finishLinks: FinishLink[]
+  shortcuts: ShortcutPolicy
+  requires: HostRequirements
   executableFiles: number
   files: number
   bytes: number
@@ -88,6 +111,9 @@ export interface StudioProjectUpdate {
   version: string
   description: string | null
   license: string | null
+  icon: string | null
+  homepage: string | null
+  support: string | null
   targetOs: TargetOs
   targetArch: TargetArch
   installDirectory: string
@@ -96,6 +122,17 @@ export interface StudioProjectUpdate {
   entrypoint: string | null
   showInstallLog: boolean
   finishLinks: FinishLink[]
+  shortcuts: ShortcutPolicy
+  requires: HostRequirements
+}
+
+export interface RecentProject {
+  projectPath: string
+  name: string
+  publisher: string
+  version: string
+  targetOs: TargetOs
+  targetArch: TargetArch
 }
 
 export interface StudioBuildResult {
@@ -148,7 +185,7 @@ export type SetupEvent =
       action: InstallResultAction
       installedFiles: number
       installedBytes: number
-      review?: InstallerReview | undefined
+      review: InstallerReview | null
     }
   | { kind: 'uninstallPhase'; operationId: string; phase: UninstallPhase }
   | {
@@ -163,6 +200,7 @@ export type SetupEvent =
       removedFiles: number
       missingFiles: number
       preservedModifiedFiles: number
+      review: InstallerReview | null
     }
   | {
       kind: 'error'
@@ -174,16 +212,23 @@ export type SetupEvent =
 
 export interface LuxuryBridge {
   getAppMode(): Promise<AppMode>
+  getStudioHost(): Promise<NativeTarget>
   getBootstrap(): Promise<InstallerReview>
   createProject(): Promise<StudioProject | null>
   openProject(): Promise<StudioProject | null>
+  getRecentProjects(): Promise<RecentProject[]>
+  openRecentProject(index: number): Promise<StudioProject>
   reloadProject(): Promise<StudioProject>
   updateProject(input: StudioProjectUpdate): Promise<StudioProject>
   importProjectFiles(): Promise<StudioProject | null>
   importProjectDirectory(): Promise<StudioProject | null>
+  replaceProjectPayload(): Promise<StudioProject | null>
   chooseProjectEntrypoint(): Promise<string | null>
+  chooseProjectIcon(): Promise<string | null>
   revealProject(): Promise<void>
+  revealBuildOutput(): Promise<void>
   buildProject(): Promise<StudioBuildResult | null>
+  cancelProjectBuild(): Promise<{ accepted: boolean }>
   chooseDirectory(): Promise<InstallerReview | null>
   startInstall(input: InstallRequest): Promise<{ operationId: string }>
   startUninstall(): Promise<{ operationId: string }>
@@ -192,6 +237,8 @@ export interface LuxuryBridge {
   launchInstalled(): Promise<void>
   revealInstalled(): Promise<void>
   openFinishLink(index: number): Promise<void>
+  openProductLink(kind: 'homepage' | 'support'): Promise<void>
+  setStudioDraftDirty(dirty: boolean): void
   minimizeWindow(): Promise<void>
   closeWindow(): Promise<void>
 }
