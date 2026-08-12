@@ -10,7 +10,7 @@ use std::{
 };
 
 use luxury_spec::{
-    FORMAT_VERSION, FileEntry, InstallPolicy, Manifest, PRODUCT_IDENTITY_SCHEMA_VERSION,
+    FORMAT_VERSION, FileEntry, InstallPolicy, MANIFEST_SCHEMA_VERSION, Manifest,
     PUBLISHER_ROTATION_FORMAT_VERSION, Package, PackagePath, PublisherRotation,
     SIGNED_FORMAT_VERSION, Sha256Digest, SpecError, Target,
 };
@@ -743,7 +743,7 @@ fn sample_config() -> String {
     };
     format!(
         r#"format_version = {FORMAT_VERSION}
-# schema_version = {PRODUCT_IDENTITY_SCHEMA_VERSION} # required together with icon/homepage/support
+# schema_version = {MANIFEST_SCHEMA_VERSION} # required by every optional block commented out below
 
 [package]
 id = "dev.luxury.demo"
@@ -768,6 +768,8 @@ directory = "Luxury Demo"
 # [[install.finish_links]]
 # label = "Документация"
 # url = "https://example.com/docs"
+# [install.requires]                     # checked read-only before anything is written
+# windows_minimum_version = "10.0.19045" # Windows target only; major.minor.build
 
 [payload]
 directory = "payload"
@@ -1003,8 +1005,8 @@ mod tests {
             &config,
             scaffold
                 .replacen(
-                    &format!("# schema_version = {PRODUCT_IDENTITY_SCHEMA_VERSION}"),
-                    &format!("schema_version = {PRODUCT_IDENTITY_SCHEMA_VERSION}"),
+                    &format!("# schema_version = {MANIFEST_SCHEMA_VERSION}"),
+                    &format!("schema_version = {MANIFEST_SCHEMA_VERSION}"),
                     1,
                 )
                 .replacen(
@@ -1027,7 +1029,7 @@ mod tests {
         if Target::host().os == luxury_spec::OperatingSystem::Windows {
             fs::write(project.join("payload").join(&icon), native_ico()).unwrap();
             let validated = validate_project(&project).unwrap();
-            assert_eq!(validated.schema_version, PRODUCT_IDENTITY_SCHEMA_VERSION);
+            assert_eq!(validated.schema_version, MANIFEST_SCHEMA_VERSION);
             assert_eq!(
                 validated.package.icon.as_ref().map(PackagePath::as_str),
                 Some(icon.as_str())

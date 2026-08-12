@@ -23,6 +23,10 @@ export interface FinishLink {
   url: string
 }
 
+export interface HostRequirements {
+  windowsMinimumVersion: string | null
+}
+
 export interface ShortcutPolicy {
   applicationMenu: boolean
   desktop: boolean
@@ -94,6 +98,7 @@ export interface StudioProject {
   showInstallLog: boolean
   finishLinks: FinishLink[]
   shortcuts: ShortcutPolicy
+  requires: HostRequirements
   executableFiles: number
   files: number
   bytes: number
@@ -118,6 +123,7 @@ export interface StudioProjectUpdate {
   showInstallLog: boolean
   finishLinks: FinishLink[]
   shortcuts: ShortcutPolicy
+  requires: HostRequirements
 }
 
 export interface RecentProject {

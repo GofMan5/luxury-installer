@@ -25,9 +25,9 @@ use crate::{
         valid_package_id, valid_text,
     },
     backend::{
-        FinishLink, InstallScope, MAX_SAFE_INTEGER, ProjectResult, ResolvedPayloadPath,
-        ShortcutPolicy, Target, TargetArch, TargetOs, guard_executable, valid_native_icon_path,
-        valid_public_https_url,
+        FinishLink, HostRequirements, InstallScope, MAX_SAFE_INTEGER, ProjectResult,
+        ResolvedPayloadPath, ShortcutPolicy, Target, TargetArch, TargetOs, guard_executable,
+        valid_native_icon_path, valid_public_https_url,
     },
 };
 
@@ -260,6 +260,7 @@ pub(crate) struct StudioProject {
     show_install_log: bool,
     finish_links: Vec<FinishLink>,
     shortcuts: ShortcutPolicy,
+    requires: HostRequirements,
     executable_files: u64,
     files: u64,
     bytes: u64,
@@ -286,6 +287,7 @@ pub(crate) struct StudioProjectUpdate {
     show_install_log: bool,
     finish_links: Vec<FinishLink>,
     shortcuts: ShortcutPolicy,
+    requires: HostRequirements,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -730,6 +732,7 @@ fn update_project_sync(
                     "showInstallLog": input.show_install_log,
                     "finishLinks": input.finish_links,
                     "shortcuts": input.shortcuts,
+                    "requires": input.requires,
                 },
             }),
         )
@@ -1628,6 +1631,9 @@ impl StudioProject {
             || (project.install.shortcuts.application_menu || project.install.shortcuts.desktop)
                 && (!project.install.has_entrypoint
                     || project.schema_version < luxury_spec::SHORTCUT_SCHEMA_VERSION as u8)
+            || !project.install.requires.is_valid_for(project.target.os)
+            || (!project.install.requires.is_empty()
+                && project.schema_version < luxury_spec::REQUIREMENTS_SCHEMA_VERSION as u8)
             || project.payload.files > MAX_SAFE_INTEGER
             || project.payload.bytes > MAX_SAFE_INTEGER
         {
@@ -1660,6 +1666,7 @@ impl StudioProject {
             show_install_log: project.install.show_install_log,
             finish_links: project.install.finish_links,
             shortcuts: project.install.shortcuts,
+            requires: project.install.requires.clone(),
             executable_files: project.authoring.executable_files,
             files: project.payload.files,
             bytes: project.payload.bytes,
@@ -1700,6 +1707,7 @@ fn validate_project_update(input: &StudioProjectUpdate) -> Result<(), PublicErro
         || input.finish_links.len() > 4
         || (input.shortcuts.application_menu || input.shortcuts.desktop)
             && input.entrypoint.is_none()
+        || !input.requires.is_valid_for(input.target_os)
         || input.finish_links.iter().any(|link| {
             !valid_text(&link.label)
                 || link.label.chars().count() > 48
@@ -1784,6 +1792,7 @@ mod tests {
                 show_install_log: false,
                 finish_links: Vec::new(),
                 shortcuts: crate::backend::ShortcutPolicy::default(),
+                requires: crate::backend::HostRequirements::default(),
             },
             payload: Payload {
                 files: 1,

@@ -7,10 +7,10 @@ mod publisher;
 
 pub use error::SpecError;
 pub use manifest::{
-    Architecture, FileEntry, FinishLink, InstallPolicy, InstallScope, MAX_PAYLOAD_BYTES,
-    MAX_PAYLOAD_FILE_BYTES, MAX_PAYLOAD_FILES, MAX_PRODUCT_ICON_BYTES, Manifest, OperatingSystem,
-    Package, PackageId, ProductIcon, ProductMetadata, Sha256Digest, ShortcutPolicy, Target,
-    validate_entrypoint,
+    Architecture, FileEntry, FinishLink, HostRequirements, InstallPolicy, InstallScope,
+    MAX_PAYLOAD_BYTES, MAX_PAYLOAD_FILE_BYTES, MAX_PAYLOAD_FILES, MAX_PRODUCT_ICON_BYTES, Manifest,
+    OperatingSystem, Package, PackageId, ProductIcon, ProductMetadata, Sha256Digest,
+    ShortcutPolicy, Target, WindowsVersion, validate_entrypoint,
 };
 pub use path::{InstallDirectory, PackagePath};
 pub use publisher::{
@@ -32,11 +32,13 @@ pub const LICENSE_SCHEMA_VERSION: u32 = 3;
 pub const SHORTCUT_SCHEMA_VERSION: u32 = 4;
 /// Manifest revision that introduced one authenticated product identity for native integrations.
 pub const PRODUCT_IDENTITY_SCHEMA_VERSION: u32 = 5;
+/// Manifest revision that introduced declarative host requirements checked before mutation.
+pub const REQUIREMENTS_SCHEMA_VERSION: u32 = 6;
 /// Latest manifest schema revision. This is independent of the package trust format.
-pub const MANIFEST_SCHEMA_VERSION: u32 = PRODUCT_IDENTITY_SCHEMA_VERSION;
+pub const MANIFEST_SCHEMA_VERSION: u32 = REQUIREMENTS_SCHEMA_VERSION;
 
 /// Version of the strict JSONL protocol shared by the CLI, desktop shell, and native packager.
-pub const JSONL_PROTOCOL_VERSION: u32 = 4;
+pub const JSONL_PROTOCOL_VERSION: u32 = 5;
 
 /// Binary marker surrounding the exact package fingerprint in a patchable Setup template.
 pub const SETUP_BINDING_PREFIX: [u8; 16] = *b"LUXBIND:v1:BEGIN";

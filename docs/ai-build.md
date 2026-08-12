@@ -114,7 +114,7 @@ My-App-Setup.exe --unattended-install --allow-unsigned
 My-App-Setup.exe --unattended-uninstall
 ```
 
-Use `--info-json` before deployment when an agent or MDM needs bound-package inventory. It performs the same validation but no preparation/authorization and keeps its schema-2 shape: license, finish links, schema-5 icon path/homepage/support, package paths, and native roots stay omitted. Setup retains the two product URLs in Rust and exposes only booleans plus a pathless `open_product_link` post-install action to the renderer. JSONL v4 is the separate full authoring contract.
+Use `--info-json` before deployment when an agent or MDM needs bound-package inventory. It performs the same validation but no preparation/authorization and keeps its schema-2 shape: license, finish links, schema-5 icon path/homepage/support, package paths, and native roots stay omitted. Setup retains the two product URLs in Rust and exposes only booleans plus a pathless `open_product_link` post-install action to the renderer. JSONL v5 is the separate full authoring contract.
 
 Linux uses the installed bound `luxury-installer` launcher. On macOS invoke `Luxury Installer.app/Contents/MacOS/Luxury Installer` directly so the caller receives the real exit code. The runner accepts no path, key, downgrade, launch, or command authority. Add `--accept-license` only for a package that offers a license and `--allow-publisher-migration` only for an offered migration. Exit codes are `0` successful inspection/operation or already absent, `1` inspection/operation failure, and `64` invalid arguments; the Windows outer container additionally returns `70` when it could not start or wait for the bound runner and `74` when its own cleanup failed.
 
@@ -156,7 +156,7 @@ cargo run -p luxury -- launch <package-id> <install-base> <state-root>
 
 Use the matching external `--trusted-publisher-key` for v2/v3. Keep state outside the removable install tree.
 
-For schema-v3 projects with `package.license`, inspect the exact bounded text first and add `--accept-license` to the install command. Schema 4 adds `[install.shortcuts]`; schema 5 adds optional `package.icon`, `package.homepage`, and `package.support`. The icon is an exact non-executable payload file up to 4 MiB (`.ico` Windows, `.png` Linux, `.icns` macOS) and bundle open decodes the complete image. URLs are bounded credential-free HTTPS. Receipt v7 persists the metadata snapshot; equal-version metadata drift is rejected. Shortcut publication still waits for WAL v5, and macOS still needs a real product `.app`.
+For schema-v3 projects with `package.license`, inspect the exact bounded text first and add `--accept-license` to the install command. Schema 4 adds `[install.shortcuts]`; schema 5 adds optional `package.icon`, `package.homepage`, and `package.support`; schema 6 adds `[install.requires]`, currently the single target-scoped `windows_minimum_version` predicate evaluated read-only during preflight and refused outright on a non-Windows target. The icon is an exact non-executable payload file up to 4 MiB (`.ico` Windows, `.png` Linux, `.icns` macOS) and bundle open decodes the complete image. URLs are bounded credential-free HTTPS. Receipt v7 persists the metadata snapshot; equal-version metadata drift is rejected. Shortcut publication still waits for WAL v5, and macOS still needs a real product `.app`.
 
 Same-version repair from receipt formats 1–6 is deliberately rejected because legacy state has no authenticated product metadata. Use uninstall or install a strictly newer version to migrate to receipt v7.
 
@@ -197,7 +197,7 @@ React renderer
     ▼
 Rust Tauri shell
     ├─ luxury-system-roots → pathless system reveal
-    │ JSONL v4 over child stdin/stdout
+    │ JSONL v5 over child stdin/stdout
     ▼
 luxury stdio
     │

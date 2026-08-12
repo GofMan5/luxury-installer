@@ -68,6 +68,7 @@ fn manifest(files: Vec<(&str, &[u8])>) -> Manifest {
             show_install_log: false,
             finish_links: Vec::new(),
             shortcuts: luxury_spec::ShortcutPolicy::default(),
+            requires: Default::default(),
         },
         publisher_rotation: None,
         files: files

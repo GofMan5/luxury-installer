@@ -58,6 +58,17 @@ pub enum SpecError {
     ReservedNativePackageId(String),
     #[error("package {field} must be a bounded HTTPS URL without credentials")]
     InvalidProductUrl { field: &'static str },
+    #[error(
+        "manifest schema {found} does not support install.requires; schema {required} is required"
+    )]
+    RequirementsRequireSchema { found: u32, required: u32 },
+    #[error("install.requires.{field} applies only to a {expected} target")]
+    RequirementTargetMismatch {
+        field: &'static str,
+        expected: &'static str,
+    },
+    #[error("`{0}` is not an exact major.minor.build Windows version")]
+    InvalidWindowsVersion(String),
     #[error("install.shortcuts requires an exact receipt-owned entrypoint")]
     ShortcutsRequireEntrypoint,
     #[error("install entrypoint `{0}` is not an exact manifest file")]

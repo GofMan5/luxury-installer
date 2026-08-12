@@ -453,6 +453,32 @@ pub(crate) struct InstallPolicy {
     pub(crate) finish_links: Vec<FinishLink>,
     #[serde(default)]
     pub(crate) shortcuts: ShortcutPolicy,
+    #[serde(default)]
+    pub(crate) requires: HostRequirements,
+}
+
+/// Declarative host requirements. Each predicate is target-scoped, so the shell validates the
+/// pairing exactly like the backend does instead of trusting the reported combination.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct HostRequirements {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) windows_minimum_version: Option<String>,
+}
+
+impl HostRequirements {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.windows_minimum_version.is_none()
+    }
+
+    pub(crate) fn is_valid_for(&self, target: TargetOs) -> bool {
+        match &self.windows_minimum_version {
+            None => true,
+            Some(version) => {
+                target == TargetOs::Windows && luxury_spec::WindowsVersion::parse(version).is_ok()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]

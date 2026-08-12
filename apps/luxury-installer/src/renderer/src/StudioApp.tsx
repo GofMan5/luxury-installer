@@ -304,6 +304,7 @@ function projectUpdateFrom(project: StudioProject): StudioProjectUpdate {
     showInstallLog: project.showInstallLog,
     finishLinks: project.finishLinks.map((link) => ({ ...link })),
     shortcuts: { ...project.shortcuts },
+    requires: { ...project.requires },
   }
 }
 
@@ -618,6 +619,33 @@ function ProjectView({
             <div className="studio-toggles">
               <label><input type="checkbox" checked={draft.showInstallLog} onChange={(event) => setDraft({ ...draft, showInstallLog: event.target.checked })} />Показывать пользователю детали установки</label>
               <label><input type="checkbox" checked={draft.allowDowngrade} onChange={(event) => setDraft({ ...draft, allowDowngrade: event.target.checked })} />Разрешить установку более старой версии</label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Требования к системе</legend>
+            <div className="studio-fieldset-heading">
+              <p>Требование проверяется до любых изменений: установка остановится, если система старее.</p>
+            </div>
+            <div className="studio-field studio-field--wide">
+              <label htmlFor="studio-windows-minimum">Минимальная версия Windows</label>
+              <input
+                id="studio-windows-minimum"
+                pattern="\d+\.\d+\.\d+"
+                maxLength={32}
+                disabled={draft.targetOs !== 'windows'}
+                value={draft.requires.windowsMinimumVersion ?? ''}
+                placeholder="10.0.19045"
+                onChange={(event) => setDraft({
+                  ...draft,
+                  requires: { windowsMinimumVersion: event.target.value || null },
+                })}
+              />
+              <small>
+                {draft.targetOs === 'windows'
+                  ? 'Формат major.minor.build, например 10.0.19045 для Windows 10 22H2. Пусто — без требования.'
+                  : 'Требование к версии Windows задаётся только для целевой системы Windows.'}
+              </small>
             </div>
           </fieldset>
 

@@ -10,7 +10,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 
 - /docs/ai-build.md: exact agent workflow and gate selection
 - /skills/luxury-installer-cli/SKILL.md: reusable current CLI/JSONL workflow for coding agents
-- /skills/luxury-installer-cli/references/cli.md: complete human CLI and JSONL v4 reference
+- /skills/luxury-installer-cli/references/cli.md: complete human CLI and JSONL v5 reference
 - /docs/architecture.md: dependency, process, transaction, trust, runner, and evidence boundaries
 - /docs/design/design-system.md: Tauri renderer visual/accessibility contract
 - /docs/privileged-helper.md: required system-scope elevation and peer-authentication boundary
@@ -52,7 +52,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 
 ## Process topology
 
-- React renderer -> exact Tauri invoke/events -> Rust Tauri shell -> bounded JSONL v4 over child stdin/stdout -> luxury stdio -> Rust use cases
+- React renderer -> exact Tauri invoke/events -> Rust Tauri shell -> bounded JSONL v5 over child stdin/stdout -> luxury stdio -> Rust use cases
 - Renderer owns presentation/accessibility only
 - Rust Tauri shell owns native dialogs, bound project/package/path authority, backend lifecycle, transport validation, event correlation, and public error mapping
 - luxury stdio owns machine-facing composition
@@ -67,7 +67,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Debug with one absolute --package starts Setup
 - Default release feature studio uses a fixed backend resource and no payload
 - Release feature setup is mutually exclusive and uses fixed native backend/payload resources
-- Final bound Setup keeps stable --info-json schema 2, requires the strict install.shortcuts object, and omits license, finish URLs, schema-5 icon path/homepage/support and native paths. Rust retains product URLs and opens them only through pathless post-install open_product_link; JSONL v4 is the separate authoring metadata contract
+- Final bound Setup keeps stable --info-json schema 2, requires the strict install.shortcuts object, and omits license, finish URLs, schema-5 icon path/homepage/support and native paths. Rust retains product URLs and opens them only through pathless post-install open_product_link; JSONL v5 is the separate authoring metadata contract
 - --trusted-publisher-key and LUXURY_BACKEND_PATH are debug-only absolute paths
 - Setup is not a .luxpkg browser: no picker, drag-and-drop, file input, or renderer-supplied package/root path
 - Studio renderer sends typed settings plus pathless create/open/import/replace/entrypoint/icon/reveal/reload/build/cancel-build intent; Rust shell owns native dialog results and active project/output/source paths. Cancel uses one Rust idle/active/cancelled lifecycle, reaps descendants, cleans work, and returns to the validated project.
@@ -113,7 +113,7 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - format_version 1: unsigned; SHA-256 integrity only; explicit unsigned consent required
 - format_version 2: Ed25519 exact-manifest signature; matching external SPKI trust anchor required; no unsigned fallback
 - format_version 3: A signs completed manifest/payload; B signs domain-separated package/version/A/B rotation proof
-- schema_version is independent; schema 2 adds install.entrypoint, schema 3 package.license, schema 4 install.shortcuts, and schema 5 package.icon/homepage/support as one authenticated product identity
+- schema_version is independent; schema 2 adds install.entrypoint, schema 3 package.license, schema 4 install.shortcuts, schema 5 package.icon/homepage/support as one authenticated product identity, and schema 6 install.requires with the target-scoped windows_minimum_version predicate
 - Optional package.description is bounded plain text in luxury-spec, not only a Studio validation rule
 - Optional install.show_install_log keeps one collapsed bounded manifest projection available during installation and after completion; running labels it as a plan with factual counters, never raw backend logs
 - Windows entrypoint requires .exe; Linux/macOS requires executable=true
@@ -126,9 +126,10 @@ Linux desktop publication is blocked by the locked Tauri/Wry GTK3 graph carrying
 - Studio, the strict Setup review contract, JSONL, and the compiler understand schema 4 shortcuts. Windows .lnk and Linux .desktop codecs plus engine ports exist, but native publication remains typed unsupported until WAL v5 journals external roots and rollback. macOS additionally requires a real signed product .app; do not substitute a symlink or alias to a bare executable
 - Trusted rotation requires installed A and strictly higher SemVer; fresh/legacy/unsigned/replay/equal/downgrade/self rotation fails
 
-## JSONL protocol v4
+## JSONL protocol v5
 
 - One bounded JSON object per line on inherited stdin/stdout; stdout is protocol-only
+- install.requires is evaluated read-only in preflight and fails closed as `unsupported` before mutation; a windows_minimum_version predicate is rejected outright on a non-Windows target
 - Methods: `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, `cancel`
 - importPayload defaults to additive no-overwrite import; replace=true requires one source directory, uses its contents as the new payload root, restores ordinary failures, and preserves the staging backup when rollback itself fails
 - Studio project summaries expose bounded authoring.executableFiles, not a potentially multi-megabyte executable path list; omitted updateProject.executable preserves the list, adds a new Unix entrypoint, and removes its old marker only when the old file is gone

@@ -16,7 +16,7 @@ Luxury Installer combines hexagonal Rust boundaries with small vertical slices a
 │   ├─ strict public error mapping                                  │
 │   └─ bounded backend client                                       │
 └───────────────────────────────┬────────────────────────────────────┘
-                                │ JSONL protocol v4
+                                │ JSONL protocol v5
                                 │ inherited stdin/stdout
 ┌───────────────────────────────▼────────────────────────────────────┐
 │ luxury stdio / human CLI composition root                         │
@@ -128,7 +128,7 @@ Tauri invoke inputs, event payloads, and JSONL values use strict typed contracts
 The Rust Tauri shell starts `luxury stdio` with piped stdin/stdout/stderr. Human diagnostics belong on stderr. Stdout is one bounded JSON object per line and nothing else:
 
 ```json
-{"protocolVersion":4,"id":"request-1","method":"defaults","params":{}}
+{"protocolVersion":5,"id":"request-1","method":"defaults","params":{}}
 ```
 
 Protocol v4 methods are `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, and `cancel`. `importPayload.replace=true` requires one source directory and replaces its contents as the payload root; omitted/false preserves additive no-overwrite import.
@@ -162,7 +162,7 @@ The backend keeps one latest progress frame behind its bounded ticker and flushe
 - V2 authenticates the exact manifest through Ed25519 and an external matching SPKI trust anchor.
 - V3 adds an authenticated A→B publisher proof. It requires installed trusted A and strictly greater SemVer precedence; fresh, legacy, unsigned, replay, equal, downgrade, and self-rotation paths fail closed.
 - Schema v5 adds one portable product identity: optional exact target-native payload icon plus bounded HTTPS homepage/support. Bundle open fully decodes the non-executable, at-most-4-MiB ICO/PNG/ICNS object. Ownership receipt v7 persists the complete metadata snapshot; v6 exact shortcut artifacts remain readable but carry no product-metadata authority. Publisher display text never replaces signer identity.
-- Product icon paths use the existing 512-byte portable path contract; product URLs are at most 2,048 UTF-8 bytes. The installer-owned `software.luxury.installer` namespace is reserved at every schema version, because receipts persist product identity for legacy schemas too. JSONL v4 returns an icon descriptor `{path,size,sha256}` but `updateProject` accepts only the portable path. Stable Setup `--info-json` schema 2 omits icon/URLs; Rust retains URLs and exposes only pathless post-install opening.
+- Product icon paths use the existing 512-byte portable path contract; product URLs are at most 2,048 UTF-8 bytes. The installer-owned `software.luxury.installer` namespace is reserved at every schema version, because receipts persist product identity for legacy schemas too. JSONL v5 returns an icon descriptor `{path,size,sha256}` but `updateProject` accepts only the portable path. Stable Setup `--info-json` schema 2 omits icon/URLs; Rust retains URLs and exposes only pathless post-install opening.
 - Equal-version repair requires a receipt-v7 metadata snapshot. Receipt v1-v6 remains valid for uninstall and strictly newer update, but cannot authorize same-version repair or invent product identity.
 
 Package authentication and native artifact signing are separate. A key stored beside a payload in the same unsigned mutable runner is not a trust anchor. Therefore assembled runners accept unsigned v1 only until the native container has a verified external signing boundary.

@@ -13,8 +13,9 @@ use std::{
     slice,
 };
 
-use luxury_spec::InstallScope;
+use luxury_spec::{InstallScope, WindowsVersion};
 use windows_sys::{
+    Wdk::System::SystemServices::RtlGetVersion,
     Win32::{
         Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, HLOCAL, LocalFree},
         Security::{
@@ -45,6 +46,7 @@ use windows_sys::{
         },
         System::{
             Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock},
+            SystemInformation::OSVERSIONINFOW,
             Threading::{
                 CREATE_NEW_PROCESS_GROUP, CREATE_UNICODE_ENVIRONMENT, CreateProcessWithTokenW,
                 GetCurrentProcess, LOGON_WITH_PROFILE, OpenProcessToken, PROCESS_INFORMATION,
@@ -1151,6 +1153,28 @@ fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
     }
     wide.push(0);
     Ok(wide)
+}
+
+/// Reads the real running Windows version. `GetVersionExW` reports a compatibility-shimmed value
+/// unless the caller ships a matching manifest, while `RtlGetVersion` reports the actual triple.
+pub(crate) fn host_windows_version() -> io::Result<WindowsVersion> {
+    let mut info = OSVERSIONINFOW {
+        dwOSVersionInfoSize: size_of::<OSVERSIONINFOW>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    // SAFETY: `info` is a correctly sized, initialized OSVERSIONINFOW and the call only writes
+    // into it. RtlGetVersion returns STATUS_SUCCESS unconditionally on supported systems.
+    let status = unsafe { RtlGetVersion(&raw mut info) };
+    if status != 0 {
+        return Err(io::Error::other(
+            "could not read the running Windows version",
+        ));
+    }
+    Ok(WindowsVersion::new(
+        info.dwMajorVersion,
+        info.dwMinorVersion,
+        info.dwBuildNumber,
+    ))
 }
 
 #[cfg(test)]

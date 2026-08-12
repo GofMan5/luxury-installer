@@ -95,6 +95,11 @@ const shortcutPolicy = z
   .object({ applicationMenu: z.boolean(), desktop: z.boolean() })
   .strict()
 const productUrl = z.string().max(2_048).refine(validHttpsUrl)
+// Exactly the triple RtlGetVersion reports, without leading zeroes.
+const windowsVersion = z.string().regex(/^(0|[1-9]\d{0,9})\.(0|[1-9]\d{0,9})\.(0|[1-9]\d{0,9})$/)
+const hostRequirements = z
+  .object({ windowsMinimumVersion: windowsVersion.nullable() })
+  .strict()
 
 const trust = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unsigned') }).strict(),
@@ -207,7 +212,14 @@ export const studioProjectSchema = z
   .object({
     projectPath: path,
     formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
-    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+    schemaVersion: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+      z.literal(5),
+      z.literal(6),
+    ]),
     packageId,
     name: text,
     publisher: text,
@@ -228,6 +240,7 @@ export const studioProjectSchema = z
     showInstallLog: z.boolean(),
     finishLinks: z.array(finishLink).max(4),
     shortcuts: shortcutPolicy,
+    requires: hostRequirements,
     executableFiles: count,
     files: count,
     bytes: count,
@@ -283,6 +296,7 @@ export const studioProjectUpdateSchema = z
     showInstallLog: z.boolean(),
     finishLinks: z.array(finishLink).max(4),
     shortcuts: shortcutPolicy,
+    requires: hostRequirements,
   })
   .strict()
   .superRefine((value, context) => {

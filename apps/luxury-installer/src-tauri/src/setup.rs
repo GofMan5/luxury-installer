@@ -2036,6 +2036,7 @@ mod tests {
                 show_install_log: false,
                 finish_links: Vec::new(),
                 shortcuts: crate::backend::ShortcutPolicy::default(),
+                requires: crate::backend::HostRequirements::default(),
             },
             payload: Payload {
                 files: 1,

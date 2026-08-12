@@ -8,8 +8,8 @@ use std::{
 use luxury_spec::{
     ENTRYPOINT_SCHEMA_VERSION, FORMAT_VERSION, InstallPolicy, LICENSE_SCHEMA_VERSION,
     MAX_PAYLOAD_BYTES, MAX_PAYLOAD_FILE_BYTES, MAX_PAYLOAD_FILES, Manifest, OperatingSystem,
-    PRODUCT_IDENTITY_SCHEMA_VERSION, Package, PackagePath, SHORTCUT_SCHEMA_VERSION, SpecError,
-    Target,
+    PRODUCT_IDENTITY_SCHEMA_VERSION, Package, PackagePath, REQUIREMENTS_SCHEMA_VERSION,
+    SHORTCUT_SCHEMA_VERSION, SpecError, Target,
 };
 use tempfile::{NamedTempFile, TempDir, tempdir_in};
 
@@ -842,7 +842,9 @@ fn restore_previous_payload(previous: &Path, payload: &Path, staging: TempDir) -
 }
 
 fn schema_version(package: &Package, install: &InstallPolicy) -> u32 {
-    if package.has_native_identity_metadata() {
+    if !install.requires.is_empty() {
+        REQUIREMENTS_SCHEMA_VERSION
+    } else if package.has_native_identity_metadata() {
         PRODUCT_IDENTITY_SCHEMA_VERSION
     } else if install.shortcuts.enabled() {
         SHORTCUT_SCHEMA_VERSION
@@ -916,9 +918,17 @@ mod tests {
                 application_menu: true,
                 desktop: false,
             },
+            requires: Default::default(),
         };
 
         assert_eq!(schema_version(&package, &install), SHORTCUT_SCHEMA_VERSION);
+        let mut requires = install;
+        requires.requires.windows_minimum_version =
+            Some(luxury_spec::WindowsVersion::new(10, 0, 19045));
+        assert_eq!(
+            schema_version(&package, &requires),
+            REQUIREMENTS_SCHEMA_VERSION
+        );
     }
 
     #[test]

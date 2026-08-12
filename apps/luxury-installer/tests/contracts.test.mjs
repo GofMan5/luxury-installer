@@ -124,6 +124,7 @@ test('portable payload paths match Rust byte and component bounds', () => {
     showInstallLog: false,
     finishLinks: [],
     shortcuts: { applicationMenu: false, desktop: false },
+    requires: { windowsMinimumVersion: null },
     executableFiles: 0,
     files: 1,
     bytes: 29,
@@ -136,12 +137,64 @@ test('portable payload paths match Rust byte and component bounds', () => {
         description: null, license: null, homepage: null, support: null, hasLicense: false,
         targetOs: 'windows', targetArch: 'x86_64', installDirectory: 'Demo', scope: 'user',
         allowDowngrade: false, entrypoint: null, hasEntrypoint: false, showInstallLog: false,
-        finishLinks: [], shortcuts: { applicationMenu: false, desktop: false }, executableFiles: 0,
+        finishLinks: [], shortcuts: { applicationMenu: false, desktop: false }, requires: { windowsMinimumVersion: null }, executableFiles: 0,
         files: 1, bytes: 29,
       },
       icon,
     }).success, false)
   }
+})
+
+test('a host requirement is schema-gated, target-scoped and exactly formatted', async () => {
+  const studio = {
+    projectPath: String.raw`C:\projects\demo`,
+    formatVersion: 1,
+    schemaVersion: 6,
+    packageId: 'dev.luxury.demo',
+    name: 'Luxury Demo',
+    publisher: 'Luxury Software',
+    version: '1.0.0',
+    description: null,
+    license: null,
+    icon: null,
+    homepage: null,
+    support: null,
+    hasLicense: false,
+    targetOs: 'windows',
+    targetArch: 'x86_64',
+    installDirectory: 'Luxury Demo',
+    scope: 'user',
+    allowDowngrade: false,
+    entrypoint: null,
+    hasEntrypoint: false,
+    showInstallLog: false,
+    finishLinks: [],
+    shortcuts: { applicationMenu: false, desktop: false },
+    requires: { windowsMinimumVersion: '10.0.19045' },
+    executableFiles: 0,
+    files: 1,
+    bytes: 29,
+  }
+  assert.equal(studioProjectSchema.safeParse(studio).success, true)
+  for (const version of ['10', '10.0', '10.0.0.0', '10.0.019045', '10.0.-1', 'ten.0.0', '']) {
+    assert.equal(
+      studioProjectSchema.safeParse({ ...studio, requires: { windowsMinimumVersion: version } })
+        .success,
+      false,
+      `${version} must be refused`,
+    )
+  }
+
+  // Rust owns the verdict: the shell refuses a foreign target pairing and an ungated schema, and
+  // the requirement is evaluated read-only in preflight before any mutation.
+  const [shell, platform] = await Promise.all([
+    readFile(new URL('../src-tauri/src/studio.rs', import.meta.url), 'utf8'),
+    readFile(new URL('../../../crates/luxury-platform/src/local/mod.rs', import.meta.url), 'utf8'),
+  ])
+  assert.match(shell, /!input\.requires\.is_valid_for\(input\.target_os\)/)
+  assert.match(shell, /!project\.install\.requires\.is_valid_for\(project\.target\.os\)/)
+  assert.match(shell, /project\.schema_version < luxury_spec::REQUIREMENTS_SCHEMA_VERSION as u8/)
+  assert.match(platform, /fn check_install_plan[\s\S]{0,400}?check_host_requirements\(plan\)\?/)
 })
 
 test('product links stay strict HTTPS metadata and icon paths stay target-native', () => {
@@ -177,6 +230,7 @@ test('product links stay strict HTTPS metadata and icon paths stay target-native
     showInstallLog: false,
     finishLinks: [],
     shortcuts: { applicationMenu: false, desktop: false },
+    requires: { windowsMinimumVersion: null },
     executableFiles: 0,
     files: 1,
     bytes: 29,
@@ -466,6 +520,7 @@ test('Studio paths stay display-only and absolute', () => {
     showInstallLog: false,
     finishLinks: [],
     shortcuts: { applicationMenu: false, desktop: false },
+    requires: { windowsMinimumVersion: null },
     executableFiles: 0,
     files: 1,
     bytes: 29,

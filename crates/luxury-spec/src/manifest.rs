@@ -6,7 +6,8 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use crate::{
     ENTRYPOINT_SCHEMA_VERSION, FORMAT_VERSION, InstallDirectory, LICENSE_SCHEMA_VERSION,
     MANIFEST_SCHEMA_VERSION, PRODUCT_IDENTITY_SCHEMA_VERSION, PUBLISHER_ROTATION_FORMAT_VERSION,
-    PackagePath, PublisherRotation, SHORTCUT_SCHEMA_VERSION, SIGNED_FORMAT_VERSION, SpecError,
+    PackagePath, PublisherRotation, REQUIREMENTS_SCHEMA_VERSION, SHORTCUT_SCHEMA_VERSION,
+    SIGNED_FORMAT_VERSION, SpecError,
 };
 
 pub const MAX_PAYLOAD_FILES: usize = 100_000;
@@ -130,6 +131,15 @@ impl Manifest {
             if self.install.entrypoint.is_none() {
                 return Err(SpecError::ShortcutsRequireEntrypoint);
             }
+        }
+        if !self.install.requires.is_empty() {
+            if self.schema_version < REQUIREMENTS_SCHEMA_VERSION {
+                return Err(SpecError::RequirementsRequireSchema {
+                    found: self.schema_version,
+                    required: REQUIREMENTS_SCHEMA_VERSION,
+                });
+            }
+            self.install.requires.validate(self.target.os)?;
         }
         if self.install.finish_links.len() > MAX_FINISH_LINKS {
             return Err(SpecError::TooManyFinishLinks(
@@ -621,6 +631,89 @@ pub struct InstallPolicy {
     pub finish_links: Vec<FinishLink>,
     #[serde(default, skip_serializing_if = "ShortcutPolicy::is_disabled")]
     pub shortcuts: ShortcutPolicy,
+    #[serde(default, skip_serializing_if = "HostRequirements::is_empty")]
+    pub requires: HostRequirements,
+}
+
+/// Declarative host requirements evaluated read-only before any mutation. Each predicate is
+/// target-scoped on purpose: one OS cannot honestly answer another OS's version question.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostRequirements {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_minimum_version: Option<WindowsVersion>,
+}
+
+impl HostRequirements {
+    pub const fn is_empty(&self) -> bool {
+        self.windows_minimum_version.is_none()
+    }
+
+    fn validate(&self, target: OperatingSystem) -> Result<(), SpecError> {
+        if self.windows_minimum_version.is_some() && target != OperatingSystem::Windows {
+            return Err(SpecError::RequirementTargetMismatch {
+                field: "windows_minimum_version",
+                expected: "windows",
+            });
+        }
+        Ok(())
+    }
+}
+
+/// A `major.minor.build` Windows version, the exact triple `RtlGetVersion` reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WindowsVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub build: u32,
+}
+
+impl WindowsVersion {
+    pub const fn new(major: u32, minor: u32, build: u32) -> Self {
+        Self {
+            major,
+            minor,
+            build,
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, SpecError> {
+        let invalid = || SpecError::InvalidWindowsVersion(value.to_owned());
+        let mut parts = value.split('.');
+        let mut next = || {
+            parts
+                .next()
+                .filter(|part| !part.is_empty() && part.len() <= 10)
+                .filter(|part| part.bytes().all(|byte| byte.is_ascii_digit()))
+                .filter(|part| *part == "0" || !part.starts_with('0'))
+                .and_then(|part| part.parse::<u32>().ok())
+                .ok_or_else(invalid)
+        };
+        let version = Self::new(next()?, next()?, next()?);
+        if parts.next().is_some() {
+            return Err(invalid());
+        }
+        Ok(version)
+    }
+}
+
+impl fmt::Display for WindowsVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}.{}.{}", self.major, self.minor, self.build)
+    }
+}
+
+impl<'de> Deserialize<'de> for WindowsVersion {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(D::Error::custom)
+    }
+}
+
+impl Serialize for WindowsVersion {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
 }
 
 /// Portable, bounded desktop-integration intent. The target is always the
@@ -761,6 +854,7 @@ mod tests {
                 show_install_log: false,
                 finish_links: Vec::new(),
                 shortcuts: ShortcutPolicy::default(),
+                requires: Default::default(),
             },
             publisher_rotation: None,
             files: vec![FileEntry {
@@ -958,6 +1052,57 @@ mod tests {
                 max: 1024,
             })
         ));
+    }
+
+    #[test]
+    fn host_requirements_are_schema_gated_target_scoped_and_exactly_parsed() {
+        let mut manifest = valid_manifest();
+        manifest.target.os = OperatingSystem::Windows;
+        manifest.install.requires.windows_minimum_version = Some(WindowsVersion::new(10, 0, 19045));
+        assert_eq!(
+            manifest.validate(),
+            Err(SpecError::RequirementsRequireSchema {
+                found: 1,
+                required: REQUIREMENTS_SCHEMA_VERSION,
+            })
+        );
+
+        manifest.schema_version = REQUIREMENTS_SCHEMA_VERSION;
+        manifest.validate().unwrap();
+        let encoded = manifest.to_toml().unwrap();
+        assert!(encoded.contains("windows_minimum_version = \"10.0.19045\""));
+        assert_eq!(Manifest::from_toml(&encoded).unwrap(), manifest);
+
+        // One OS cannot honestly answer another OS's version question.
+        manifest.target.os = OperatingSystem::Linux;
+        assert_eq!(
+            manifest.validate(),
+            Err(SpecError::RequirementTargetMismatch {
+                field: "windows_minimum_version",
+                expected: "windows",
+            })
+        );
+
+        for value in [
+            "10",
+            "10.0",
+            "10.0.0.0",
+            "10.0.019045",
+            "10.0.-1",
+            "",
+            "a.b.c",
+        ] {
+            assert!(
+                WindowsVersion::parse(value).is_err(),
+                "`{value}` must not parse"
+            );
+        }
+        assert_eq!(
+            WindowsVersion::parse("10.0.19045").unwrap(),
+            WindowsVersion::new(10, 0, 19045)
+        );
+        assert!(WindowsVersion::new(10, 0, 19045) > WindowsVersion::new(10, 0, 19044));
+        assert!(WindowsVersion::new(11, 0, 1) > WindowsVersion::new(10, 9, 99999));
     }
 
     #[test]

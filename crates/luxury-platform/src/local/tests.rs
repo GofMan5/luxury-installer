@@ -419,6 +419,55 @@ fn prepare_fresh_package_is_ready_without_creating_roots() {
     assert!(!state_root.exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn unmet_windows_requirement_fails_before_any_mutation() {
+    let temp = tempdir().unwrap();
+    let install_base = temp.path().join("install");
+    let state_root = temp.path().join("state");
+    let (discarded, mut manifest) = bundle(&[("bin/app.exe", b"owned")]);
+    drop(discarded);
+    manifest.schema_version = luxury_spec::REQUIREMENTS_SCHEMA_VERSION;
+    // No shipping Windows reports this build, so the predicate can only fail.
+    manifest.install.requires.windows_minimum_version =
+        Some(luxury_spec::WindowsVersion::new(99, 0, 0));
+    let payload = tempdir().unwrap();
+    let source = payload.path().join("bin").join("app.exe");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(source, b"owned").unwrap();
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, payload.path(), &manifest).unwrap();
+    let bundle = open_bundle(Cursor::new(encoded), None).unwrap();
+
+    let error = prepare_install(
+        manifest.clone(),
+        &mut LocalInstallAdapter::new(bundle, &install_base, &state_root),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        luxury_engine::install::InstallError::Port {
+            step: "preflight",
+            source,
+        } if source.kind() == luxury_engine::PortErrorKind::Unsupported
+    ));
+    assert!(!install_base.exists());
+    assert!(!state_root.exists());
+
+    // The same manifest with a requirement every supported host meets stays installable.
+    let mut allowed = manifest;
+    allowed.install.requires.windows_minimum_version =
+        Some(luxury_spec::WindowsVersion::new(6, 1, 7601));
+    let mut encoded = Vec::new();
+    create_unsigned_bundle(&mut encoded, payload.path(), &allowed).unwrap();
+    let bundle = open_bundle(Cursor::new(encoded), None).unwrap();
+    prepare_install(
+        allowed,
+        &mut LocalInstallAdapter::new(bundle, &install_base, &state_root),
+    )
+    .unwrap();
+}
+
 #[test]
 fn shortcut_intent_fails_before_local_mutation_until_native_adapter_exists() {
     let temp = tempdir().unwrap();
@@ -4249,6 +4298,7 @@ fn bundle_version_in_directory_scope(
             show_install_log: false,
             finish_links: Vec::new(),
             shortcuts: luxury_spec::ShortcutPolicy::default(),
+            requires: Default::default(),
         },
         publisher_rotation: None,
         files: files
@@ -4314,6 +4364,7 @@ fn signed_bundle_with_keys(
             show_install_log: false,
             finish_links: Vec::new(),
             shortcuts: luxury_spec::ShortcutPolicy::default(),
+            requires: Default::default(),
         },
         publisher_rotation: None,
         files: files
@@ -4384,6 +4435,7 @@ fn rotation_bundle(
             show_install_log: false,
             finish_links: Vec::new(),
             shortcuts: luxury_spec::ShortcutPolicy::default(),
+            requires: Default::default(),
         },
         publisher_rotation: Some(rotation),
         files: files

@@ -7,8 +7,8 @@ use std::{
 };
 
 use luxury_spec::{
-    FileEntry, InstallDirectory, InstallScope, Manifest, PackageId, PackagePath, ProductMetadata,
-    PublisherKeyId, ShortcutPolicy, SpecError, Target,
+    FileEntry, HostRequirements, InstallDirectory, InstallScope, Manifest, PackageId, PackagePath,
+    ProductMetadata, PublisherKeyId, ShortcutPolicy, SpecError, Target,
 };
 use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -162,6 +162,7 @@ pub struct InstallPlan {
     product_metadata: ProductMetadata,
     entrypoint: Option<PackagePath>,
     shortcuts: ShortcutPolicy,
+    requires: HostRequirements,
     verified_identity: VerifiedPackageIdentity,
     files: Vec<FileEntry>,
     total_bytes: u64,
@@ -178,6 +179,7 @@ impl InstallPlan {
             product_metadata: ProductMetadata::from_package(&manifest.package, &manifest.files),
             entrypoint: manifest.install.entrypoint.clone(),
             shortcuts: manifest.install.shortcuts,
+            requires: manifest.install.requires.clone(),
             verified_identity,
             files: manifest.files.clone(),
             total_bytes: manifest.payload_size(),
@@ -217,6 +219,11 @@ impl InstallPlan {
 
     pub const fn shortcuts(&self) -> ShortcutPolicy {
         self.shortcuts
+    }
+
+    /// Declarative host requirements the platform adapter evaluates read-only in preflight.
+    pub const fn requires(&self) -> &HostRequirements {
+        &self.requires
     }
 
     pub fn package_identity(&self) -> PackageIdentity {

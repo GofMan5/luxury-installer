@@ -1631,6 +1631,7 @@ fn manifest(scope: InstallScope, target: Target) -> Manifest {
             show_install_log: false,
             finish_links: Vec::new(),
             shortcuts: luxury_spec::ShortcutPolicy::default(),
+            requires: Default::default(),
         },
         publisher_rotation: None,
         files: vec![

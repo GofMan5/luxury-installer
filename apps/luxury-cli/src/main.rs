@@ -509,6 +509,9 @@ fn print_manifest(manifest: &Manifest, trust: PackageTrust) {
         "install:   {:?} / {}",
         manifest.install.scope, manifest.install.directory
     );
+    if let Some(minimum) = manifest.install.requires.windows_minimum_version {
+        println!("requires:  Windows {minimum} or newer");
+    }
     println!("trust:     {trust:?}");
     println!(
         "payload:   {} files, {} bytes",

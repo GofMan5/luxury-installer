@@ -33,8 +33,9 @@ use luxury_platform::{
     LocalInstallAdapter, LocalLaunchAdapter, LocalUninstallAdapter, default_user_roots,
 };
 use luxury_spec::{
-    Architecture, FinishLink, InstallDirectory, InstallPolicy, InstallScope, Manifest,
-    OperatingSystem, Package, PackageId, PackagePath, ProductIcon, Target,
+    Architecture, FinishLink, HostRequirements, InstallDirectory, InstallPolicy, InstallScope,
+    Manifest, OperatingSystem, Package, PackageId, PackagePath, ProductIcon, Target,
+    WindowsVersion,
 };
 use semver::Version;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -587,6 +588,7 @@ fn update_project(
             show_install_log: params.install.show_install_log,
             finish_links: params.install.finish_links,
             shortcuts: params.install.shortcuts.into(),
+            requires: params.install.requires.into_requirements()?,
         },
         executable: params.executable,
     };
@@ -1553,6 +1555,44 @@ struct UpdateInstallParams {
     finish_links: Vec<FinishLink>,
     #[serde(default)]
     shortcuts: ShortcutWire,
+    #[serde(default)]
+    requires: RequirementsWire,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RequirementsWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    windows_minimum_version: Option<String>,
+}
+
+impl RequirementsWire {
+    fn is_empty(&self) -> bool {
+        self.windows_minimum_version.is_none()
+    }
+
+    fn into_requirements(self) -> Result<HostRequirements, WireError> {
+        let windows_minimum_version = self
+            .windows_minimum_version
+            .map(|value| {
+                WindowsVersion::parse(&value)
+                    .map_err(|error| WireError::new("invalid_params", error.to_string()))
+            })
+            .transpose()?;
+        Ok(HostRequirements {
+            windows_minimum_version,
+        })
+    }
+}
+
+impl From<&HostRequirements> for RequirementsWire {
+    fn from(requires: &HostRequirements) -> Self {
+        Self {
+            windows_minimum_version: requires
+                .windows_minimum_version
+                .map(|version| version.to_string()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize)]
@@ -1954,6 +1994,7 @@ impl ProjectResult {
                 show_install_log: manifest.install.show_install_log,
                 finish_links: manifest.install.finish_links.clone(),
                 shortcuts: manifest.install.shortcuts.into(),
+                requires: (&manifest.install.requires).into(),
             },
             payload: PayloadResult {
                 files: manifest.files.len(),
@@ -2098,6 +2139,8 @@ struct InstallResultPolicy {
     finish_links: Vec<FinishLink>,
     #[serde(skip_serializing_if = "ShortcutWire::is_disabled")]
     shortcuts: ShortcutWire,
+    #[serde(skip_serializing_if = "RequirementsWire::is_empty")]
+    requires: RequirementsWire,
 }
 
 #[derive(Serialize)]
@@ -2630,6 +2673,61 @@ mod tests {
         let rejected = stdio_request("updateProject", extra);
         assert_eq!(rejected["error"]["code"], "invalid_params");
         assert_eq!(fs::read(project.join("luxury.toml")).unwrap(), before);
+    }
+
+    #[test]
+    fn host_requirement_wire_round_trips_and_rejects_a_foreign_target() {
+        let temp = tempdir().unwrap();
+        let project = temp.path().join("project");
+        let project_path = project.to_str().unwrap();
+        assert_eq!(
+            stdio_request("initProject", json!({"projectPath": project_path}))["type"],
+            "result"
+        );
+        let target = Target::host();
+        let params = |os: &str, minimum: Value| {
+            json!({
+                "projectPath": project_path,
+                "package": {
+                    "id": "dev.human.app",
+                    "name": "Human App",
+                    "version": "1.0.0",
+                    "publisher": "Human Publisher",
+                },
+                "target": {"os": os, "arch": target.arch.to_string()},
+                "install": {
+                    "scope": "user",
+                    "directory": "Human App",
+                    "allowDowngrade": false,
+                    "showInstallLog": false,
+                    "finishLinks": [],
+                    "shortcuts": {"applicationMenu": false, "desktop": false},
+                    "requires": {"windowsMinimumVersion": minimum},
+                }
+            })
+        };
+
+        let updated = stdio_request("updateProject", params("windows", json!("10.0.19045")));
+        assert_eq!(updated["type"], "result", "unexpected: {updated}");
+        assert_eq!(
+            updated["result"]["schemaVersion"],
+            luxury_spec::REQUIREMENTS_SCHEMA_VERSION
+        );
+        assert_eq!(
+            updated["result"]["install"]["requires"]["windowsMinimumVersion"],
+            "10.0.19045"
+        );
+
+        // A malformed triple is a request error, not a project state.
+        assert_eq!(
+            stdio_request("updateProject", params("windows", json!("10.0")))["error"]["code"],
+            "invalid_params"
+        );
+        // One OS cannot answer another OS's version question.
+        assert_eq!(
+            stdio_request("updateProject", params("linux", json!("10.0.19045")))["error"]["code"],
+            "project_update_failed"
+        );
     }
 
     #[test]

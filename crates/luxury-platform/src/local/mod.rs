@@ -915,6 +915,38 @@ impl UninstallPort for LocalUninstallAdapter {
     }
 }
 
+/// Evaluates declarative host requirements read-only, before anything is written. Each predicate
+/// is target-scoped, so a host that cannot answer a predicate never sees it: the manifest refuses a
+/// Windows predicate on a non-Windows target.
+fn check_host_requirements(plan: &InstallPlan) -> Result<(), PortError> {
+    let requires = plan.requires();
+    #[cfg(windows)]
+    if let Some(minimum) = requires.windows_minimum_version {
+        let host = self::windows::host_windows_version().map_err(|error| {
+            PortError::with_kind(
+                PortErrorKind::Unsupported,
+                format!("could not read the running Windows version: {error}"),
+            )
+        })?;
+        if host < minimum {
+            return Err(PortError::with_kind(
+                PortErrorKind::Unsupported,
+                format!(
+                    "this application requires Windows {minimum} or newer; this system reports {host}"
+                ),
+            ));
+        }
+    }
+    #[cfg(not(windows))]
+    if requires.windows_minimum_version.is_some() {
+        return Err(PortError::with_kind(
+            PortErrorKind::Unsupported,
+            "a Windows version requirement cannot be evaluated on this host",
+        ));
+    }
+    Ok(())
+}
+
 fn check_install_plan(
     install_base: &Path,
     state_root: &Path,
@@ -927,6 +959,7 @@ fn check_install_plan(
             "native shortcut mutation is not implemented for this adapter",
         ));
     }
+    check_host_requirements(plan)?;
     validate_install_directory_namespace(plan.directory())?;
     validate_directory_chain(install_base)?;
     validate_directory_chain(state_root)?;
