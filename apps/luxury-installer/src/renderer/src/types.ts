@@ -77,7 +77,7 @@ export interface InstallerReview {
 export interface StudioProject {
   projectPath: string
   formatVersion: 1 | 2 | 3
-  schemaVersion: 1 | 2 | 3 | 4 | 5
+  schemaVersion: 1 | 2 | 3 | 4 | 5 | 6
   packageId: string
   name: string
   publisher: string
