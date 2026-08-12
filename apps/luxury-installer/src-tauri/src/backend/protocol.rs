@@ -462,7 +462,9 @@ pub(crate) struct InstallPolicy {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct HostRequirements {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Always serialized, including as null: the renderer contract mirrors this object exactly and
+    // an omitted key is not the same shape as an absent requirement.
+    #[serde(default)]
     pub(crate) windows_minimum_version: Option<String>,
 }
 

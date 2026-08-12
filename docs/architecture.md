@@ -131,7 +131,7 @@ The Rust Tauri shell starts `luxury stdio` with piped stdin/stdout/stderr. Human
 {"protocolVersion":5,"id":"request-1","method":"defaults","params":{}}
 ```
 
-Protocol v4 methods are `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, and `cancel`. `importPayload.replace=true` requires one source directory and replaces its contents as the payload root; omitted/false preserves additive no-overwrite import.
+Protocol v5 methods are `defaults`, `initProject`, `validateProject`, `updateProject`, `importPayload`, `resolvePayloadPath`, `buildProject`, `inspect`, `prepareInstall`, `install`, `uninstall`, `launch`, and `cancel`. `importPayload.replace=true` requires one source directory and replaces its contents as the payload root; omitted/false preserves additive no-overwrite import.
 
 Boundary rules:
 

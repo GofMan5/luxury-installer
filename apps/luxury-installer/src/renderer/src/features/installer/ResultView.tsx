@@ -110,6 +110,7 @@ export function ErrorView({
   canRetry,
   retryLabel,
   closePending,
+  actionError,
   onRetry,
   onClose,
 }: {
@@ -118,6 +119,7 @@ export function ErrorView({
   canRetry: boolean
   retryLabel: string
   closePending: boolean
+  actionError: string | null
   onRetry(): void
   onClose(): void
 }) {
@@ -139,6 +141,11 @@ export function ErrorView({
         <p className="error-code">
           Код ошибки: <code>{code}</code>
         </p>
+      ) : null}
+      {actionError ? (
+        <div className="error-message" role="alert">
+          {actionError}
+        </div>
       ) : null}
       <div className="result-actions">
         {canRetry ? (

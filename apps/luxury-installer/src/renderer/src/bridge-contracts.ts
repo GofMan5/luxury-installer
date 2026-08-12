@@ -265,6 +265,12 @@ export const studioProjectSchema = z
     ) {
       context.addIssue({ code: 'custom', path: ['shortcuts'], message: 'schema mismatch' })
     }
+    if (
+      value.requires.windowsMinimumVersion !== null &&
+      (value.schemaVersion < 6 || value.targetOs !== 'windows')
+    ) {
+      context.addIssue({ code: 'custom', path: ['requires'], message: 'schema mismatch' })
+    }
     if ((value.icon !== null || value.homepage !== null || value.support !== null) && value.schemaVersion < 5) {
       context.addIssue({ code: 'custom', path: ['icon'], message: 'schema mismatch' })
     }
@@ -308,6 +314,9 @@ export const studioProjectUpdateSchema = z
     }
     if (value.icon !== null && !validIconPath(value.icon, value.targetOs)) {
       context.addIssue({ code: 'custom', path: ['icon'], message: 'target icon format required' })
+    }
+    if (value.requires.windowsMinimumVersion !== null && value.targetOs !== 'windows') {
+      context.addIssue({ code: 'custom', path: ['requires'], message: 'windows target required' })
     }
   })
   .refine(

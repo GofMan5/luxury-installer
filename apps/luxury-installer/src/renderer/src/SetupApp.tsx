@@ -188,6 +188,7 @@ export function SetupApp({ bridge }: { bridge: LuxuryBridge }) {
                 : 'Вернуться к проверке'
             }
             closePending={resultPending === 'close'}
+            actionError={resultError}
             onRetry={installer.retry}
             onClose={() => void runResultAction('close', installer.bridge.closeWindow)}
           />

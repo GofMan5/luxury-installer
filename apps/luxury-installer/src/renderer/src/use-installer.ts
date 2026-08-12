@@ -123,7 +123,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
           kind: 'error',
           code: errorCode(error),
           message: errorMessage(error),
-          canRetry: true,
+          canRetry: !UNRECOVERABLE_CODES.includes(errorCode(error) ?? ''),
           publisherMigrationRequired: false,
         })
       })
@@ -219,13 +219,7 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
             canRetry:
               event.code === 'publisher_migration_required'
                 ? publisherMigrationRequired
-                : ![
-                    'state_conflict',
-                    'downgrade_denied',
-                    'reinstall_mismatch',
-                    'publisher_mismatch',
-                    'publisher_rotation_denied',
-                  ].includes(event.code),
+                : !UNRECOVERABLE_CODES.includes(event.code),
             publisherMigrationRequired,
           })
           operationPending.current = false
@@ -426,6 +420,19 @@ export function useInstaller(bridge: LuxuryBridge): InstallerController {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Неизвестная ошибка установщика.'
 }
+
+// Retrying cannot change any of these verdicts: the host, the installed state or the publisher
+// identity has to change first.
+const UNRECOVERABLE_CODES = [
+  'state_conflict',
+  'downgrade_denied',
+  'reinstall_mismatch',
+  'publisher_mismatch',
+  'publisher_rotation_denied',
+  'unsupported',
+  'unsupported_scope',
+  'unsupported_target',
+]
 
 function errorCode(error: unknown): string | null {
   return error instanceof Error && 'code' in error && typeof error.code === 'string' && error.code

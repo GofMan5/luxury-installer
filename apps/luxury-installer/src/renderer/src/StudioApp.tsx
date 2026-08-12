@@ -567,6 +567,8 @@ function ProjectView({
                     ...draft,
                     targetOs,
                     icon: draft.icon?.toLowerCase().endsWith(iconExtension(targetOs)) ? draft.icon : null,
+                    requires:
+                      targetOs === 'windows' ? draft.requires : { windowsMinimumVersion: null },
                   })
                 }}>
                   <option value="windows">Windows</option>

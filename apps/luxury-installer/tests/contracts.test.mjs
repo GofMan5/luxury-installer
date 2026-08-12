@@ -185,6 +185,25 @@ test('a host requirement is schema-gated, target-scoped and exactly formatted', 
     )
   }
 
+  // The shell must emit the key even when there is no requirement: an omitted key is a different
+  // shape from an absent requirement, and the renderer parses every Studio result through this
+  // schema. This is exactly the mismatch that made Studio unusable once.
+  assert.equal(studioProjectSchema.safeParse({ ...studio, requires: {} }).success, false)
+  assert.equal(
+    studioProjectSchema.safeParse({ ...studio, schemaVersion: 5, requires: { windowsMinimumVersion: '10.0.19045' } })
+      .success,
+    false,
+  )
+  assert.equal(
+    studioProjectSchema.safeParse({
+      ...studio,
+      targetOs: 'linux',
+      icon: null,
+      requires: { windowsMinimumVersion: '10.0.19045' },
+    }).success,
+    false,
+  )
+
   // Rust owns the verdict: the shell refuses a foreign target pairing and an ungated schema, and
   // the requirement is evaluated read-only in preflight before any mutation.
   const [shell, platform] = await Promise.all([
@@ -195,6 +214,14 @@ test('a host requirement is schema-gated, target-scoped and exactly formatted', 
   assert.match(shell, /!project\.install\.requires\.is_valid_for\(project\.target\.os\)/)
   assert.match(shell, /project\.schema_version < luxury_spec::REQUIREMENTS_SCHEMA_VERSION as u8/)
   assert.match(platform, /fn check_install_plan[\s\S]{0,400}?check_host_requirements\(plan\)\?/)
+  const protocol = await readFile(
+    new URL('../src-tauri/src/backend/protocol.rs', import.meta.url),
+    'utf8',
+  )
+  assert.match(
+    protocol,
+    /pub\(crate\) struct HostRequirements \{[\s\S]{0,240}?#\[serde\(default\)\]\s*\n\s*pub\(crate\) windows_minimum_version/,
+  )
 })
 
 test('product links stay strict HTTPS metadata and icon paths stay target-native', () => {

@@ -380,6 +380,9 @@ impl InstallPort for LocalInstallAdapter {
         })?;
         let (installed_size, installed_hash) = hash_regular(&destination)?;
         if installed_size != file.size || installed_hash != file.sha256 {
+            // This transaction owns the file it just published, so remove it instead of leaving a
+            // divergent copy behind for rollback to reason about.
+            let _ = remove_regular(&destination);
             return Err(PortError::with_kind(
                 PortErrorKind::Integrity,
                 format!(
@@ -1296,8 +1299,9 @@ fn stage_verified_file(
         .sync_all()
         .map_err(|source| io_error("syncing staged installed file", staged, source))?;
     drop(output);
-    // The staged bytes were hashed as they were written and are now synced, and the published file
-    // is hashed again after the rename, so re-reading the staged copy here proves nothing new.
+    // The staged bytes were hashed as they were written and are now synced. Divergence is caught by
+    // the post-rename hash of the published file, which also unlinks it, so a second read of the
+    // staged copy would only repeat that detection one step earlier.
     sync_parent(staged)
 }
 

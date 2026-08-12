@@ -36,7 +36,7 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 ### Changed
 
-- Installing a payload no longer re-reads every staged file to hash it a second time: the bytes are hashed as they are written and the published file is verified after the rename, which cut a 93 MiB / 401-file user install from about 7.5 s to about 5.7 s on the reference Windows NTFS host.
+- Installing a payload no longer re-reads every staged file to hash it a second time: the bytes are hashed as they are written and the published file is verified after the rename, removing one full read of every payload file. A single unrepeated measurement of a 93 MiB / 401-file user install on one Windows NTFS host went from about 7.5 s to about 5.7 s; there is no benchmark harness yet, so treat that as an indication, not a budget.
 - A replacement install only hashes an existing destination file when its size can still match the requested one, so a size-changed file no longer costs a full read of the previous tree.
 - Setup and Studio copy no longer names the implementation to the person using it; the license gate now says the installation will not start without consent.
 - Studio warns while either shortcut toggle is on that native publication is still fail-closed, so an installer built with shortcuts will be refused at preflight.
@@ -54,6 +54,9 @@ All notable changes to Luxury Installer are documented here. The project follows
 
 - Six real backend failures (path collision, integrity, invalid package, filesystem error, aborted install, invalid request) reached Setup as the generic internal error; each now keeps its own code and an actionable message, and a table-driven test refuses a future regression.
 - The live-docs drift gate now requires every JSONL method to appear code-formatted in llms.txt, the AI guide and the CLI skill, so removing a method entry can no longer pass on a prose word match.
+- A project without a host requirement no longer breaks Studio: the shell always serializes the predicate key, and the renderer contract asserts the shape the shell actually emits rather than a hand-written one.
+- An unmet host requirement, an unsupported scope and an unsupported target are treated as unrecoverable, so Setup stops offering a retry that cannot succeed, and a failed close on the error screen is now visible.
+- A published file that fails post-write verification is unlinked before the error propagates, so a divergent copy is never left behind for rollback to reason about.
 - An unrecoverable Setup error is no longer a dead end: the screen shows the reportable backend error code as selectable text and always offers a close action when retrying cannot help.
 - A failed **Launch** action no longer discards the successful Setup result for a generic rebootstrap. It stays inline and retryable; after a successful launch, a separate close failure hides **Launch** and leaves **Done** available instead of starting a second application instance.
 - Setup no longer hides an unconfirmed cancellation request: install and uninstall keep running, show the bounded public error inline, and restore a retryable **Cancel** action instead of pretending cancellation started.

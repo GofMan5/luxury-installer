@@ -82,18 +82,18 @@ You need:
 - Node.js `22.12+` and pnpm `10.26.2`;
 - the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your host OS.
 
-Assemble a usable Studio you can run and ship installers from:
-
-```console
-cargo studio-assemble
-```
-
-That writes `dist/luxury-installer-studio-<version>-<host>/` containing `Luxury Installer.exe` (or the host equivalent) next to the `backend`, `packager`, `templates`, and `tools` directories it needs. Windows builds fetch the pinned NSIS 3.12 archive listed in `packaging/windows/nsis.lock.json` and verify its SHA-256 before use.
-
-To work on the renderer instead, install the desktop dependencies once and start the dev server:
+Install the desktop dependencies once, then assemble a usable Studio you can run and ship installers from:
 
 ```console
 pnpm --dir apps/luxury-installer install --frozen-lockfile
+cargo studio-assemble
+```
+
+That writes `dist/luxury-installer-studio-<version>-<os>-<arch>/`. On Windows it contains `Luxury Installer.exe` next to the `backend`, `packager`, `templates` and `tools` directories, where `tools` holds the pinned `nsis-3.12.zip` verified against `packaging/windows/nsis.lock.json`. On Linux and macOS the launcher is `luxury-installer` / `Luxury Installer` and `tools` is absent, because only Windows needs a bundled packaging toolchain.
+
+To work on the renderer instead, start the dev server:
+
+```console
 cargo build -p luxury -p xtask
 pnpm --dir apps/luxury-installer run dev:app
 ```
@@ -107,13 +107,13 @@ cargo project-installer -- <absolute-project-dir> <absolute-native-output>
 
 Native output is explicit:
 
-| Host | Output argument | What is published next to it |
-| --- | --- | --- |
-| Windows x64 | A new `Setup.exe` file. | `provenance.json` |
-| Linux x64/arm64 | A new directory containing verified `.deb` and `.rpm` files. | `provenance.json` |
-| macOS x64/arm64 | A new `.dmg` file. | `provenance.json` |
+| Host | Output argument |
+| --- | --- |
+| Windows x64 | A new `Setup.exe` file. |
+| Linux x64/arm64 | A new directory containing verified `.deb` and `.rpm` files plus their `provenance.json`. |
+| macOS x64/arm64 | A new `.dmg` file. |
 
-The produced installer writes into a per-user root by default — `%LOCALAPPDATA%\Luxury Installer\Apps` on Windows, `~/Library/Application Support/Luxury Installer/Apps` on macOS, `$XDG_DATA_HOME/luxury-installer/apps` on Linux — with its ownership receipt kept in a sibling state root outside the removable tree. System scope is authenticated separately through the privileged helper.
+The produced installer writes into a per-user root by default — `%LOCALAPPDATA%\Luxury Installer\Apps` on Windows, `~/Library/Application Support/Luxury Installer/Apps` on macOS, `${XDG_DATA_HOME:-~/.local/share}/luxury-installer/apps` on Linux — and keeps its ownership receipt in a separate state root outside the removable tree (`${XDG_STATE_HOME:-~/.local/state}/luxury-installer-v1` on Linux). System scope is authenticated separately through the privileged helper.
 
 Keep the produced installer: it is also the uninstaller. There is no Windows Installed-Apps entry and no platform package-manager registration yet, so removal runs through the same file (`My-App-Setup.exe --unattended-uninstall`) or the development CLI. Durable native maintenance registration is a later roadmap row.
 
