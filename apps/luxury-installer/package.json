@@ -19,20 +19,20 @@
     "node": ">=22.12.0"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.1",
-    "lucide-react": "^1.28.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "zod": "^4.3.5"
+    "@tauri-apps/api": "2.12.2",
+    "lucide-react": "^1.54.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.4",
-    "@types/node": "22.20.1",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
+    "@tauri-apps/cli": "2.12.1",
+    "@types/node": "22.20.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "5.2.0",
     "typescript": "^5.9.3",
-    "vite": "7.3.6"
+    "vite": "7.3.7"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
